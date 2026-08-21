@@ -31,9 +31,19 @@ const AUTH_PATHS = {
 
 /**
  * Opções aplicadas a toda chamada de auth. Ver regra (2) acima.
- * Congelado para evitar mutação acidental por um chamador.
+ *
+ * `skipAuthRetry`: estas quatro chamadas NUNCA devem disparar a retentativa
+ * automática de 401 do `httpClient` (ver `lib/http-client.ts`) — um 401 aqui
+ * é o resultado em si (credenciais inválidas, refresh expirado), não um
+ * access token vencido a renovar. Sem isso, um 401 de `refresh()` chamaria
+ * o handler de sessão expirada, que chama `refresh()` de novo: loop.
+ * `me()`, de propósito, NÃO usa esta constante — é a chamada que deve se
+ * beneficiar da renovação automática.
  */
-const WITH_CREDENTIALS: RequestOptions = Object.freeze({ credentials: 'include' });
+const WITH_CREDENTIALS: RequestOptions = Object.freeze({
+  credentials: 'include',
+  skipAuthRetry: true,
+});
 
 /** Cria a conta e devolve a projeção pública do usuário criado. */
 export function register(input: RegisterRequest): Promise<SessionUser> {
@@ -61,9 +71,15 @@ export function logout(): Promise<void> {
   return httpClient.post<void>(AUTH_PATHS.logout, undefined, WITH_CREDENTIALS);
 }
 
-/** Usuário autenticado no momento, segundo o backend. */
+/**
+ * Usuário autenticado no momento, segundo o backend.
+ *
+ * Sem `skipAuthRetry`: se o access token estiver vencido, um 401 aqui deve
+ * disparar a renovação automática do `httpClient` e reexecutar — ver nota
+ * de `WITH_CREDENTIALS` acima.
+ */
 export function me(): Promise<SessionUser> {
-  return httpClient.get<SessionUser>(AUTH_PATHS.me, WITH_CREDENTIALS);
+  return httpClient.get<SessionUser>(AUTH_PATHS.me, { credentials: 'include' });
 }
 
 export const authApi = { register, login, refresh, logout, me };

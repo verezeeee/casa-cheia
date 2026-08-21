@@ -19,6 +19,36 @@ export interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
   /** Timeout em ms para a requisição. Default: 15s. */
   timeoutMs?: number;
+  /**
+   * Pula o anexo do access token e a retentativa automática em 401. Usado
+   * pelas próprias chamadas de auth (login/register/refresh/logout, ver
+   * `lib/api/auth.ts`) — sem isso, um 401 de `POST /auth/refresh` disparia
+   * o handler de "sessão expirada", que chama `refresh()` de novo: loop.
+   */
+  skipAuthRetry?: boolean;
+}
+
+/**
+ * Access token da sessão atual, mantido SOMENTE em memória (nunca
+ * `localStorage`/`sessionStorage` — ver `lib/api/auth.ts`). Escrito pelo
+ * provider de sessão a cada login/refresh/logout.
+ */
+let accessToken: string | null = null;
+
+export function setAccessToken(token: string | null): void {
+  accessToken = token;
+}
+
+/**
+ * Chamado uma única vez por requisição quando o backend responde 401.
+ * Deve tentar renovar a sessão (`authApi.refresh()`) e devolver o novo
+ * access token, ou `null` se a renovação falhar (sessão realmente expirada).
+ * Registrado pelo provider de sessão — sem ele, um 401 apenas propaga.
+ */
+let unauthorizedHandler: (() => Promise<string | null>) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => Promise<string | null>) | null): void {
+  unauthorizedHandler = handler;
 }
 
 /**
@@ -30,8 +60,12 @@ export interface RequestOptions extends Omit<RequestInit, 'body'> {
  * em `ApiError`, alinhados ao formato padronizado do filtro global de
  * exceções do backend (`ApiErrorResponse`, de @poker-system/shared).
  */
-async function request<TResponse>(path: string, options: RequestOptions = {}): Promise<TResponse> {
-  const { body, timeoutMs = 15_000, headers, ...rest } = options;
+async function request<TResponse>(
+  path: string,
+  options: RequestOptions = {},
+  isRetry = false,
+): Promise<TResponse> {
+  const { body, timeoutMs = 15_000, headers, skipAuthRetry, ...rest } = options;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -43,12 +77,20 @@ async function request<TResponse>(path: string, options: RequestOptions = {}): P
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         ...headers,
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
 
     if (!response.ok) {
+      if (response.status === 401 && !isRetry && !skipAuthRetry && unauthorizedHandler) {
+        const renewedToken = await unauthorizedHandler();
+        if (renewedToken) {
+          return request<TResponse>(path, options, true);
+        }
+      }
+
       const payload = (await safeJson(response)) as ApiErrorResponse | null;
       throw new ApiError(
         payload ?? {
