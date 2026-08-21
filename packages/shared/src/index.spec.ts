@@ -173,6 +173,7 @@ describe('@poker-system/shared barrel export', () => {
         userId: null,
         userName: null,
         currentStack: null,
+        sessionId: null,
       };
 
       const tournament: TournamentSummaryDto = {
