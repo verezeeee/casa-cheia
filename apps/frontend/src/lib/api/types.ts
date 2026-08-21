@@ -58,3 +58,27 @@ export interface RecordMovementRequest {
   amount: string;
   reason: 'HAND_RESULT' | 'ADJUSTMENT';
 }
+
+/** Uma faixa da grade de premiação em `POST /tournaments`. */
+export interface TournamentPrizeInput {
+  position: number;
+  /** String decimal, ex.: "40.00" = 40%. A soma das faixas precisa fechar 100.00. */
+  percentage: string;
+}
+
+/** Corpo de `POST /tournaments` (ADMIN). */
+export interface CreateTournamentRequest {
+  name: string;
+  buyIn: string;
+  fee: string;
+  startingStack: number;
+  maxPlayers: number;
+  /** ISO 8601. */
+  startsAt: string;
+  prizes: TournamentPrizeInput[];
+}
+
+/** Corpo de `POST /tournaments/:id/entries/:entryId/eliminate` (ADMIN). */
+export interface EliminateEntryRequest {
+  finalPosition?: number;
+}

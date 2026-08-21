@@ -31,6 +31,9 @@ export function AuthStatus() {
       <Link href="/lobby" className="font-medium text-accent hover:underline">
         Lobby
       </Link>
+      <Link href="/tournaments" className="font-medium text-accent hover:underline">
+        Torneios
+      </Link>
       <Link href="/wallet" className="font-medium text-accent hover:underline">
         Carteira
       </Link>
