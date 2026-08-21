@@ -34,3 +34,27 @@ export interface RequestWithdrawalRequest {
   pixKey: string;
   pixKeyType: 'CPF' | 'CNPJ' | 'EMAIL' | 'PHONE' | 'RANDOM';
 }
+
+/** Corpo de `POST /tables` (ADMIN). */
+export interface CreateTableRequest {
+  name: string;
+  type: 'CASH_GAME' | 'TOURNAMENT';
+  smallBlind: string;
+  bigBlind: string;
+  minBuyIn: string;
+  maxBuyIn: string;
+  maxSeats: number;
+  rakePercent?: string;
+}
+
+/** Corpo de `POST /tables/:id/sit`. */
+export interface SitAtTableRequest {
+  seatNumber: number;
+  buyInAmount: string;
+}
+
+/** Corpo de `POST /tables/:id/sessions/:sessionId/movements` (ADMIN). */
+export interface RecordMovementRequest {
+  amount: string;
+  reason: 'HAND_RESULT' | 'ADJUSTMENT';
+}
