@@ -97,7 +97,7 @@ pnpm --filter @poker-system/frontend run dev
 ## Backend (`apps/backend`)
 
 - **Config**: `ConfigModule` global com schema de validação **Joi** (`src/config/env.validation.ts`). O boot da aplicação falha com mensagem clara se faltar qualquer variável obrigatória (`DATABASE_URL`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ABACATEPAY_API_KEY`, `ABACATEPAY_WEBHOOK_SECRET`).
-- **Banco**: Prisma (`prisma/schema.prisma`), com `PrismaService` injetável (`src/prisma`), conectando/desconectando junto ao ciclo de vida do módulo Nest.
+- **Banco**: Prisma, schema em pasta (`prisma/schema/*.prisma`, um arquivo por bounded context — identity, wallet, table, tournament — mais `base.prisma` com generator/datasource/enums), com `PrismaService` injetável (`src/prisma`), conectando/desconectando junto ao ciclo de vida do módulo Nest. Domínio completo modelado e migration inicial aplicada (`prisma/schema/migrations`): dinheiro sempre `Decimal(14,2)`, ledgers append-only (`WalletTransaction`/`StackMovement`) com saldo materializado, `CHECK` constraints e índices únicos parciais para invariantes que o Prisma Schema Language não expressa nativamente — decisões documentadas no cabeçalho de `base.prisma`.
 - **Logging**: estruturado via `nestjs-pino` (JSON em produção, `pino-pretty` em desenvolvimento).
 - **Erros**: filtro global (`src/common/filters/http-exception.filter.ts`) padroniza todo erro no formato `{ statusCode, message, error?, timestamp, path }`, sem vazar stack trace na resposta HTTP.
 - **Health check**: `GET /api/health` (Terminus), verificando a conexão com o PostgreSQL via Prisma.
@@ -129,7 +129,7 @@ Veja `.env.example` na raiz para a lista completa e documentada (banco, JWT, Aba
 
 ## Pendências para as próximas tasks do backlog
 
-- Modelagem de domínio no Prisma (`User`, `Wallet`, `Table`, `Tournament`, etc.) — o schema atual está intencionalmente vazio (apenas datasource/generator).
-- Autenticação (JWT access/refresh já parametrizados via env, mas ainda não implementados).
-- Integração real com AbacatePay (criação de cobrança PIX, verificação de assinatura de webhook, idempotência de crédito na carteira).
-- Regras de negócio de cash game/torneio (separação Wallet vs. stack da mesa).
+- Endpoints de autenticação (register/login/refresh/logout + guards/strategies de Passport). O `TokenService` (emissão/verificação de JWT) já existe em `src/auth`, mas o módulo ainda não está registrado no `AppModule` — faltam os controllers e a persistência do `RefreshToken`.
+- Consumo do cliente AbacatePay já implementado em `src/integrations/abacatepay`: endpoints de depósito/saque PIX e verificação de assinatura de webhook (crédito idempotente na carteira).
+- Regras de negócio de cash game/torneio (buy-in, cash-out, distribuição de prêmio) sobre o schema já modelado — separação Wallet vs. stack da mesa.
+- Telas do frontend além do bootstrap (login, carteira, lobby de mesas/torneios).
