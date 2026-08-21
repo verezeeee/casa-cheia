@@ -19,6 +19,7 @@ import { createHmac } from 'node:crypto';
 import { timingSafeEqual } from '../common/crypto/timing-safe-equal';
 import {
   AbacatePayClient,
+  AbacatePayError,
   AbacatePayRequestError,
   type AbacatePayConfig,
 } from '../integrations/abacatepay';
@@ -122,11 +123,25 @@ export class WalletService {
 
     await this.findWalletOrThrow(userId);
 
-    const result = await this.abacatePayClient.createPixCharge({
-      amount: dto.amount,
-      externalReferenceId: `deposit:${idempotencyKey}`,
-      description: 'Depósito - Poker System',
-    });
+    let result: Awaited<ReturnType<AbacatePayClient['createPixCharge']>>;
+    try {
+      result = await this.abacatePayClient.createPixCharge({
+        amount: dto.amount,
+        externalReferenceId: `deposit:${idempotencyKey}`,
+        description: 'Depósito - Poker System',
+      });
+    } catch (error) {
+      // Nenhuma reserva de saldo acontece na criação do depósito (só o
+      // webhook credita) — diferente do saque, não há nada para estornar
+      // aqui. Só traduz a falha do gateway (`AbacatePayError`) num erro
+      // HTTP com sentido em vez de deixá-la virar 500 opaco.
+      if (error instanceof AbacatePayError) {
+        throw new ServiceUnavailableException(
+          'Não foi possível gerar o PIX agora. Tente novamente em instantes.',
+        );
+      }
+      throw error;
+    }
 
     const charge = await this.prisma.pixCharge.create({
       data: {

@@ -205,6 +205,22 @@ describe('WalletService', () => {
       );
       expect(result).toMatchObject({ id: 'charge-1', amount: '50.00' });
     });
+
+    it('traduz falha do gateway (AbacatePayError) em 503, nunca deixa vazar como 500 opaco', async () => {
+      const { service, prisma, abacatePayClient } = buildService();
+      prisma.wallet.findUnique.mockResolvedValue(WALLET);
+      abacatePayClient.createPixCharge.mockRejectedValue(
+        new AbacatePayRequestError('recusado', 'createPixCharge', {
+          status: 401,
+          responseBody: undefined,
+        }),
+      );
+
+      await expect(
+        service.createDeposit(WALLET.userId, { amount: '50.00' }, 'idem-1'),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(prisma.pixCharge.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('requestWithdrawal', () => {
