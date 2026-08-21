@@ -72,7 +72,7 @@ describe('configuration factories', () => {
 
     expect(abacatePayConfig()).toEqual({
       apiKey: 'key-123',
-      baseUrl: 'https://api.abacatepay.com/v1',
+      baseUrl: 'https://api.abacatepay.com/v2',
       webhookSecret: 'webhook-secret',
       webhookToleranceSeconds: 300,
     });

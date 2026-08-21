@@ -99,7 +99,7 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
 
     const webhookBody = JSON.stringify({
       id: `evt-${randomUUID()}`,
-      event: 'billing.paid',
+      event: 'transparent.completed',
       data: { id: chargeExternalId },
     });
     const timestamp = String(Math.floor(Date.now() / 1000));

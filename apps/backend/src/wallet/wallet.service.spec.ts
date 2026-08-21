@@ -440,7 +440,7 @@ describe('WalletService', () => {
       const { service, prisma } = buildService();
       const body = JSON.stringify({
         id: 'evt-1',
-        event: 'billing.paid',
+        event: 'transparent.completed',
         data: { id: 'chg-1' },
       });
       const timestamp = String(Math.floor(Date.now() / 1000));
@@ -461,11 +461,11 @@ describe('WalletService', () => {
       expect(prisma.pixCharge.findUnique).not.toHaveBeenCalled();
     });
 
-    it('credita a wallet quando o evento é billing.paid e a cobrança existe', async () => {
+    it('credita a wallet quando o evento é transparent.completed e a cobrança existe', async () => {
       const { service, prisma } = buildService();
       const body = JSON.stringify({
         id: 'evt-2',
-        event: 'billing.paid',
+        event: 'transparent.completed',
         data: { id: 'chg-1' },
       });
       const timestamp = String(Math.floor(Date.now() / 1000));
@@ -511,7 +511,7 @@ describe('WalletService', () => {
       const { service, prisma } = buildService();
       const body = JSON.stringify({
         id: 'evt-3',
-        event: 'billing.paid',
+        event: 'transparent.completed',
         data: { id: 'chg-1' },
       });
       const timestamp = String(Math.floor(Date.now() / 1000));

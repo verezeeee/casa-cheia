@@ -32,7 +32,7 @@ const TEST_ENV_DEFAULTS: Readonly<Record<string, string>> = {
   JWT_REFRESH_EXPIRES_IN: '7d',
 
   ABACATEPAY_API_KEY: 'e2e-test-abacatepay-key',
-  ABACATEPAY_BASE_URL: 'https://api.abacatepay.com/v1',
+  ABACATEPAY_BASE_URL: 'https://api.abacatepay.com/v2',
   ABACATEPAY_WEBHOOK_SECRET: 'e2e-test-abacatepay-webhook-secret',
   ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS: '300',
 

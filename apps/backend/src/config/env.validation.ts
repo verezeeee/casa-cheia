@@ -66,7 +66,7 @@ export const envValidationSchema = Joi.object({
   }),
   ABACATEPAY_BASE_URL: Joi.string()
     .uri()
-    .default('https://api.abacatepay.com/v1'),
+    .default('https://api.abacatepay.com/v2'),
   ABACATEPAY_WEBHOOK_SECRET: Joi.string().required().messages({
     'any.required':
       'ABACATEPAY_WEBHOOK_SECRET é obrigatória para validar a assinatura dos webhooks PIX.',

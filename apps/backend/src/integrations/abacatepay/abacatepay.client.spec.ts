@@ -19,7 +19,7 @@ import {
 import type { AbacatePayConfig } from './types';
 
 const API_KEY = 'abacatepay_live_SUPERSECRETKEY_9f8e7d6c';
-const BASE_URL = 'https://sandbox.abacatepay.test/v1';
+const BASE_URL = 'https://sandbox.abacatepay.test/v2';
 const PIX_KEY = 'jogador@exemplo.com';
 
 interface LoggerCapture {
@@ -86,7 +86,7 @@ const okResponse = (data: unknown): AxiosResponse<unknown> => ({
 /** Config de request "realista": carrega o header Authorization com a chave. */
 const axiosConfigWithSecret = (): AxiosRequestConfig =>
   ({
-    url: '/pixQrCode/create',
+    url: '/transparents/create',
     method: 'POST',
     headers: new AxiosHeaders({ Authorization: `Bearer ${API_KEY}` }),
   }) as AxiosRequestConfig;
@@ -209,8 +209,8 @@ describe('AbacatePayClient', () => {
       expect(sentConfig.baseURL).toBe(BASE_URL);
       expect(sentConfig.timeout).toBe(5_000);
       expect(sentConfig.data).toMatchObject({
-        amount: 12550,
-        externalId: 'tx-local-1',
+        method: 'PIX',
+        data: { amount: 12550, externalId: 'tx-local-1' },
       });
       expect((sentConfig.headers as Record<string, string>).Authorization).toBe(
         `Bearer ${API_KEY}`,
@@ -576,9 +576,8 @@ describe('AbacatePayClient', () => {
       expect(sentConfig.url).toBe(ABACATEPAY_ENDPOINTS.requestPixWithdrawal);
       expect(sentConfig.data).toMatchObject({
         amount: 5000,
-        pixKey: PIX_KEY,
-        pixKeyType: 'EMAIL',
         externalId: 'tx-local-2',
+        pix: { type: 'EMAIL', key: PIX_KEY },
       });
 
       expect(result).toEqual({
@@ -765,7 +764,7 @@ describe('AbacatePayClient', () => {
       });
 
       const sentConfig = request.mock.calls[0][0] as AxiosRequestConfig;
-      expect(sentConfig.baseURL).toBe('https://api.abacatepay.com/v1');
+      expect(sentConfig.baseURL).toBe('https://api.abacatepay.com/v2');
       expect(sentConfig.timeout).toBe(10_000);
     });
   });

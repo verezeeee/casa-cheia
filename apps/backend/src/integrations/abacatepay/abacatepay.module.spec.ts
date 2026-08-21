@@ -51,7 +51,7 @@ describe('AbacatePayModule', () => {
     const httpService = moduleRef.get(HttpService);
 
     expect(httpService.axiosRef.defaults.baseURL).toBe(
-      'https://api.abacatepay.com/v1',
+      'https://api.abacatepay.com/v2',
     );
     expect(httpService.axiosRef.defaults.timeout).toBe(10_000);
 

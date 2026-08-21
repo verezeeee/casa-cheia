@@ -6,8 +6,11 @@
  * inteiros; a conversão acontece na borda (`amount.util.ts`) para que
  * nenhum valor do domínio passe por IEEE-754 em momento algum.
  *
- * TODO: ajustar payload/campos conforme doc oficial do AbacatePay quando a
- * integração for validada em sandbox real.
+ * Rotas, payloads e evento de webhook confirmados contra o client oficial
+ * (`github.com/AbacatePay/abacatepay-mcp`) — ver `abacatepay.client.ts` e
+ * `WalletService.handleWebhook`. O shape exato da resposta de `/pix/send`
+ * (além de `id`/`status`) segue sem confirmação por chamada autenticada
+ * real; `mapWithdrawal` já é tolerante a nomes de campo alternativos.
  */
 
 /** Namespace de configuração `abacatePay` (ver `config/configuration.ts`). */

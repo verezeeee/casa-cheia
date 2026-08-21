@@ -260,9 +260,13 @@ export class WalletService {
    * calculada sobre os bytes exatos — nunca sobre um JSON re-serializado,
    * que pode divergir em espaços/ordem de chaves e invalidar o HMAC).
    *
-   * NOTA: formato de assinatura/payload ainda não validado contra a doc
-   * oficial do AbacatePay (mesmo estágio dos demais TODOs da integração, ver
-   * `integrations/abacatepay/types.ts`) — ajustar quando disponível em sandbox.
+   * NOTA: o nome do evento (`event.eventType`, ver `parseWebhookEvent`) é
+   * confirmado contra o enum real do AbacatePay v2 (`transparent.completed`
+   * etc., via client oficial `abacatepay-mcp`). O envelope exato do corpo
+   * (`{id, event, data: {id}}`) e o esquema de assinatura HMAC continuam
+   * sem confirmação por um webhook real recebido — o cliente MCP só CHAMA
+   * a API, não documenta o payload que ela ENVIA para webhooks. Ajustar se
+   * um webhook real divergir.
    */
   async handleWebhook(
     rawBody: Buffer,
@@ -293,7 +297,11 @@ export class WalletService {
       throw error;
     }
 
-    if (event.eventType !== 'billing.paid') {
+    // Nosso depósito é sempre um PIX "transparente" (ver AbacatePayClient),
+    // então o evento de pagamento confirmado é `transparent.completed` —
+    // `billing.paid` não existe no enum de eventos do AbacatePay v2
+    // (confirmado contra o client oficial `abacatepay-mcp`).
+    if (event.eventType !== 'transparent.completed') {
       await this.prisma.webhookEvent.update({
         where: { id: webhookEvent.id },
         data: { processedAt: new Date() },

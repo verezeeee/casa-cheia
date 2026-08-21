@@ -32,17 +32,19 @@ export const DEFAULT_RETRY_DELAY_MS = 200;
  */
 export const MAX_ATTEMPTS = 2;
 
-export const DEFAULT_BASE_URL = 'https://api.abacatepay.com/v1';
+export const DEFAULT_BASE_URL = 'https://api.abacatepay.com/v2';
 
 /**
- * Rotas do provedor.
- * TODO: ajustar payload/rotas conforme doc oficial do AbacatePay quando a
- * integração for validada em sandbox real.
+ * Rotas do provedor (API v2), confirmadas contra o client oficial
+ * (`github.com/AbacatePay/abacatepay-mcp`): cobrança PIX avulsa é um
+ * "transparente" (`/transparents/*`), não um "checkout" (que exige produtos
+ * pré-cadastrados) nem `/pixQrCode/*` (não existe). Saque para chave de
+ * terceiros é `/pix/send`, não `/withdraw/create` (também não existe).
  */
 export const ABACATEPAY_ENDPOINTS = {
-  createPixCharge: '/pixQrCode/create',
-  getPixCharge: '/pixQrCode/check',
-  requestPixWithdrawal: '/withdraw/create',
+  createPixCharge: '/transparents/create',
+  getPixCharge: '/transparents/get',
+  requestPixWithdrawal: '/pix/send',
 } as const;
 
 const CHARGE_STATUS_MAP: Readonly<Record<string, AbacatePayChargeStatus>> = {
@@ -186,14 +188,15 @@ export class AbacatePayClient {
   ): Promise<AbacatePayChargeResult> {
     const operation = 'createPixCharge';
 
-    // TODO: ajustar payload conforme doc oficial do AbacatePay quando a
-    // integração for validada em sandbox real.
+    // Envelope `{method, data}` — é o mesmo endpoint para PIX/boleto
+    // "transparente", diferenciado pelo `method`.
     const payload = {
-      frequency: 'ONE_TIME',
-      methods: ['PIX'],
-      amount: decimalStringToCents(input.amount, operation),
-      description: input.description,
-      externalId: input.externalReferenceId,
+      method: 'PIX',
+      data: {
+        amount: decimalStringToCents(input.amount, operation),
+        description: input.description,
+        externalId: input.externalReferenceId,
+      },
     };
 
     const data = await this.send(operation, {
@@ -249,13 +252,15 @@ export class AbacatePayClient {
   ): Promise<AbacatePayWithdrawalResult> {
     const operation = 'requestPixWithdrawal';
 
-    // TODO: ajustar payload conforme doc oficial do AbacatePay quando a
-    // integração for validada em sandbox real.
+    // A chave PIX de destino vai aninhada em `pix: {type, key}` — não como
+    // campos soltos.
     const payload = {
-      amount: decimalStringToCents(input.amount, operation),
-      pixKey: input.pixKey,
-      pixKeyType: input.pixKeyType,
       externalId: input.externalReferenceId,
+      amount: decimalStringToCents(input.amount, operation),
+      pix: {
+        type: input.pixKeyType,
+        key: input.pixKey,
+      },
     };
 
     const data = await this.send(operation, {
@@ -416,9 +421,12 @@ export class AbacatePayClient {
   // ---------------------------------------------------------------------------
 
   /**
-   * O AbacatePay envelopa a resposta em `{ data, error }`. Aceitamos também
-   * o objeto "cru" para tolerar variações de rota/versão.
-   * TODO: fixar no formato oficial após validação em sandbox.
+   * O AbacatePay (v2) envelopa toda resposta 2xx em `{ data }` — confirmado
+   * contra o client oficial (`abacatepay-mcp`). O provedor sinaliza erro
+   * via status HTTP não-2xx (tratado em `send`/`classify`), não com um
+   * `error` dentro de um corpo 200; a checagem de `raw.error` abaixo é só
+   * uma rede de segurança contra uma variação desse contrato. Também
+   * aceitamos o objeto "cru" (sem envelope) por tolerância.
    */
   private unwrap(raw: unknown, operation: string): Record<string, unknown> {
     if (!isRecord(raw)) {

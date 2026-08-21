@@ -36,7 +36,7 @@ export const jwtConfig = registerAs('jwt', () => ({
 
 export const abacatePayConfig = registerAs('abacatePay', () => ({
   apiKey: process.env.ABACATEPAY_API_KEY,
-  baseUrl: process.env.ABACATEPAY_BASE_URL ?? 'https://api.abacatepay.com/v1',
+  baseUrl: process.env.ABACATEPAY_BASE_URL ?? 'https://api.abacatepay.com/v2',
   webhookSecret: process.env.ABACATEPAY_WEBHOOK_SECRET,
   // Janela (em segundos) aceita entre o timestamp assinado do webhook e o
   // "agora" do servidor. Além dela, o evento é descartado como replay.

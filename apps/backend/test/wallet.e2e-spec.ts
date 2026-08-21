@@ -118,7 +118,7 @@ describe('Wallet + webhook AbacatePay (e2e)', () => {
 
     const webhookBody = JSON.stringify({
       id: `evt-${randomUUID()}`,
-      event: 'billing.paid',
+      event: 'transparent.completed',
       data: { id: chargeExternalId },
     });
     const timestamp = String(Math.floor(Date.now() / 1000));
@@ -183,7 +183,7 @@ describe('Wallet + webhook AbacatePay (e2e)', () => {
   it('webhook com assinatura inválida é rejeitado (401) e não altera saldo', async () => {
     const body = JSON.stringify({
       id: 'evt-x',
-      event: 'billing.paid',
+      event: 'transparent.completed',
       data: { id: 'chg-x' },
     });
     const timestamp = String(Math.floor(Date.now() / 1000));
