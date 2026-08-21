@@ -1,0 +1,93 @@
+'use client';
+
+import type { WalletTransactionDto } from '@poker-system/shared';
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { walletApi } from '@/lib/api/wallet';
+import { Badge, Card, EmptyState, Spinner, type BadgeVariant } from '@/components/ui';
+import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
+
+const TYPE_LABEL: Record<WalletTransactionDto['type'], string> = {
+  PIX_DEPOSIT: 'Depósito PIX',
+  PIX_WITHDRAWAL: 'Saque PIX',
+  TABLE_BUY_IN: 'Buy-in de mesa',
+  TABLE_CASH_OUT: 'Cash-out de mesa',
+  TOURNAMENT_BUY_IN: 'Inscrição em torneio',
+  TOURNAMENT_PAYOUT: 'Premiação de torneio',
+  ADJUSTMENT: 'Ajuste administrativo',
+};
+
+const STATUS_VARIANT: Record<WalletTransactionDto['status'], BadgeVariant> = {
+  PENDING: 'warning',
+  COMPLETED: 'success',
+  FAILED: 'danger',
+  REVERSED: 'neutral',
+};
+
+export function TransactionList() {
+  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery({
+      queryKey: ['wallet', 'transactions'],
+      queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
+        walletApi.getTransactions(pageParam),
+      initialPageParam: undefined as string | undefined,
+      getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    });
+
+  const items = data?.pages.flatMap((page) => page.items) ?? [];
+
+  return (
+    <Card title="Extrato">
+      {isLoading ? (
+        <Spinner size="sm" label="Carregando extrato" />
+      ) : isError ? (
+        <p className="text-red-600 dark:text-red-400">Não foi possível carregar o extrato.</p>
+      ) : items.length === 0 ? (
+        <EmptyState
+          title="Nenhuma movimentação ainda"
+          description="Seus depósitos e saques aparecem aqui."
+        />
+      ) : (
+        <div className="flex flex-col gap-2">
+          <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+            {items.map((transaction) => (
+              <li
+                key={transaction.id}
+                className="flex items-center justify-between gap-3 py-2 text-sm"
+              >
+                <div>
+                  <p className="font-medium">{TYPE_LABEL[transaction.type]}</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {formatDateTimeSafe(transaction.createdAt)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={STATUS_VARIANT[transaction.status]}>{transaction.status}</Badge>
+                  <span
+                    className={
+                      transaction.amount.startsWith('-')
+                        ? 'font-semibold text-red-600 dark:text-red-400'
+                        : 'font-semibold text-emerald-600 dark:text-emerald-400'
+                    }
+                  >
+                    {formatMoneySafe(transaction.amount)}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          {hasNextPage && (
+            <button
+              type="button"
+              onClick={() => void fetchNextPage()}
+              disabled={isFetchingNextPage}
+              className="self-center text-sm font-medium text-emerald-600 hover:underline disabled:opacity-60"
+            >
+              {isFetchingNextPage ? 'Carregando...' : 'Carregar mais'}
+            </button>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}

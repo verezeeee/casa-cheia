@@ -21,3 +21,16 @@ export interface LoginRequest {
   email: string;
   password: string;
 }
+
+/** Corpo de `POST /wallet/deposits`. */
+export interface CreateDepositRequest {
+  /** String decimal ("50.00") — nunca `number`, ver `@poker-system/shared/types/money`. */
+  amount: string;
+}
+
+/** Corpo de `POST /wallet/withdrawals`. */
+export interface RequestWithdrawalRequest {
+  amount: string;
+  pixKey: string;
+  pixKeyType: 'CPF' | 'CNPJ' | 'EMAIL' | 'PHONE' | 'RANDOM';
+}

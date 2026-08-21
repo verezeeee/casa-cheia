@@ -28,6 +28,9 @@ export function AuthStatus() {
   return (
     <div className="flex items-center gap-3 text-sm">
       <span className="text-slate-600 dark:text-slate-400">Olá, {user?.name}</span>
+      <Link href="/wallet" className="font-medium text-emerald-600 hover:underline">
+        Carteira
+      </Link>
       <Button variant="secondary" size="sm" onClick={() => void logout()}>
         Sair
       </Button>
