@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
-import { decodeCursor, encodeCursor } from './wallet.mappers';
+import { decodeCursor, encodeCursor } from './cursor';
 
-describe('wallet.mappers cursor', () => {
+describe('common/pagination cursor', () => {
   it('faz round-trip: decodeCursor(encodeCursor(x)) === x', () => {
     const createdAt = new Date('2026-01-15T10:00:00.000Z');
     const cursor = encodeCursor({ createdAt, id: 'txn-42' });

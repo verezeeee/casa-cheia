@@ -1,4 +1,3 @@
-import { BadRequestException } from '@nestjs/common';
 import type {
   PixChargeResponse,
   PixChargeStatus as SharedPixChargeStatus,
@@ -15,6 +14,8 @@ import type {
   Wallet,
   WalletTransaction,
 } from '@prisma/client';
+
+export { decodeCursor, encodeCursor } from '../common/pagination/cursor';
 
 /** Dinheiro nunca sai como `number` — `Decimal.toFixed(2)` fixa as 2 casas contratadas em `MoneyString`. */
 const toMoney = (value: { toFixed: (digits: number) => string }): string =>
@@ -68,34 +69,4 @@ export function toPixWithdrawalResponse(
 function maskPixKey(pixKey: string): string {
   const visible = pixKey.slice(-4);
   return `***${visible}`;
-}
-
-/** Cursor opaco de `PaginatedResponse` (keyset por `createdAt` + `id`, ver `WalletService.getTransactions`). */
-export interface TransactionCursor {
-  createdAt: Date;
-  id: string;
-}
-
-export function encodeCursor(row: { createdAt: Date; id: string }): string {
-  return Buffer.from(
-    JSON.stringify({ createdAt: row.createdAt.toISOString(), id: row.id }),
-  ).toString('base64url');
-}
-
-export function decodeCursor(cursor: string): TransactionCursor {
-  try {
-    const parsed = JSON.parse(
-      Buffer.from(cursor, 'base64url').toString('utf8'),
-    ) as {
-      createdAt: string;
-      id: string;
-    };
-    const createdAt = new Date(parsed.createdAt);
-    if (typeof parsed.id !== 'string' || Number.isNaN(createdAt.getTime())) {
-      throw new Error('shape inválido');
-    }
-    return { createdAt, id: parsed.id };
-  } catch {
-    throw new BadRequestException('cursor inválido.');
-  }
 }

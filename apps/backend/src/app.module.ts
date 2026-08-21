@@ -17,6 +17,7 @@ import {
 import { envValidationSchema } from './config/env.validation';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { TableModule } from './table/table.module';
 import { WalletModule } from './wallet/wallet.module';
 
 @Module({
@@ -53,6 +54,7 @@ import { WalletModule } from './wallet/wallet.module';
     HealthModule,
     AuthModule,
     WalletModule,
+    TableModule,
   ],
   controllers: [AppController],
   providers: [

@@ -341,8 +341,15 @@ export class WalletService {
    * UPDATE`, cálculo do novo saldo em `Decimal`, `CHECK (balance >= 0)` como
    * última barreira do banco. `amount` já vem com sinal (positivo = crédito,
    * negativo = débito). SEMPRE chamado dentro de um `prisma.$transaction`.
+   *
+   * PÚBLICO de propósito: é o único ponto de escrita no ledger da wallet do
+   * sistema inteiro — outros módulos que precisam mover dinheiro (Table,
+   * Tournament) chamam este método dentro da PRÓPRIA transação, em vez de
+   * duplicar o lock/CHECK/cálculo de saldo. Sempre requer um `tx` já aberto:
+   * nunca abre transação própria, para poder compor com a escrita do
+   * chamador (ex.: `TableSession` + `StackMovement` do buy-in) atomicamente.
    */
-  private async applyLedgerEntry(
+  async applyLedgerEntry(
     tx: Prisma.TransactionClient,
     walletId: string,
     params: {
@@ -351,6 +358,9 @@ export class WalletService {
       idempotencyKey: string;
       description?: string;
       pixChargeId?: string;
+      tableSessionId?: string;
+      tournamentEntryId?: string;
+      createdById?: string;
     },
   ) {
     const rows = await tx.$queryRaw<
@@ -379,6 +389,9 @@ export class WalletService {
         idempotencyKey: params.idempotencyKey,
         description: params.description,
         pixChargeId: params.pixChargeId,
+        tableSessionId: params.tableSessionId,
+        tournamentEntryId: params.tournamentEntryId,
+        createdById: params.createdById,
       },
     });
 

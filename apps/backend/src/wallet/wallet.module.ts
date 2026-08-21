@@ -10,5 +10,9 @@ import { WalletService } from './wallet.service';
   imports: [PrismaModule, AbacatePayModule, AuthModule],
   controllers: [WalletController, AbacatePayWebhookController],
   providers: [WalletService],
+  // Exportado para o TableModule (buy-in/cash-out) e futuramente
+  // TournamentModule reutilizarem `applyLedgerEntry` dentro da própria
+  // transação — ver nota no método.
+  exports: [WalletService],
 })
 export class WalletModule {}
