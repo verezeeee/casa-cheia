@@ -1,0 +1,169 @@
+// ============================================================================
+// Poker System — Base do schema Prisma (generator + datasource + enums)
+// ============================================================================
+//
+// Este projeto usa o layout de PASTA de schema (`prismaSchemaFolder`, GA no
+// Prisma 6.x): `apps/backend/package.json` define `"prisma": { "schema":
+// "prisma/schema" }`. Todos os arquivos `.prisma` desta pasta são unidos em um
+// único schema lógico. Este arquivo é o ÚNICO que declara `generator` e
+// `datasource`, e é a FONTE ÚNICA DE VERDADE dos enums do domínio.
+//
+// Os models de negócio vivem em arquivos separados por bounded context
+// (identity.prisma, wallet.prisma, table.prisma, tournament.prisma).
+//
+// ----------------------------------------------------------------------------
+// DECISÕES DE ARQUITETURA (vinculantes para todo o domínio)
+// ----------------------------------------------------------------------------
+//
+// 1) DINHEIRO
+//    Todo valor monetário é `Decimal @db.Decimal(14, 2)`. NUNCA `Float`/`Double`
+//    (aritmética binária de ponto flutuante introduz erro de arredondamento e é
+//    inaceitável em ledger financeiro). Em TypeScript, usar `Prisma.Decimal` —
+//    não converter para `number` em cálculos.
+//
+// 2) SALDO DA WALLET — LEDGER APPEND-ONLY + COLUNA MATERIALIZADA
+//    A verdade contábil é o ledger `WalletTransaction`, append-only: linhas nunca
+//    são editadas nem deletadas; estorno é um novo lançamento de sinal oposto
+//    (status `REVERSED`). `Wallet.balance` é uma coluna materializada mantida
+//    para leitura O(1), atualizada na MESMA transação de banco que insere o
+//    lançamento.
+//    INVARIANTE: SUM(WalletTransaction.amount) == Wallet.balance
+//    (verificável por job de reconciliação; divergência é incidente crítico).
+//
+// 3) CONCORRÊNCIA / ANTI DOUBLE-SPENDING
+//    Todo débito ou crédito ocorre dentro de `prisma.$transaction`, com LOCK
+//    PESSIMISTA na linha da wallet (`SELECT ... FROM wallets WHERE id = $1 FOR
+//    UPDATE` via `$queryRaw`) ANTES de ler o saldo e decidir a operação. Isso
+//    serializa operações concorrentes sobre a mesma wallet e elimina a corrida
+//    de read-modify-write (lost update) que o READ COMMITTED do PostgreSQL
+//    permitiria. Como ÚLTIMA BARREIRA, o banco carrega `CHECK (balance >= 0)`
+//    na tabela de wallets: mesmo diante de um bug de aplicação, saldo negativo é
+//    fisicamente impossível.
+//
+// 4) IDEMPOTÊNCIA
+//    Toda operação financeira exposta via API exige o header `Idempotency-Key`;
+//    a chave é persistida com o resultado, e o replay retorna a resposta original
+//    sem reexecutar o efeito colateral. Webhooks de PSP são desduplicados no
+//    banco por `@@unique([provider, externalEventId])` — retentativa do provedor
+//    colide na constraint e é tratada como no-op idempotente.
+//
+// 5) SEPARAÇÃO DE FUNDOS
+//    O saldo da Wallet representa APENAS fundos livres do jogador. Ele nunca
+//    contém stack de mesa em jogo nem buy-in de torneio em curso. Buy-in debita
+//    a wallet e credita o stack (`TableSession.stack` / `TournamentEntry`);
+//    cash-out / payout faz o caminho inverso. Fundos existem em exatamente um
+//    lugar por vez — jamais em dois, jamais em nenhum.
+//
+// ----------------------------------------------------------------------------
+// CONVENÇÕES PARA OS MODELS (a serem seguidas nos demais arquivos .prisma)
+// ----------------------------------------------------------------------------
+//
+//   - PK:        `id String @id @default(uuid())`
+//   - Timestamps: `createdAt DateTime @default(now())` e
+//                 `updatedAt DateTime @updatedAt`
+//   - Tabelas em snake_case via `@@map("nome_tabela")`.
+//   - Campos em camelCase no Prisma, mapeados para snake_case no banco via
+//     `@map("nome_coluna")` quando divergirem.
+//   - Índices explícitos (`@@index`) em toda FK usada como filtro de listagem.
+//
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS DO DOMÍNIO
+// ----------------------------------------------------------------------------
+// Fonte única de verdade. Espelham EXATAMENTE (mesmos literais, mesma ordem) os
+// enums TypeScript de `packages/shared/src/enums/`. Alterar um lado obriga a
+// alterar o outro no mesmo commit — e adicionar valor a enum em produção exige
+// migration própria (`ALTER TYPE ... ADD VALUE`).
+// ============================================================================
+
+/// Perfil de acesso do usuário.
+enum UserRole {
+  PLAYER
+  ADMIN
+}
+
+/// Modalidade da mesa.
+enum TableType {
+  CASH_GAME
+  TOURNAMENT
+}
+
+/// Natureza do lançamento no ledger da wallet.
+/// Créditos: PIX_DEPOSIT, TABLE_CASH_OUT, TOURNAMENT_PAYOUT.
+/// Débitos:  PIX_WITHDRAWAL, TABLE_BUY_IN, TOURNAMENT_BUY_IN.
+/// ADJUSTMENT é operação administrativa (pode ter qualquer sinal) e sempre
+/// exige trilha de auditoria com o ator responsável.
+enum WalletTransactionType {
+  PIX_DEPOSIT
+  PIX_WITHDRAWAL
+  TABLE_BUY_IN
+  TABLE_CASH_OUT
+  TOURNAMENT_BUY_IN
+  TOURNAMENT_PAYOUT
+  ADJUSTMENT
+}
+
+/// Ciclo de vida do lançamento. Apenas COMPLETED compõe o saldo materializado.
+enum WalletTransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+/// Ciclo de vida de uma cobrança PIX (entrada de dinheiro).
+enum PixChargeStatus {
+  PENDING
+  PAID
+  EXPIRED
+  CANCELLED
+}
+
+/// Ciclo de vida de um saque PIX (saída de dinheiro).
+enum PixWithdrawalStatus {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+/// Estado operacional da mesa.
+enum TableStatus {
+  OPEN
+  PAUSED
+  CLOSED
+}
+
+/// Estado da sessão de um jogador em uma mesa (posse do stack).
+enum TableSessionStatus {
+  ACTIVE
+  CASHED_OUT
+}
+
+/// Ciclo de vida do torneio.
+enum TournamentStatus {
+  DRAFT
+  REGISTERING
+  RUNNING
+  FINISHED
+  CANCELLED
+}
+
+/// Situação da inscrição do jogador no torneio.
+enum TournamentEntryStatus {
+  REGISTERED
+  PLAYING
+  ELIMINATED
+  PAID
+  REFUNDED
+}

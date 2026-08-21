@@ -1,0 +1,26 @@
+// Config Jest para os testes de INTEGRACAO (banco PostgreSQL real).
+//
+// Sera consumida pela task T-DB-07, que adiciona os arquivos `*.int-spec.ts`
+// em apps/backend/test/. Rodar com `pnpm --filter @poker-system/backend test:int`.
+//
+// Decisoes:
+//  - `setupFiles` reaproveita o mesmo `setup-env.ts` das suites e2e: as
+//    variaveis de ambiente precisam existir ANTES do import do AppModule
+//    (o ConfigModule valida com Joi no carregamento) e o DATABASE_URL_TEST
+//    tem precedencia sobre o banco de desenvolvimento.
+//  - `maxWorkers: 1` (alem do --runInBand do script) porque as suites
+//    compartilham o mesmo banco: paralelismo geraria interferencia entre
+//    transacoes/truncates.
+//  - `testTimeout` folgado por causa de migrations/startup do container.
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testEnvironment": "node",
+  "testRegex": ".int-spec.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": "ts-jest"
+  },
+  "setupFiles": ["<rootDir>/setup-env.ts"],
+  "maxWorkers": 1,
+  "testTimeout": 30000
+}
