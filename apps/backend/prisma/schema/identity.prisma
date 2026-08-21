@@ -1,0 +1,133 @@
+// ============================================================================
+// Bounded context: IDENTITY (usuários e sessões de autenticação)
+// ============================================================================
+//
+// Enums e datasource vivem em `base.prisma` (fonte única de verdade).
+// Este arquivo declara APENAS os models deste contexto: `User` e `RefreshToken`.
+//
+// RELAÇÕES CRUZADAS ENTRE CONTEXTOS (T-DB-06)
+// `User` nunca é fisicamente deletado (ver `isActive` abaixo) — por isso toda
+// relação abaixo que aponta PARA `User` é `onDelete: Restrict` no lado que a
+// declara (wallet.prisma, table.prisma, tournament.prisma): um `DELETE` em
+// `users` que arrastasse consigo carteira, mesas ou torneios destruiria a
+// trilha de auditoria financeira, exatamente o que o soft-disable existe para
+// evitar.
+//
+// ============================================================================
+
+/// Usuário da plataforma (jogador ou administrador).
+model User {
+  id String @id @default(uuid())
+
+  /// E-mail de login. A unicidade é garantida pelo banco sobre o valor
+  /// EXATAMENTE como armazenado — o PostgreSQL compara `text` de forma
+  /// case-sensitive, logo `A@x.com` e `a@x.com` seriam duas linhas distintas.
+  /// A NORMALIZAÇÃO (trim + lowercase) É RESPONSABILIDADE DA CAMADA DE
+  /// APLICAÇÃO, aplicada tanto no cadastro quanto no login e em qualquer
+  /// consulta por e-mail. O banco não normaliza nada.
+  email String @unique
+
+  /// Hash da senha (Argon2id). A senha em claro nunca é persistida nem logada.
+  passwordHash String @map("password_hash")
+
+  name String
+
+  /// CPF (somente dígitos). Nullable até a conclusão do KYC; único quando
+  /// preenchido — no PostgreSQL, múltiplos NULLs não colidem em índice único,
+  /// então vários usuários podem coexistir sem documento.
+  document String? @unique
+
+  phone String?
+
+  role UserRole @default(PLAYER)
+
+  /// Soft-disable: usuário inativo não autentica e não opera financeiramente.
+  /// Preferido a DELETE, que destruiria a trilha de auditoria do ledger.
+  isActive Boolean @default(true)
+
+  /// Nulo enquanto o e-mail não foi verificado; carimbo do momento da
+  /// verificação quando concluída (mais informativo que um booleano).
+  emailVerifiedAt DateTime? @map("email_verified_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  refreshTokens RefreshToken[]
+
+  /// Carteira virtual do jogador (1:1 — ver `Wallet.userId @unique`).
+  wallet Wallet?
+
+  /// Cobranças e saques PIX solicitados pelo usuário.
+  pixCharges     PixCharge[]
+  pixWithdrawals PixWithdrawal[]
+
+  /// Lançamentos do ledger da wallet cujo autor foi este usuário — só
+  /// preenchido para `WalletTransactionType.ADJUSTMENT` (trilha de auditoria
+  /// de ajuste administrativo, ver `WalletTransaction.createdById`).
+  walletTransactionsCreated WalletTransaction[]
+
+  /// Mesas criadas por este usuário (sempre um `ADMIN`, ver `Table.createdById`).
+  createdTables Table[]
+
+  /// Sessões (ocupação de assento) deste usuário em mesas.
+  tableSessions TableSession[]
+
+  /// Movimentos do ledger de stack registrados manualmente por este usuário
+  /// (dealer/admin), ver `StackMovement.createdById`.
+  stackMovementsCreated StackMovement[]
+
+  /// Torneios criados por este usuário (sempre um `ADMIN`, ver
+  /// `Tournament.createdById`).
+  createdTournaments Tournament[]
+
+  /// Inscrições deste usuário em torneios.
+  tournamentEntries TournamentEntry[]
+
+  @@map("users")
+}
+
+/// Refresh token emitido para uma sessão, com rotação por família.
+///
+/// MODELO DE ROTAÇÃO
+/// Cada login abre uma FAMÍLIA (`familyId`). Todo refresh revoga o token
+/// corrente (`revokedAt`), emite um sucessor e aponta `replacedByTokenId` para
+/// ele, mantendo a cadeia auditável. Se um token JÁ REVOGADO for reapresentado,
+/// isso caracteriza roubo/replay: a família INTEIRA é revogada de uma vez
+/// (`UPDATE ... WHERE family_id = $1`), derrubando também o atacante.
+model RefreshToken {
+  id String @id @default(uuid())
+
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 do token. NUNCA armazenar o token em claro: um dump do banco não
+  /// pode permitir personificar sessões. A verificação é feita hasheando o
+  /// valor apresentado e buscando pelo hash (por isso `@unique`, que também
+  /// fornece o índice da consulta do fluxo de refresh).
+  tokenHash String @unique @map("token_hash")
+
+  /// Agrupa a cadeia de rotação originada de um mesmo login. O reuso de um
+  /// token revogado desta família derruba a família inteira.
+  familyId String @map("family_id")
+
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+
+  /// Sucessor emitido na rotação. Não é `@relation` auto-referencial de
+  /// propósito: é um ponteiro de auditoria e a cadeia pode ser truncada por
+  /// expurgo de tokens antigos sem violar integridade referencial.
+  replacedByTokenId String? @map("replaced_by_token_id")
+
+  /// Metadados do dispositivo, para listagem de sessões ativas e detecção de
+  /// anomalias. Nullable: nem todo cliente envia.
+  userAgent String? @map("user_agent")
+  ip        String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  /// Consulta quente: tokens ativos de um usuário (sessões vigentes).
+  @@index([userId, revokedAt])
+  /// Suporta o job de expurgo de tokens expirados.
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}

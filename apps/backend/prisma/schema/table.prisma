@@ -1,0 +1,218 @@
+// ============================================================================
+// Bounded context: TABLE (mesas, ocupação de assento e ledger de stack)
+// ============================================================================
+//
+// Enums globais e datasource vivem em `base.prisma` (fonte única de verdade).
+// Este arquivo declara os models `Table`, `TableSession` e `StackMovement`, mais
+// o enum LOCAL `StackMovementReason` (usado exclusivamente neste contexto).
+//
+// ----------------------------------------------------------------------------
+// SEPARAÇÃO DE FUNDOS (decisão 5 de `base.prisma`)
+// ----------------------------------------------------------------------------
+// A Wallet guarda APENAS fundos livres. Assim que o jogador senta e faz buy-in,
+// o dinheiro sai da wallet e passa a viver em `TableSession.currentStack`; o
+// cash-out faz o caminho inverso. Em nenhum instante o mesmo dinheiro pode estar
+// nos dois lugares — por isso todo movimento que cruza a fronteira wallet↔mesa é
+// escrito na MESMA transação de banco que grava o `WalletTransaction`
+// correspondente, e o `StackMovement` guarda o `walletTransactionId` como elo de
+// auditoria entre os dois ledgers.
+//
+// ----------------------------------------------------------------------------
+// RELAÇÕES CRUZADAS ENTRE CONTEXTOS (T-DB-06)
+// ----------------------------------------------------------------------------
+// `createdById`/`userId` (→ `User`) e `walletTransactionId` (→
+// `WalletTransaction`) agora são `@relation` completas. Toda relação
+// apontando para `User` é `onDelete: Restrict` (ver nota em identity.prisma).
+//
+// ============================================================================
+
+/// Motivo de um lançamento no ledger de stack.
+///
+/// BUY_IN e CASH_OUT cruzam a fronteira wallet↔mesa e, portanto, SEMPRE têm
+/// `walletTransactionId` preenchido. HAND_RESULT (resultado de mão: ganho ou
+/// perda contra outros jogadores) e ADJUSTMENT (correção administrativa)
+/// redistribuem valor DENTRO da mesa e nunca tocam a wallet — nesses casos
+/// `walletTransactionId` é `null`.
+///
+/// Enum LOCAL deste contexto: não pertence a `base.prisma` porque nenhum outro
+/// bounded context o consome.
+enum StackMovementReason {
+  BUY_IN
+  CASH_OUT
+  HAND_RESULT
+  ADJUSTMENT
+}
+
+/// Mesa de poker (cash game ou mesa pertencente a um torneio).
+///
+/// INVARIANTES REFORÇADAS NO BANCO VIA `CHECK` CONSTRAINT
+/// O Prisma Schema Language não expressa `CHECK`, então estas regras entram como
+/// SQL puro na migration de integração:
+///   - `CHECK (min_buy_in <= max_buy_in)` — faixa de buy-in não pode ser
+///     invertida; caso contrário nenhum valor seria aceitável ao sentar.
+///   - `CHECK (max_seats BETWEEN 2 AND 10)` — poker exige no mínimo 2 jogadores
+///     e a mesa full-ring comporta no máximo 10 assentos. O limite superior
+///     também é o teto de `TableSession.seatNumber`.
+/// A validação na camada de aplicação (DTO) é a primeira barreira; o `CHECK` é a
+/// última, garantindo consistência mesmo diante de escrita fora da API.
+model Table {
+  id String @id @default(uuid())
+
+  name String
+
+  type TableType
+
+  /// Blinds da mesa. Definem o custo mínimo de uma órbita e são a referência
+  /// econômica para a faixa de buy-in.
+  smallBlind Decimal @map("small_blind") @db.Decimal(14, 2)
+  bigBlind   Decimal @map("big_blind") @db.Decimal(14, 2)
+
+  /// Faixa de buy-in permitida ao sentar (e ao fazer re-buy). Ver `CHECK`
+  /// `min_buy_in <= max_buy_in` documentado acima.
+  minBuyIn Decimal @map("min_buy_in") @db.Decimal(14, 2)
+  maxBuyIn Decimal @map("max_buy_in") @db.Decimal(14, 2)
+
+  /// Número de assentos. Ver `CHECK (max_seats BETWEEN 2 AND 10)`.
+  maxSeats Int @map("max_seats")
+
+  status TableStatus
+
+  /// Percentual de rake retido pela casa por pote (0.00–100.00). Nulo quando a
+  /// mesa não cobra rake (ex.: mesas de torneio, onde a receita vem da taxa de
+  /// inscrição, não do pote).
+  rakePercent Decimal? @map("rake_percent") @db.Decimal(5, 2)
+
+  /// Admin que criou a mesa (trilha de auditoria).
+  createdById String @map("created_by_id")
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  sessions TableSession[]
+
+  /// Consulta quente do lobby: mesas abertas por modalidade.
+  @@index([status, type])
+  /// Listagem administrativa por criador.
+  @@index([createdById])
+  @@map("tables")
+}
+
+/// Ocupação de um assento por um jogador e posse do stack correspondente.
+///
+/// INVARIANTE CONTÁBIL
+/// `SUM(StackMovement.amount)` de todos os lançamentos desta sessão ==
+/// `currentStack`. O ledger `StackMovement` é a verdade; `currentStack` é coluna
+/// materializada para leitura O(1), atualizada na MESMA transação que insere o
+/// lançamento. Divergência é incidente crítico, detectável por job de
+/// reconciliação — exatamente o mesmo contrato de `Wallet.balance` vs.
+/// `WalletTransaction`.
+///
+/// CONCORRÊNCIA
+/// `version` implementa optimistic locking do stack: toda escrita faz
+/// `UPDATE ... SET version = version + 1 WHERE id = $1 AND version = $2` e
+/// trata `count = 0` como conflito (retry). Isso protege contra lost update em
+/// atualizações de stack disparadas em paralelo pelo motor de jogo. Operações
+/// que cruzam para a wallet continuam usando lock PESSIMISTA na wallet (decisão
+/// 3 de `base.prisma`) dentro da mesma transação.
+///
+/// UNICIDADE DE ASSENTO E DE JOGADOR — ÍNDICE ÚNICO PARCIAL (SQL PURO)
+/// Duas regras precisam valer APENAS entre sessões `ACTIVE`:
+///   1. um assento só pode ter UMA sessão ACTIVE por vez;
+///   2. um usuário só pode ter UMA sessão ACTIVE por mesa.
+/// Elas serão criadas na migration de integração como índices únicos PARCIAIS:
+///   `CREATE UNIQUE INDEX ... ON table_sessions (table_id, seat_number)
+///      WHERE status = 'ACTIVE';`
+///   `CREATE UNIQUE INDEX ... ON table_sessions (table_id, user_id)
+///      WHERE status = 'ACTIVE';`
+/// O Prisma não expressa `UNIQUE ... WHERE` nativamente, e um `@@unique`
+/// comum estaria ERRADO: ele incluiria as sessões já `CASHED_OUT` no índice e
+/// impediria o jogador de voltar ao mesmo assento/mesa depois de sair — algo
+/// perfeitamente legítimo. Por isso NÃO existe `@@unique` aqui, apenas os
+/// `@@index` não-únicos que servem às consultas.
+model TableSession {
+  id String @id @default(uuid())
+
+  tableId String @map("table_id")
+  table   Table  @relation(fields: [tableId], references: [id])
+
+  /// Jogador dono do stack.
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  /// Assento ocupado, no intervalo `[1, Table.maxSeats]`.
+  seatNumber Int @map("seat_number")
+
+  status TableSessionStatus
+
+  /// Fichas em posse do jogador na mesa. NÃO compõe o saldo da wallet: enquanto
+  /// a sessão está ACTIVE, este dinheiro existe exclusivamente aqui.
+  currentStack Decimal @map("current_stack") @db.Decimal(14, 2)
+
+  /// Acumuladores para relatório de resultado da sessão
+  /// (lucro = totalCashOut + currentStack - totalBuyIn). Derivados do ledger,
+  /// materializados para evitar agregação a cada leitura.
+  totalBuyIn   Decimal @default(0) @map("total_buy_in") @db.Decimal(14, 2)
+  totalCashOut Decimal @default(0) @map("total_cash_out") @db.Decimal(14, 2)
+
+  joinedAt DateTime  @default(now()) @map("joined_at")
+  leftAt   DateTime? @map("left_at")
+
+  /// Optimistic locking — ver nota de CONCORRÊNCIA acima.
+  version Int @default(0)
+
+  movements          StackMovement[]
+  walletTransactions WalletTransaction[]
+
+  /// Estado corrente da mesa (quem está sentado agora) — consulta mais quente.
+  @@index([tableId, status])
+  /// Histórico de sessões do jogador e checagem de sessão ativa.
+  @@index([userId, status])
+  @@map("table_sessions")
+}
+
+/// Ledger APPEND-ONLY do stack — espelho exato do ledger da wallet.
+///
+/// Linhas NUNCA são editadas nem deletadas. Correção é um NOVO lançamento de
+/// sinal oposto (`ADJUSTMENT`), preservando a trilha de auditoria completa da
+/// mesa. Esta é a mesma regra de `WalletTransaction` (decisão 2 de
+/// `base.prisma`), aplicada ao dinheiro que está em jogo.
+model StackMovement {
+  id String @id @default(uuid())
+
+  tableSessionId String       @map("table_session_id")
+  tableSession   TableSession @relation(fields: [tableSessionId], references: [id])
+
+  /// Valor COM SINAL: positivo credita o stack (BUY_IN, mão ganha), negativo
+  /// debita (CASH_OUT, mão perdida). A soma algébrica dos lançamentos da sessão
+  /// deve igualar `TableSession.currentStack`.
+  amount Decimal @db.Decimal(14, 2)
+
+  reason StackMovementReason
+
+  /// Snapshot do stack DEPOIS de aplicar `amount`. Mesmo padrão de
+  /// `WalletTransaction.balanceAfter`: torna a auditoria verificável linha a
+  /// linha, sem recalcular a soma acumulada, e denuncia imediatamente qualquer
+  /// escrita fora de transação.
+  stackAfter Decimal @map("stack_after") @db.Decimal(14, 2)
+
+  /// Elo com o lançamento espelho no ledger da wallet. Preenchido APENAS quando
+  /// o movimento cruza a fronteira wallet↔mesa (BUY_IN / CASH_OUT); `null` para
+  /// HAND_RESULT e ADJUSTMENT, que só redistribuem valor dentro da mesa.
+  walletTransactionId String?            @map("wallet_transaction_id")
+  walletTransaction   WalletTransaction? @relation(fields: [walletTransactionId], references: [id])
+
+  /// Ator que registrou o movimento (dealer/admin em HAND_RESULT e ADJUSTMENT).
+  /// `null` quando o lançamento é gerado pelo próprio motor de jogo, sem
+  /// intervenção humana.
+  createdById String? @map("created_by_id")
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  /// Extrato cronológico do stack de uma sessão (consulta principal).
+  @@index([tableSessionId, createdAt])
+  /// Reconciliação cruzada wallet↔mesa a partir do lançamento da wallet.
+  @@index([walletTransactionId])
+  @@map("stack_movements")
+}

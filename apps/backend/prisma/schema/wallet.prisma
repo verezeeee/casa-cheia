@@ -1,0 +1,266 @@
+// ============================================================================
+// Bounded context: WALLET / FINANCEIRO (T-DB-03)
+// ----------------------------------------------------------------------------
+// Models do ledger da carteira virtual e da integração PIX (AbacatePay).
+//
+// Este arquivo NÃO declara `generator`/`datasource` nem enums — tudo isso vive
+// em `base.prisma`, a fonte única de verdade. Ver as decisões D-01..D-06 no
+// cabeçalho daquele arquivo; este contexto implementa em particular:
+//   D-01 dinheiro sempre Decimal(14,2)
+//   D-02 ledger append-only + saldo materializado
+//   D-03 lock pessimista (FOR UPDATE) + CHECK (balance >= 0)
+//   D-04 idempotência (idempotencyKey / @@unique([provider, externalEventId]))
+//   D-05 separação de fundos (wallet guarda apenas fundos livres)
+//
+// RELAÇÕES CROSS-FILE (T-DB-06): `User`, `TableSession` e `TournamentEntry`
+// agora são `@relation` completas. Toda relação apontando para `User` é
+// `onDelete: Restrict` (ver nota em identity.prisma — User nunca é deletado
+// fisicamente). As demais (TableSession, TournamentEntry) ficam no default do
+// Prisma/Postgres (NO ACTION), suficiente: nenhum fluxo do domínio deleta
+// fisicamente sessão de mesa ou inscrição de torneio, apenas muda `status`.
+//
+// `WalletTransaction` ↔ `TournamentEntry` tem TRÊS caminhos de relação
+// distintos (`WalletTransaction.tournamentEntryId`,
+// `TournamentEntry.buyInTransactionId`, `TournamentEntry.payoutTransactionId`)
+// — cada um leva um `@relation("Nome")` explícito porque o Prisma não
+// consegue inferir sozinho qual campo casa com qual quando há mais de um
+// caminho entre os dois mesmos models.
+// ============================================================================
+
+/// Carteira virtual do jogador (1:1 com `User`).
+///
+/// Contém APENAS fundos livres: stack em mesa e buy-in de torneio em curso
+/// vivem em `TableSession` / `TournamentEntry`, nunca aqui (D-05).
+model Wallet {
+  id String @id @default(uuid())
+
+  /// `@unique` materializa a cardinalidade 1:1 — um jogador, uma carteira.
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  /// Saldo materializado, mantido para leitura O(1).
+  ///
+  /// A VERDADE CONTÁBIL é o ledger `WalletTransaction`; esta coluna é derivada
+  /// e atualizada na MESMA transação de banco que insere o lançamento, sob lock
+  /// pessimista da linha (`SELECT ... FOR UPDATE`).
+  ///
+  /// INVARIANTE: SUM(WalletTransaction.amount WHERE status = COMPLETED) == balance
+  /// Divergência detectada pelo job de reconciliação é incidente crítico.
+  ///
+  /// Última barreira anti double-spending: a migration adiciona
+  /// `CHECK (balance >= 0)` nesta tabela, tornando saldo negativo fisicamente
+  /// impossível mesmo diante de um bug de aplicação.
+  balance Decimal @default(0) @db.Decimal(14, 2)
+
+  /// Optimistic locking, COMPLEMENTAR (não substituto) ao lock pessimista.
+  /// Incrementado a cada mutação de saldo; serve de detector de lost update
+  /// para caminhos que porventura escapem do `FOR UPDATE`.
+  version Int @default(0)
+
+  /// Bloqueio administrativo/compliance. Não-nulo => carteira congelada:
+  /// nenhum débito nem crédito é aceito enquanto estiver preenchido.
+  blockedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+/// Ledger da carteira — APPEND-ONLY.
+///
+/// Linhas desta tabela NUNCA sofrem UPDATE nem DELETE. Nenhum campo de negócio
+/// é mutável após a inserção: correção de erro, cancelamento ou estorno são
+/// SEMPRE um NOVO lançamento de sinal oposto (o original permanece intacto para
+/// auditoria, e o par recebe status `REVERSED`).
+///
+/// Consequências desse desenho:
+///   - o extrato é reconstruível por replay determinístico do ledger;
+///   - `balanceAfter` congela o saldo no instante do lançamento, dispensando
+///     recálculo acumulado na leitura do extrato;
+///   - `idempotencyKey` é a barreira contra double-spending por retentativa:
+///     o replay colide na unique constraint e vira no-op.
+model WalletTransaction {
+  id String @id @default(uuid())
+
+  walletId String
+  wallet   Wallet @relation(fields: [walletId], references: [id])
+
+  type   WalletTransactionType
+  status WalletTransactionStatus
+
+  /// Valor COM SINAL: crédito é positivo, débito é negativo.
+  /// Nunca armazenar valor absoluto — o sinal é o que torna
+  /// `SUM(amount) == Wallet.balance` uma invariante verificável.
+  amount Decimal @db.Decimal(14, 2)
+
+  /// Snapshot do saldo da carteira DEPOIS deste lançamento.
+  /// Gravado sob o mesmo lock que atualiza `Wallet.balance`, permite montar o
+  /// extrato paginado e auditar/reconstruir a linha do tempo sem recalcular
+  /// somatórios acumulados.
+  balanceAfter Decimal @db.Decimal(14, 2)
+
+  /// Chave de idempotência da operação de origem (header `Idempotency-Key`,
+  /// id do evento do PSP, ou chave sintética determinística). Unique em nível
+  /// de banco: é a garantia final de exactly-once do efeito financeiro.
+  idempotencyKey String @unique
+
+  description String?
+
+  /// Origem PIX de entrada (mesmo arquivo, relação completa).
+  pixChargeId String?
+  pixCharge   PixCharge? @relation(fields: [pixChargeId], references: [id])
+
+  /// Origem PIX de saída (mesmo arquivo, relação completa).
+  pixWithdrawalId String?
+  pixWithdrawal   PixWithdrawal? @relation(fields: [pixWithdrawalId], references: [id])
+
+  /// Buy-in / cash-out de cash game.
+  tableSessionId String?
+  tableSession   TableSession? @relation(fields: [tableSessionId], references: [id])
+
+  /// Buy-in / payout de torneio. Ver nota de nomes de relação no topo do arquivo.
+  tournamentEntryId String?
+  tournamentEntry   TournamentEntry? @relation("TournamentEntryWalletTransactions", fields: [tournamentEntryId], references: [id])
+
+  /// `User` ADMIN autor do lançamento. Preenchido EXCLUSIVAMENTE em
+  /// lançamentos `ADJUSTMENT` — todo ajuste manual carrega o ator responsável
+  /// para trilha de auditoria.
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  /// Lado inverso de `TournamentEntry.buyInTransactionId` (não-`@unique`: em
+  /// tese mais de uma entry poderia referenciar a mesma transação de buy-in,
+  /// embora o fluxo de inscrição nunca gere isso na prática).
+  tournamentEntryBuyIns TournamentEntry[] @relation("TournamentEntryBuyInTransaction")
+
+  /// Lado inverso de `TournamentEntry.payoutTransactionId` (`@unique` lá =
+  /// 1:1 aqui: um payout nunca paga duas inscrições).
+  tournamentEntryPayout TournamentEntry? @relation("TournamentEntryPayoutTransaction")
+
+  /// Lado inverso de `StackMovement.walletTransactionId` (elo de auditoria
+  /// wallet↔mesa).
+  stackMovements StackMovement[]
+
+  createdAt DateTime @default(now())
+
+  /// Índice do extrato paginado: filtra pela carteira e já entrega a ordenação
+  /// do mais recente para o mais antigo sem sort em memória.
+  @@index([walletId, createdAt(sort: Desc)])
+  @@index([pixChargeId])
+  @@index([pixWithdrawalId])
+  @@index([tableSessionId])
+  @@index([tournamentEntryId])
+  @@index([createdById])
+  @@index([type, status])
+  @@map("wallet_transactions")
+}
+
+/// Cobrança PIX (entrada de dinheiro) emitida no gateway AbacatePay.
+///
+/// Só gera crédito na carteira quando o webhook confirma `PAID`; a cobrança em
+/// si NÃO é dinheiro — o dinheiro nasce do `WalletTransaction` correspondente.
+model PixCharge {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  /// Identificador da cobrança no gateway. Unique: âncora de reconciliação e de
+  /// desduplicação entre o nosso registro e o do PSP.
+  externalId String @unique
+
+  amount Decimal         @db.Decimal(14, 2)
+  status PixChargeStatus
+
+  /// Copia-e-cola / BR Code do PIX.
+  qrCodePayload  String
+  qrCodeImageUrl String?
+
+  expiresAt DateTime
+  paidAt    DateTime?
+
+  /// Resposta bruta do gateway, preservada na íntegra para auditoria e para
+  /// reprocessamento em caso de divergência de contrato.
+  rawPayload Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  walletTransactions WalletTransaction[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status, expiresAt])
+  @@map("pix_charges")
+}
+
+/// Saque PIX (saída de dinheiro).
+///
+/// O débito na carteira ocorre no MOMENTO DA SOLICITAÇÃO (reserva do valor, sob
+/// lock pessimista), não na confirmação do gateway — assim o jogador não pode
+/// gastar duas vezes o mesmo saldo enquanto o saque está em processamento. Se o
+/// gateway falhar, o estorno é um NOVO lançamento inverso no ledger.
+model PixWithdrawal {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  /// Identificador no gateway — nulo até a confirmação do envio.
+  externalId String? @unique
+
+  amount Decimal @db.Decimal(14, 2)
+
+  pixKey     String
+  pixKeyType String
+
+  status        PixWithdrawalStatus
+  failureReason String?
+  processedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  walletTransactions WalletTransaction[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status])
+  @@map("pix_withdrawals")
+}
+
+/// Log de eventos de webhook recebidos de provedores externos (PSP).
+///
+/// Desduplicação idempotente (D-04): `@@unique([provider, externalEventId])`.
+/// A retentativa do provedor colide na constraint e é tratada como no-op, o que
+/// impede que um mesmo pagamento seja creditado duas vezes.
+///
+/// `processedAt` nulo com `error` preenchido = evento recebido mas não aplicado;
+/// alvo do job de reprocessamento.
+model WebhookEvent {
+  id String @id @default(uuid())
+
+  /// Identificador do provedor (ex.: "abacatepay").
+  provider String
+
+  /// Id do evento no provedor — chave natural da desduplicação.
+  externalEventId String
+
+  eventType String
+
+  /// Assinatura HMAC recebida no header, guardada para auditoria/reverificação.
+  signature String
+
+  payload Json
+
+  processedAt DateTime?
+  error       String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([provider, externalEventId])
+  @@index([provider, eventType, createdAt(sort: Desc)])
+  @@index([processedAt])
+  @@map("webhook_events")
+}

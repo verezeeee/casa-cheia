@@ -26,9 +26,6 @@ pnpm-debug.log*
 # coverage
 coverage/
 
-# prisma
-apps/backend/prisma/migrations/.gitkeep
-
 # os
 .DS_Store
 Thumbs.db

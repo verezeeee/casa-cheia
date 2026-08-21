@@ -187,18 +187,7 @@ jobs:
       # transações de teste jamais disputam as mesmas linhas — sem isso, testes
       # de saldo/idempotência ficam flaky por deadlock ou leitura suja.
       - name: Backend integration tests (serialized, real Postgres)
-        # NOTAS DE DEPENDÊNCIA (onda W0, tarefas em paralelo):
-        #  - o script "test:int" vem de apps/backend/package.json (T-DB-06/07);
-        #    enquanto não existir, o step emite um warning em vez de falhar.
-        #  - os arquivos "*.int-spec.ts" vêm de T-DB-07; até lá usamos
-        #    "--passWithNoTests" para não quebrar o pipeline com "No tests found".
-        #    REMOVER esse flag assim que a primeira suíte de integração existir.
-        run: |
-          if node -e "process.exit(require('./apps/backend/package.json').scripts['test:int'] ? 0 : 1)"; then
-            pnpm --filter @poker-system/backend run test:int --passWithNoTests
-          else
-            echo "::warning title=test:int ausente::Script 'test:int' ainda não definido em apps/backend/package.json - step ignorado."
-          fi
+        run: pnpm --filter @poker-system/backend run test:int
 
       - name: Backend e2e tests (serialized, real Postgres)
         run: pnpm --filter @poker-system/backend run test:e2e --runInBand

@@ -1,0 +1,220 @@
+// ============================================================================
+// Bounded context: TOURNAMENT (torneios, grade de premiação e inscrições)
+// ============================================================================
+//
+// Enums e datasource vivem em `base.prisma` (fonte única de verdade).
+// Este arquivo declara APENAS os models deste contexto: `Tournament`,
+// `TournamentPrize` e `TournamentEntry`.
+//
+// RELAÇÕES CRUZADAS ENTRE CONTEXTOS (T-DB-06)
+// `createdById`/`TournamentEntry.userId` (→ `User`) e `buyInTransactionId` /
+// `payoutTransactionId` (→ `WalletTransaction`) agora são `@relation`
+// completas, com nomes explícitos onde há mais de um caminho entre os mesmos
+// dois models (ver comentário no topo de wallet.prisma). Relação para `User`
+// é sempre `onDelete: Restrict` (nota em identity.prisma).
+//
+// SEPARAÇÃO DE FUNDOS (decisão 5 de base.prisma)
+// Ao se inscrever, o jogador tem `buyIn + fee` DEBITADOS da Wallet e recebe
+// `chipStack` de FICHAS DE TORNEIO. Fichas de torneio não são dinheiro: não têm
+// lastro monetário e nunca retornam à Wallet. O único caminho de volta é o
+// prêmio (`prizeAmount`), creditado a partir do prize pool. Por isso
+// `chipStack` é `Int` (contagem de fichas) enquanto `prizeAmount` é
+// `Decimal(14,2)` (dinheiro) — o contraste de tipos é deliberado e torna
+// impossível somar acidentalmente fichas com reais.
+//
+// ============================================================================
+
+/// Torneio (MTT / SNG). Agrega a configuração, a grade de premiação e as
+/// inscrições.
+///
+/// MÁQUINA DE ESTADOS (`status`)
+/// Transições válidas:
+///
+///   DRAFT → REGISTERING → RUNNING → FINISHED
+///
+/// mais `CANCELLED`, alcançável a partir de QUALQUER estado anterior a
+/// `FINISHED` (isto é, de `DRAFT`, `REGISTERING` ou `RUNNING`). `FINISHED` e
+/// `CANCELLED` são terminais: nenhuma transição sai deles.
+///
+/// A máquina de estados é implementada e validada NA CAMADA DE APLICAÇÃO, não
+/// no banco. O PostgreSQL não tem como expressar "transição válida de enum"
+/// declarativamente sem um trigger, e um trigger duplicaria a regra de negócio
+/// fora do código de domínio — o banco guarda o estado, o domínio guarda as
+/// regras de mudança de estado.
+model Tournament {
+  id String @id @default(uuid())
+
+  name String
+
+  /// Valor que compõe o prize pool. Debitado da Wallet na inscrição.
+  buyIn Decimal @map("buy_in") @db.Decimal(14, 2)
+
+  /// Taxa da casa (rake). Debitada junto com o buy-in, mas NÃO entra no prize
+  /// pool — é receita da plataforma.
+  fee Decimal @db.Decimal(14, 2)
+
+  /// Fichas de torneio entregues a cada inscrito. Contagem, não dinheiro.
+  startingStack Int @map("starting_stack")
+
+  /// Capacidade máxima de inscritos. A checagem de lotação é feita na aplicação
+  /// dentro da transação de inscrição, protegida pelo lock otimista de
+  /// `version` (ver abaixo).
+  maxPlayers Int @map("max_players")
+
+  status TournamentStatus @default(DRAFT)
+
+  /// Momento em que as inscrições abrem. Nulo em torneios cujo agendamento de
+  /// abertura ainda não foi definido (típico de `DRAFT`).
+  registrationOpensAt DateTime? @map("registration_opens_at")
+
+  startsAt DateTime @map("starts_at")
+
+  /// Limite do late registration. Nulo quando o torneio não admite inscrição
+  /// tardia — inscrições encerram exatamente em `startsAt`.
+  lateRegUntil DateTime? @map("late_reg_until")
+
+  /// Carimbo da conclusão. Nulo até o torneio atingir `FINISHED`.
+  finishedAt DateTime? @map("finished_at")
+
+  /// Soma dos buy-ins arrecadados (sem `fee`). Coluna materializada, atualizada
+  /// na MESMA transação que insere a `TournamentEntry`, seguindo o mesmo padrão
+  /// de `Wallet.balance` (decisão 2 de base.prisma).
+  prizePool Decimal @default(0) @map("prize_pool") @db.Decimal(14, 2)
+
+  /// Garantido do torneio. Se o prize pool arrecadado ficar abaixo deste valor,
+  /// a diferença (overlay) é coberta pela casa. Nulo em torneios sem garantia.
+  guaranteedPrize Decimal? @map("guaranteed_prize") @db.Decimal(14, 2)
+
+  /// Administrador que criou o torneio.
+  createdById String @map("created_by_id")
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  /// LOCK OTIMISTA. Incrementado a cada mutação relevante (inscrição, mudança
+  /// de status, ajuste de prize pool). O `UPDATE` da aplicação sempre carrega
+  /// `WHERE id = $1 AND version = $2`; se afetar 0 linhas, houve escrita
+  /// concorrente e a operação é reexecutada.
+  ///
+  /// Por que otimista aqui, e não pessimista como na Wallet: o gargalo do
+  /// torneio é uma rajada de inscrições disputando as últimas vagas — evento
+  /// raro em relação ao volume total e barato de reexecutar. Serializar TODA
+  /// inscrição com `SELECT ... FOR UPDATE` criaria um ponto de contenção global
+  /// por torneio. Na Wallet o trade-off é o inverso: a colisão é a regra, não a
+  /// exceção, e a consequência de errar é saldo negativo.
+  version Int @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  prizes  TournamentPrize[]
+  entries TournamentEntry[]
+
+  /// Consulta quente do lobby: torneios abertos/em andamento ordenados por
+  /// horário de início.
+  @@index([status, startsAt])
+  /// Listagem de torneios por administrador criador (backoffice).
+  @@index([createdById])
+  @@map("tournaments")
+}
+
+/// Faixa da grade de premiação: quanto do prize pool cabe a uma colocação.
+///
+/// INVARIANTE MULTI-LINHA
+/// SUM(percentage) de todas as faixas de um mesmo torneio deve ser EXATAMENTE
+/// 100.00. Essa validação é feita NA APLICAÇÃO, ao salvar/publicar a grade,
+/// porque é uma regra sobre o CONJUNTO de linhas — um `CHECK` do PostgreSQL só
+/// enxerga a linha que está sendo gravada e não consegue expressá-la. O
+/// torneio não deve poder sair de `DRAFT` com uma grade que não fecha 100%.
+model TournamentPrize {
+  id String @id @default(uuid())
+
+  /// `Cascade`: a grade é CONFIGURAÇÃO do torneio, sem valor de auditoria
+  /// própria — some junto com ele. (Na prática o torneio nunca é deletado: ver
+  /// o `Restrict` de `TournamentEntry`.)
+  tournamentId String     @map("tournament_id")
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  /// Colocação premiada: 1 = campeão, 2 = vice, e assim por diante.
+  position Int
+
+  /// Percentual do prize pool desta colocação (ex.: 40.00 = 40%). Guardado como
+  /// percentual, e não como valor absoluto, porque o prize pool só é conhecido
+  /// no fechamento das inscrições.
+  percentage Decimal @db.Decimal(5, 2)
+
+  /// Uma colocação não pode ser definida duas vezes no mesmo torneio.
+  @@unique([tournamentId, position])
+  @@map("tournament_prizes")
+}
+
+/// Inscrição de um jogador em um torneio: posse do stack de fichas e trilha do
+/// dinheiro (débito do buy-in e crédito do prêmio).
+model TournamentEntry {
+  id String @id @default(uuid())
+
+  /// `Restrict` (e NÃO `Cascade`): a inscrição é trilha financeira — aponta os
+  /// lançamentos de buy-in e de payout na wallet. Deletar um torneio não pode
+  /// arrastar consigo o histórico de dinheiro; o banco recusa a operação. O
+  /// encerramento antecipado de um torneio se faz com `status = CANCELLED` +
+  /// reembolso das inscrições, nunca com DELETE.
+  tournamentId String     @map("tournament_id")
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Restrict)
+
+  /// Jogador inscrito.
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  status TournamentEntryStatus @default(REGISTERED)
+
+  /// FICHAS DE TORNEIO em posse do jogador — NÃO é valor monetário. Inicia em
+  /// `Tournament.startingStack` e vai a 0 na eliminação. `Int` de propósito:
+  /// ficha de torneio não tem casas decimais nem lastro em reais (contraste
+  /// deliberado com `prizeAmount`, que é `Decimal(14,2)`).
+  chipStack Int @map("chip_stack")
+
+  /// Colocação final. Nula enquanto o jogador não é eliminado / o torneio não
+  /// termina.
+  finalPosition Int? @map("final_position")
+
+  /// Prêmio em DINHEIRO a que a colocação deu direito. Nulo fora da faixa
+  /// premiada.
+  prizeAmount Decimal? @map("prize_amount") @db.Decimal(14, 2)
+
+  /// Lançamento da wallet que DEBITOU o buy-in. Nome de relação explícito: ver
+  /// comentário no topo de wallet.prisma sobre os três caminhos entre
+  /// `TournamentEntry` e `WalletTransaction`.
+  buyInTransactionId String?            @map("buy_in_transaction_id")
+  buyInTransaction   WalletTransaction? @relation("TournamentEntryBuyInTransaction", fields: [buyInTransactionId], references: [id])
+
+  /// Lançamento da wallet que CREDITOU o prêmio.
+  ///
+  /// ANTI DUPLO PAGAMENTO POR CONSTRUÇÃO
+  /// O `@unique` aqui basta para tornar o pagamento duplicado impossível no
+  /// banco: no PostgreSQL um índice único admite MÚLTIPLOS `NULL` (dois NULLs
+  /// não são considerados iguais), então a restrição fica inerte enquanto a
+  /// inscrição não foi paga — que é justamente o comportamento desejado — e só
+  /// passa a valer quando o campo é preenchido. Uma segunda tentativa de payout
+  /// colide na constraint e aborta a transação. Não é preciso índice parcial
+  /// (`WHERE ... IS NOT NULL`) em SQL manual para este campo.
+  payoutTransactionId String?            @unique @map("payout_transaction_id")
+  payoutTransaction   WalletTransaction? @relation("TournamentEntryPayoutTransaction", fields: [payoutTransactionId], references: [id])
+
+  /// Lado inverso de `WalletTransaction.tournamentEntryId` — todos os
+  /// lançamentos associados a esta inscrição (inclui buy-in e payout, que
+  /// também aparecem nomeados acima via `buyInTransaction`/`payoutTransaction`).
+  walletTransactions WalletTransaction[] @relation("TournamentEntryWalletTransactions")
+
+  registeredAt DateTime @default(now()) @map("registered_at")
+
+  /// Carimbo da eliminação. Nulo enquanto o jogador segue vivo no torneio.
+  eliminatedAt DateTime? @map("eliminated_at")
+
+  /// Um jogador se inscreve UMA única vez por torneio. Inscrição duplicada é
+  /// impossível por construção (a corrida entre dois cliques simultâneos morre
+  /// aqui, não na aplicação).
+  @@unique([tournamentId, userId])
+  /// Consulta quente: "meus torneios" — inscrições de um jogador por situação.
+  @@index([userId, status])
+  /// Consulta quente: field do torneio (quem ainda está vivo, quem foi pago).
+  @@index([tournamentId, status])
+  @@map("tournament_entries")
+}
