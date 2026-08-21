@@ -14,7 +14,7 @@ export function TableList() {
 
   if (isLoading) return <Spinner size="sm" label="Carregando mesas" />;
   if (isError || !data) {
-    return <p className="text-red-600 dark:text-red-400">Não foi possível carregar as mesas.</p>;
+    return <p className="text-danger">Não foi possível carregar as mesas.</p>;
   }
 
   const tables = data.items;
@@ -35,8 +35,8 @@ export function TableList() {
             <Card className="transition-shadow hover:shadow-md">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="font-semibold">{table.name}</p>
-                  <p className="text-sm text-slate-600 dark:text-slate-400">
+                  <p className="font-display font-semibold">{table.name}</p>
+                  <p className="font-ledger text-sm text-muted">
                     Blinds {formatMoneySafe(table.smallBlind)}/{formatMoneySafe(table.bigBlind)} ·
                     Buy-in {formatMoneySafe(table.minBuyIn)}–{formatMoneySafe(table.maxBuyIn)}
                   </p>
@@ -45,7 +45,7 @@ export function TableList() {
                   {table.status}
                 </Badge>
               </div>
-              <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+              <p className="mt-2 text-sm text-muted">
                 {table.occupiedSeats}/{table.maxSeats} assentos ocupados
               </p>
             </Card>

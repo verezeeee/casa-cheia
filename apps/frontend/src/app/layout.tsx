@@ -1,18 +1,34 @@
 import type { Metadata, Viewport } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Fraunces, IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { SessionProvider } from '@/components/providers/session-provider';
 import { ServiceWorkerRegister } from '@/components/pwa/service-worker-register';
 import './globals.css';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
+/**
+ * Sistema tipográfico (ver design tokens em globals.css):
+ * - Fraunces: serifada de destaque — títulos e o número do saldo, o único
+ *   lugar onde a personalidade visual "fala alto".
+ * - IBM Plex Sans: interface/corpo — legível em formulários e telas densas.
+ * - IBM Plex Mono: dados tabulares (dinheiro, fichas, datas) com
+ *   `tabular-nums`, para colunas alinharem como um livro-caixa de verdade.
+ */
+const displayFont = Fraunces({
+  variable: '--font-display',
   subsets: ['latin'],
+  axes: ['opsz', 'SOFT', 'WONK'],
 });
 
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
+const bodyFont = IBM_Plex_Sans({
+  variable: '--font-body',
   subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+});
+
+const monoFont = IBM_Plex_Mono({
+  variable: '--font-mono',
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
 });
 
 export const metadata: Metadata = {
@@ -36,7 +52,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  themeColor: '#0f172a',
+  themeColor: '#14110d',
 };
 
 export default function RootLayout({
@@ -45,8 +61,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="pt-BR" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col">
+    <html
+      lang="pt-BR"
+      className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable} h-full antialiased`}
+    >
+      <body className="min-h-full flex flex-col bg-background text-foreground font-sans">
         <QueryProvider>
           <SessionProvider>
             {children}

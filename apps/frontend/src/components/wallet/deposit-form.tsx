@@ -62,9 +62,11 @@ export function DepositForm() {
         </form>
       ) : (
         <div className="flex flex-col gap-3">
-          <p className="text-sm text-slate-600 dark:text-slate-400">
+          <p className="text-sm text-muted">
             Escaneie o QR Code ou copie o código abaixo no app do seu banco. Valor:{' '}
-            <strong>{formatMoneySafe(charge.amount)}</strong>
+            <strong className="font-ledger text-foreground">
+              {formatMoneySafe(charge.amount)}
+            </strong>
           </p>
 
           {charge.qrCodeImageUrl && (
@@ -80,7 +82,7 @@ export function DepositForm() {
             <textarea
               readOnly
               value={charge.qrCodePayload}
-              className="h-20 w-full resize-none rounded-lg border border-slate-300 bg-background p-2 text-xs dark:border-slate-700"
+              className="font-mono h-20 w-full resize-none rounded-md border border-border bg-background p-2 text-xs"
             />
           </FormField>
 

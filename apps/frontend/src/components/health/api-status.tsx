@@ -19,10 +19,10 @@ export function ApiStatus() {
   const status = isLoading ? 'checking' : error ? 'down' : (data?.status ?? 'unknown');
 
   const styles: Record<string, string> = {
-    checking: 'bg-slate-500',
-    ok: 'bg-emerald-500',
-    down: 'bg-red-500',
-    unknown: 'bg-slate-500',
+    checking: 'bg-muted',
+    ok: 'bg-success',
+    down: 'bg-danger',
+    unknown: 'bg-muted',
   };
 
   const label: Record<string, string> = {
@@ -33,7 +33,7 @@ export function ApiStatus() {
   };
 
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1 text-sm dark:border-slate-800">
+    <div className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs text-muted">
       <span className={`h-2 w-2 rounded-full ${styles[status]}`} aria-hidden />
       <span>{label[status]}</span>
     </div>

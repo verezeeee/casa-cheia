@@ -34,14 +34,12 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex flex-1 items-center justify-center p-8">
+    <main className="flex flex-1 items-center justify-center bg-brand p-8">
       <Card className="w-full max-w-sm">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Entrar</h1>
-            <p className="text-sm text-slate-600 dark:text-slate-400">
-              Acesse sua conta da casa de poker.
-            </p>
+            <h1 className="font-display text-2xl font-semibold tracking-tight">Entrar</h1>
+            <p className="text-sm text-muted">Acesse sua conta da casa de poker.</p>
           </div>
 
           {error && <Toast type="error" message={error} />}
@@ -72,9 +70,9 @@ export default function LoginPage() {
             Entrar
           </Button>
 
-          <p className="text-center text-sm text-slate-600 dark:text-slate-400">
+          <p className="text-center text-sm text-muted">
             Não tem conta?{' '}
-            <Link href="/register" className="font-medium text-emerald-600 hover:underline">
+            <Link href="/register" className="font-medium text-accent hover:underline">
               Cadastre-se
             </Link>
           </p>

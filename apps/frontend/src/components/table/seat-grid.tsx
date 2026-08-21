@@ -92,7 +92,7 @@ export function SeatGrid({ tableId }: { tableId: string }) {
 
   if (isLoading) return <Spinner size="sm" label="Carregando assentos" />;
   if (isError || !seats) {
-    return <p className="text-red-600 dark:text-red-400">Não foi possível carregar os assentos.</p>;
+    return <p className="text-danger">Não foi possível carregar os assentos.</p>;
   }
 
   return (
@@ -174,7 +174,7 @@ function SeatCard({
   return (
     <Card>
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+        <p className="font-mono text-xs tracking-wide text-muted uppercase">
           Assento {seat.seatNumber}
         </p>
         {!vacant && (
@@ -211,7 +211,7 @@ function SeatCard({
       ) : (
         <div className="mt-2 flex flex-col gap-2">
           <p className="font-semibold">{seat.userName}</p>
-          <p className="text-lg">{formatMoneySafe(seat.currentStack ?? '0')}</p>
+          <p className="font-ledger text-lg">{formatMoneySafe(seat.currentStack ?? '0')}</p>
 
           {isMine && (
             <Button size="sm" variant="secondary" loading={cashingOut} onClick={onCashOut}>

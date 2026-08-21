@@ -15,10 +15,10 @@ export function AuthStatus() {
   if (status === 'unauthenticated') {
     return (
       <div className="flex items-center gap-3 text-sm">
-        <Link href="/login" className="font-medium text-emerald-600 hover:underline">
+        <Link href="/login" className="font-medium text-accent hover:underline">
           Entrar
         </Link>
-        <Link href="/register" className="font-medium text-emerald-600 hover:underline">
+        <Link href="/register" className="font-medium text-accent hover:underline">
           Cadastrar
         </Link>
       </div>
@@ -27,11 +27,11 @@ export function AuthStatus() {
 
   return (
     <div className="flex items-center gap-3 text-sm">
-      <span className="text-slate-600 dark:text-slate-400">Olá, {user?.name}</span>
-      <Link href="/lobby" className="font-medium text-emerald-600 hover:underline">
+      <span className="text-muted">Olá, {user?.name}</span>
+      <Link href="/lobby" className="font-medium text-accent hover:underline">
         Lobby
       </Link>
-      <Link href="/wallet" className="font-medium text-emerald-600 hover:underline">
+      <Link href="/wallet" className="font-medium text-accent hover:underline">
         Carteira
       </Link>
       <Button variant="secondary" size="sm" onClick={() => void logout()}>

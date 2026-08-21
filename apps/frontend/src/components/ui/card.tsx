@@ -21,25 +21,25 @@ const paddings: Record<CardPadding, string> = {
 };
 
 /**
- * Container de conteúdo com borda/raio/padding padronizados, alinhado aos
- * tokens `--background`/`--foreground` definidos em `globals.css`.
+ * Container de conteúdo, alinhado aos tokens `--surface`/`--border` definidos
+ * em `globals.css`. O título, quando presente, leva a régua de ledger
+ * (`.ledger-rule`) — o motivo estrutural recorrente desta identidade visual.
  */
 export function Card({ padding = 'md', title, footer, className, children, ...rest }: CardProps) {
   return (
     <div
       className={cn(
-        'rounded-xl border border-slate-200 bg-background text-foreground shadow-sm',
-        'dark:border-slate-800',
+        'rounded-md border border-border bg-surface text-foreground shadow-sm',
         paddings[padding],
         className,
       )}
       {...rest}
     >
-      {title && <h3 className="mb-2 text-base font-semibold">{title}</h3>}
-      {children}
-      {footer && (
-        <div className="mt-4 border-t border-slate-200 pt-3 dark:border-slate-800">{footer}</div>
+      {title && (
+        <h3 className="ledger-rule mb-3 text-base font-semibold tracking-tight">{title}</h3>
       )}
+      {children}
+      {footer && <div className="mt-4 border-t border-border pt-3">{footer}</div>}
     </div>
   );
 }

@@ -40,7 +40,7 @@ export function TransactionList() {
       {isLoading ? (
         <Spinner size="sm" label="Carregando extrato" />
       ) : isError ? (
-        <p className="text-red-600 dark:text-red-400">Não foi possível carregar o extrato.</p>
+        <p className="text-danger">Não foi possível carregar o extrato.</p>
       ) : items.length === 0 ? (
         <EmptyState
           title="Nenhuma movimentação ainda"
@@ -48,7 +48,7 @@ export function TransactionList() {
         />
       ) : (
         <div className="flex flex-col gap-2">
-          <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+          <ul className="divide-y divide-border">
             {items.map((transaction) => (
               <li
                 key={transaction.id}
@@ -56,17 +56,15 @@ export function TransactionList() {
               >
                 <div>
                   <p className="font-medium">{TYPE_LABEL[transaction.type]}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {formatDateTimeSafe(transaction.createdAt)}
-                  </p>
+                  <p className="text-xs text-muted">{formatDateTimeSafe(transaction.createdAt)}</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant={STATUS_VARIANT[transaction.status]}>{transaction.status}</Badge>
                   <span
                     className={
                       transaction.amount.startsWith('-')
-                        ? 'font-semibold text-red-600 dark:text-red-400'
-                        : 'font-semibold text-emerald-600 dark:text-emerald-400'
+                        ? 'font-ledger font-semibold text-danger'
+                        : 'font-ledger font-semibold text-success'
                     }
                   >
                     {formatMoneySafe(transaction.amount)}
@@ -81,7 +79,7 @@ export function TransactionList() {
               type="button"
               onClick={() => void fetchNextPage()}
               disabled={isFetchingNextPage}
-              className="self-center text-sm font-medium text-emerald-600 hover:underline disabled:opacity-60"
+              className="self-center text-sm font-medium text-accent hover:underline disabled:opacity-60"
             >
               {isFetchingNextPage ? 'Carregando...' : 'Carregar mais'}
             </button>

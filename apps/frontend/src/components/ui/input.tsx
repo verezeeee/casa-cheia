@@ -54,26 +54,24 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         aria-invalid={invalid || undefined}
         aria-describedby={describedBy}
         className={cn(
-          'h-11 w-full rounded-lg border bg-background px-3 text-base text-foreground',
-          'placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2',
-          'focus-visible:ring-offset-1 focus-visible:ring-offset-background',
+          'h-11 w-full rounded-md border bg-background px-3 text-base text-foreground',
+          'placeholder:text-muted focus-visible:outline-none focus-visible:ring-2',
+          'focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-1 focus-visible:ring-offset-background',
           'disabled:cursor-not-allowed disabled:opacity-60',
-          invalid
-            ? 'border-red-500 focus-visible:ring-red-500'
-            : 'border-slate-300 focus-visible:ring-emerald-500 dark:border-slate-700',
+          invalid ? 'border-danger focus-visible:ring-danger' : 'border-border',
           className,
         )}
         {...rest}
       />
 
       {hint && !error && (
-        <p id={hintId} className="text-xs text-slate-500 dark:text-slate-400">
+        <p id={hintId} className="text-xs text-muted">
           {hint}
         </p>
       )}
 
       {error && (
-        <p id={errorId} role="alert" className="text-xs font-medium text-red-600 dark:text-red-400">
+        <p id={errorId} role="alert" className="text-xs font-medium text-danger">
           {error}
         </p>
       )}

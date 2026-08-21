@@ -20,17 +20,20 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
 }
 
 const base =
-  'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors ' +
+  'inline-flex items-center justify-center gap-2 rounded-md font-sans font-semibold ' +
+  'tracking-[0.01em] transition-colors duration-150 ' +
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ' +
-  'focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60';
+  'focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-background ' +
+  'disabled:cursor-not-allowed disabled:opacity-60';
 
+// Latão como placa pressionada: sombra interna sutil no primary, nunca flat.
 const variants: Record<ButtonVariant, string> = {
-  primary: 'bg-emerald-600 text-white hover:bg-emerald-500 focus-visible:ring-emerald-500',
-  secondary:
-    'border border-slate-300 text-foreground hover:bg-slate-100 focus-visible:ring-slate-400 ' +
-    'dark:border-slate-700 dark:hover:bg-slate-800',
-  danger: 'bg-red-600 text-white hover:bg-red-500 focus-visible:ring-red-500',
-  ghost: 'text-foreground hover:bg-slate-100 focus-visible:ring-slate-400 dark:hover:bg-slate-800',
+  primary:
+    'bg-accent text-accent-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_1px_2px_rgba(0,0,0,0.25)] ' +
+    'hover:brightness-110 active:brightness-95',
+  secondary: 'border border-border text-foreground hover:bg-surface-hover',
+  danger: 'bg-danger text-danger-foreground hover:brightness-110',
+  ghost: 'text-foreground hover:bg-surface-hover',
 };
 
 // Alturas pensadas para toque (mobile-first): `md`/`lg` ficam acima dos 44px

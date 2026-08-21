@@ -42,14 +42,12 @@ export default function RegisterPage() {
   }
 
   return (
-    <main className="flex flex-1 items-center justify-center p-8">
+    <main className="flex flex-1 items-center justify-center bg-brand p-8">
       <Card className="w-full max-w-sm">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Criar conta</h1>
-            <p className="text-sm text-slate-600 dark:text-slate-400">
-              Cadastre-se para depositar e jogar.
-            </p>
+            <h1 className="font-display text-2xl font-semibold tracking-tight">Criar conta</h1>
+            <p className="text-sm text-muted">Cadastre-se para depositar e jogar.</p>
           </div>
 
           {error && <Toast type="error" message={error} />}
@@ -91,9 +89,9 @@ export default function RegisterPage() {
             Criar conta
           </Button>
 
-          <p className="text-center text-sm text-slate-600 dark:text-slate-400">
+          <p className="text-center text-sm text-muted">
             Já tem conta?{' '}
-            <Link href="/login" className="font-medium text-emerald-600 hover:underline">
+            <Link href="/login" className="font-medium text-accent hover:underline">
               Entrar
             </Link>
           </p>

@@ -74,7 +74,7 @@ export function FormField({
         <label htmlFor={id} className="text-sm font-medium text-foreground">
           {label}
           {required && (
-            <span className="ml-0.5 text-red-600" aria-hidden="true">
+            <span className="ml-0.5 text-danger" aria-hidden="true">
               *
             </span>
           )}
@@ -83,17 +83,13 @@ export function FormField({
         {typeof children === 'function' ? children(descriptor) : children}
 
         {hint && !error && (
-          <p id={hintId} className="text-xs text-slate-500 dark:text-slate-400">
+          <p id={hintId} className="text-xs text-muted">
             {hint}
           </p>
         )}
 
         {error && (
-          <p
-            id={errorId}
-            role="alert"
-            className="text-xs font-medium text-red-600 dark:text-red-400"
-          >
+          <p id={errorId} role="alert" className="text-xs font-medium text-danger">
             {error}
           </p>
         )}
