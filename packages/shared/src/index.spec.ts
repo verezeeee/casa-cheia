@@ -18,6 +18,7 @@ import type {
   MoneyString,
   PaginatedResponse,
   PixChargeResponse,
+  PixWithdrawalResponse,
   SessionUser,
   TableSeatDto,
   TableSummaryDto,
@@ -145,6 +146,15 @@ describe('@poker-system/shared barrel export', () => {
         expiresAt: '2026-01-31T12:30:00.000Z',
       };
 
+      const withdrawal: PixWithdrawalResponse = {
+        id: 'wdr_1',
+        amount: '50.00',
+        status: PixWithdrawalStatus.REQUESTED,
+        pixKeyMasked: '***1234',
+        failureReason: null,
+        createdAt: '2026-01-31T12:00:00.000Z',
+      };
+
       const table: TableSummaryDto = {
         id: 'tbl_1',
         name: 'NL Holdem 1/2',
@@ -193,6 +203,7 @@ describe('@poker-system/shared barrel export', () => {
       assert.equal(tokens.expiresIn, 900);
       assert.equal(balance.balance, '1250.00');
       assert.equal(charge.qrCodeImageUrl, null);
+      assert.equal(withdrawal.pixKeyMasked, '***1234');
       assert.equal(table.occupiedSeats, 3);
       assert.equal(emptySeat.currentStack, null);
       assert.equal(tournament.fee, '10.00');
@@ -219,9 +230,20 @@ describe('@poker-system/shared barrel export', () => {
         createdAt: '2026-01-31T12:00:00.000Z',
       } satisfies WalletTransactionDto;
 
+      const invalidWithdrawal = {
+        id: 'wdr_2',
+        // @ts-expect-error dinheiro é sempre MoneyString (string), nunca number
+        amount: 50,
+        status: PixWithdrawalStatus.REQUESTED,
+        pixKeyMasked: '***1234',
+        failureReason: null,
+        createdAt: '2026-01-31T12:00:00.000Z',
+      } satisfies PixWithdrawalResponse;
+
       // Os objetos só existem para ancorar os @ts-expect-error acima.
       assert.ok(invalidBalance);
       assert.ok(invalidTransaction);
+      assert.ok(invalidWithdrawal);
     });
   });
 });

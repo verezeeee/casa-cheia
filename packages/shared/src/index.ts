@@ -23,6 +23,7 @@ export * from './interfaces/session-user.interface';
 export * from './interfaces/wallet-balance-response.interface';
 export * from './interfaces/wallet-transaction.dto';
 export * from './interfaces/pix-charge-response.interface';
+export * from './interfaces/pix-withdrawal-response.interface';
 export * from './interfaces/table-summary.dto';
 export * from './interfaces/table-seat.dto';
 export * from './interfaces/tournament-summary.dto';
