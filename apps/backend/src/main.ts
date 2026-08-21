@@ -6,7 +6,14 @@ import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // `rawBody: true` popula `req.rawBody` (Buffer) em toda requisição, ao
+  // lado do JSON já parseado — necessário para verificar a assinatura HMAC
+  // do webhook do AbacatePay sobre os bytes EXATOS recebidos (ver
+  // `wallet/abacatepay-webhook.controller.ts`).
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+    rawBody: true,
+  });
 
   app.useLogger(app.get(Logger));
 
