@@ -1,0 +1,12 @@
+node_modules
+dist
+build
+.next
+out
+coverage
+.turbo
+pnpm-lock.yaml
+**/*.md
+apps/backend/prisma/migrations
+apps/frontend/next-env.d.ts
+.husky/_

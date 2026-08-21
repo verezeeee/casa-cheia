@@ -1,0 +1,97 @@
+name: poker-system
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    container_name: poker-system-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-poker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poker}
+      POSTGRES_DB: ${POSTGRES_DB:-poker_system}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - poker_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-poker} -d ${POSTGRES_DB:-poker_system}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - poker-system-network
+
+  # Banco DEDICADO aos testes de integração/e2e locais.
+  #   docker compose --profile test up -d postgres-test
+  #
+  # Decisão: um segundo serviço (profile "test", porta 5433) em vez de um
+  # script de init criando múltiplos databases no mesmo container. Motivos:
+  # (1) isolamento real - as suítes derrubam/recriam schema e nunca podem
+  # tocar o banco de desenvolvimento; (2) sem arquivo de init extra para
+  # manter; (3) armazenamento em tmpfs (sem volume nomeado), então o estado
+  # some ao parar o container - exatamente o que se quer de um banco de
+  # teste, e evita flake por resíduo de execução anterior.
+  # No CI não usamos este serviço: o workflow provisiona seu próprio
+  # `services.postgres` já apontando para o database de teste.
+  postgres-test:
+    image: postgres:16.4-alpine
+    container_name: poker-system-postgres-test
+    restart: unless-stopped
+    profiles:
+      - test
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-poker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poker}
+      POSTGRES_DB: ${POSTGRES_TEST_DB:-poker_system_test}
+      # Banco efêmero: durabilidade não importa e desligar o fsync deixa as
+      # suítes de integração sensivelmente mais rápidas.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command: ['postgres', '-c', 'fsync=off', '-c', 'full_page_writes=off']
+    ports:
+      - '${POSTGRES_TEST_PORT:-5433}:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-poker} -d ${POSTGRES_TEST_DB:-poker_system_test}',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - poker-system-network
+
+  pgadmin:
+    image: dpage/pgadmin4:8.12
+    container_name: poker-system-pgadmin
+    restart: unless-stopped
+    profiles:
+      - tools
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@poker-system.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - '${PGADMIN_PORT:-5050}:80'
+    volumes:
+      - poker_pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - poker-system-network
+
+volumes:
+  poker_postgres_data:
+    name: poker_system_postgres_data
+  poker_pgadmin_data:
+    name: poker_system_pgadmin_data
+
+networks:
+  poker-system-network:
+    name: poker-system-network
+    driver: bridge

@@ -1,0 +1,18 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# Pacotes com scripts de build nativos (postinstall) que exigem aprovação
+# explícita em versões recentes do pnpm. "sharp" é usado pelo next/image
+# (otimização de imagens) e "unrs-resolver" pelo resolvedor de módulos do
+# ESLint/Next. Nenhum dos dois precisa rodar script nativo neste projeto.
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver
+
+# O Prisma precisa rodar seu script de build (download dos engines nativos
+# e geração do client) durante o install.
+onlyBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - prisma
