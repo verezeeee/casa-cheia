@@ -1,0 +1,207 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '10.32.1'
+  TURBO_TELEMETRY_DISABLED: '1'
+
+jobs:
+  commitlint:
+    name: Commitlint (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint commit messages of the PR
+        run: pnpm exec commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-lint-${{ github.job }}-${{ github.sha }}
+          restore-keys: turbo-lint-${{ github.job }}-
+
+      - name: Format check
+        run: pnpm run format:check
+
+      - name: Lint (backend, frontend, shared)
+        run: pnpm turbo run lint
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-build-${{ github.job }}-${{ github.sha }}
+          restore-keys: turbo-build-${{ github.job }}-
+
+      - name: Generate Prisma Client
+        run: pnpm --filter @poker-system/backend exec prisma generate
+
+      - name: Build (shared -> backend -> frontend)
+        run: pnpm turbo run build
+        env:
+          # Necessária para o "next build" - NEXT_PUBLIC_* é inlined no bundle.
+          NEXT_PUBLIC_API_URL: http://localhost:3001/api
+
+  test:
+    name: Test (backend + frontend)
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      # Banco DEDICADO aos testes ("poker_system_test"), separado do banco de
+      # desenvolvimento ("poker_system" do docker-compose). O serviço é
+      # efêmero e exclusivo deste job: as suítes podem aplicar migrations e
+      # truncar tabelas sem risco de vazar estado para outro job.
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: poker
+          POSTGRES_PASSWORD: poker
+          POSTGRES_DB: poker_system_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U poker -d poker_system_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://poker:poker@localhost:5432/poker_system_test?schema=public
+      PORT: 3001
+      API_PREFIX: api
+      LOG_LEVEL: info
+      JWT_SECRET: ci-only-test-secret-not-for-production
+      JWT_EXPIRES_IN: 15m
+      JWT_REFRESH_SECRET: ci-only-test-refresh-secret-not-for-production
+      JWT_REFRESH_EXPIRES_IN: 7d
+      ABACATEPAY_API_KEY: ci-test-abacatepay-key
+      ABACATEPAY_BASE_URL: https://api.abacatepay.com/v1
+      ABACATEPAY_WEBHOOK_SECRET: ci-test-abacatepay-webhook-secret
+      ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS: 300
+      COOKIE_DOMAIN: ''
+      COOKIE_SECURE: 'false'
+      CORS_ORIGINS: http://localhost:3000
+      RATE_LIMIT_TTL: 60
+      # Limite alto no CI: rate limiting não pode derrubar suítes que disparam
+      # muitas requisições em sequência (testes do throttler o sobrescrevem).
+      RATE_LIMIT_LIMIT: 1000
+      WALLET_MIN_DEPOSIT: '10.00'
+      WALLET_MAX_DEPOSIT: '50000.00'
+      WALLET_MIN_WITHDRAWAL: '10.00'
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared package
+        run: pnpm --filter @poker-system/shared build
+
+      - name: Generate Prisma Client
+        run: pnpm --filter @poker-system/backend exec prisma generate
+
+      - name: Run database migrations
+        run: pnpm --filter @poker-system/backend exec prisma migrate deploy
+
+      # Unitários não tocam o banco: podem rodar em paralelo (default do Jest).
+      - name: Backend unit tests (with coverage threshold)
+        run: pnpm --filter @poker-system/backend run test:cov
+
+      # As suítes abaixo compartilham o MESMO database "poker_system_test".
+      # Elas são steps sequenciais (nunca concorrentes entre si) e cada config
+      # de Jest fixa maxWorkers=1 (ver test/jest-e2e.json), de modo que duas
+      # transações de teste jamais disputam as mesmas linhas — sem isso, testes
+      # de saldo/idempotência ficam flaky por deadlock ou leitura suja.
+      - name: Backend integration tests (serialized, real Postgres)
+        # NOTAS DE DEPENDÊNCIA (onda W0, tarefas em paralelo):
+        #  - o script "test:int" vem de apps/backend/package.json (T-DB-06/07);
+        #    enquanto não existir, o step emite um warning em vez de falhar.
+        #  - os arquivos "*.int-spec.ts" vêm de T-DB-07; até lá usamos
+        #    "--passWithNoTests" para não quebrar o pipeline com "No tests found".
+        #    REMOVER esse flag assim que a primeira suíte de integração existir.
+        run: |
+          if node -e "process.exit(require('./apps/backend/package.json').scripts['test:int'] ? 0 : 1)"; then
+            pnpm --filter @poker-system/backend run test:int --passWithNoTests
+          else
+            echo "::warning title=test:int ausente::Script 'test:int' ainda não definido em apps/backend/package.json - step ignorado."
+          fi
+
+      - name: Backend e2e tests (serialized, real Postgres)
+        run: pnpm --filter @poker-system/backend run test:e2e --runInBand
+
+      - name: Frontend unit tests (with coverage threshold)
+        run: pnpm --filter @poker-system/frontend run test:cov
