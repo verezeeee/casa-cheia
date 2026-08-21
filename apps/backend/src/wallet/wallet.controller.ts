@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -8,6 +7,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type {
   PaginatedResponse,
   PixChargeResponse,
@@ -18,6 +18,8 @@ import type {
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
+import { SENSITIVE_ROUTE_THROTTLE } from '../common/http/rate-limits';
+import { requireIdempotencyKey } from '../common/http/require-idempotency-key';
 import { CreateDepositDto } from './dto/create-deposit.dto';
 import { ListTransactionsQueryDto } from './dto/list-transactions-query.dto';
 import { RequestWithdrawalDto } from './dto/request-withdrawal.dto';
@@ -48,6 +50,7 @@ export class WalletController {
   }
 
   @Post('deposits')
+  @Throttle(SENSITIVE_ROUTE_THROTTLE)
   async createDeposit(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateDepositDto,
@@ -58,6 +61,7 @@ export class WalletController {
   }
 
   @Post('withdrawals')
+  @Throttle(SENSITIVE_ROUTE_THROTTLE)
   async requestWithdrawal(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: RequestWithdrawalDto,
@@ -65,19 +69,5 @@ export class WalletController {
   ): Promise<PixWithdrawalResponse> {
     requireIdempotencyKey(idempotencyKey);
     return this.walletService.requestWithdrawal(user.id, dto, idempotencyKey);
-  }
-}
-
-/**
- * `Idempotency-Key` é obrigatório em toda operação financeira que dispara
- * efeito colateral externo (decisão D-04 de `base.prisma`). Validação ad-hoc
- * aqui; generalizada em interceptor na Fase 5, quando Wallet/Table/Tournament
- * já tiverem endpoints suficientes para justificar a abstração compartilhada.
- */
-function requireIdempotencyKey(
-  value: string | undefined,
-): asserts value is string {
-  if (!value || value.trim().length === 0) {
-    throw new BadRequestException('Header Idempotency-Key é obrigatório.');
   }
 }

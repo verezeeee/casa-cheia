@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -21,6 +20,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
+import { requireIdempotencyKey } from '../common/http/require-idempotency-key';
 import { CreateTournamentDto } from './dto/create-tournament.dto';
 import { EliminateEntryDto } from './dto/eliminate-entry.dto';
 import { ListTournamentsQueryDto } from './dto/list-tournaments-query.dto';
@@ -87,14 +87,5 @@ export class TournamentController {
     @Param('id') tournamentId: string,
   ): Promise<TournamentDetailResponse> {
     return this.tournamentService.finishTournament(tournamentId);
-  }
-}
-
-/** Mesmo contrato de `WalletController`/`TableController` — ver nota lá sobre a Fase 5. */
-function requireIdempotencyKey(
-  value: string | undefined,
-): asserts value is string {
-  if (!value || value.trim().length === 0) {
-    throw new BadRequestException('Header Idempotency-Key é obrigatório.');
   }
 }

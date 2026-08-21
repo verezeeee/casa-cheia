@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -51,6 +52,13 @@ import { WalletModule } from './wallet/wallet.module';
             : undefined,
       },
     }),
+    // Guard global (abaixo) fica com um limite generoso — não deve atrapalhar
+    // tráfego normal (ex.: polling de assentos a cada 5s). Rotas sensíveis
+    // (login, depósito, saque) sobrescrevem com @Throttle(SENSITIVE_ROUTE_THROTTLE),
+    // que usa RATE_LIMIT_TTL/RATE_LIMIT_LIMIT (ver common/http/rate-limits.ts).
+    ThrottlerModule.forRoot({
+      throttlers: [{ ttl: 60_000, limit: 300 }],
+    }),
     PrismaModule,
     HealthModule,
     AuthModule,
@@ -64,6 +72,10 @@ import { WalletModule } from './wallet/wallet.module';
     {
       provide: APP_FILTER,
       useClass: HttpExceptionFilter,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
     },
   ],
 })

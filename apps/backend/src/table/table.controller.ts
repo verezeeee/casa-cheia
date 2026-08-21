@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -20,6 +19,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
+import { requireIdempotencyKey } from '../common/http/require-idempotency-key';
 import { CreateTableDto } from './dto/create-table.dto';
 import { ListTablesQueryDto } from './dto/list-tables-query.dto';
 import { RecordMovementDto } from './dto/record-movement.dto';
@@ -90,14 +90,5 @@ export class TableController {
     @Body() dto: RecordMovementDto,
   ): Promise<TableSeatDto> {
     return this.tableService.recordMovement(user.id, tableId, sessionId, dto);
-  }
-}
-
-/** Mesmo contrato de `WalletController` — ver nota lá sobre a Fase 5. */
-function requireIdempotencyKey(
-  value: string | undefined,
-): asserts value is string {
-  if (!value || value.trim().length === 0) {
-    throw new BadRequestException('Header Idempotency-Key é obrigatório.');
   }
 }

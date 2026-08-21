@@ -11,9 +11,11 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Throttle } from '@nestjs/throttler';
 import type { AuthTokensResponse, SessionUser } from '@poker-system/shared';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
+import { SENSITIVE_ROUTE_THROTTLE } from '../common/http/rate-limits';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -37,6 +39,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @Throttle(SENSITIVE_ROUTE_THROTTLE)
   async login(
     @Body() dto: LoginDto,
     @Req() req: Request,
