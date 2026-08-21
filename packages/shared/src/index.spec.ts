@@ -190,6 +190,7 @@ describe('@poker-system/shared barrel export', () => {
       const entry: TournamentEntryDto = {
         id: 'ent_1',
         userId: sessionUser.id,
+        userName: sessionUser.name,
         status: TournamentEntryStatus.PLAYING,
         chipStack: 25_000,
         finalPosition: null,

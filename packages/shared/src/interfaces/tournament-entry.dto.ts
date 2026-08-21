@@ -15,6 +15,8 @@ export interface TournamentEntryDto {
 
   userId: string;
 
+  userName: string;
+
   status: TournamentEntryStatus;
 
   /** Fichas de torneio (sem valor monetário). */
