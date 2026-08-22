@@ -2,6 +2,8 @@ export { Badge, type BadgeProps, type BadgeVariant } from './badge';
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from './button';
 export { Card, type CardPadding, type CardProps } from './card';
 export { cn } from './cn';
+export { ConfirmDialog, type ConfirmDialogProps } from './confirm-dialog';
+export { Dialog, type DialogProps } from './dialog';
 export { EmptyState, type EmptyStateProps } from './empty-state';
 export { ErrorState, type ErrorStateProps } from './error-state';
 export {

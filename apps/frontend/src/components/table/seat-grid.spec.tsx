@@ -12,11 +12,16 @@ jest.mock('@/lib/api/table', () => ({
     sitAtTable: jest.fn(),
     cashOut: jest.fn(),
     recordMovement: jest.fn(),
+    closeTable: jest.fn(),
   },
 }));
 
 jest.mock('@/components/providers/session-provider', () => ({
   useSession: jest.fn(),
+}));
+
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ push: jest.fn() }),
 }));
 
 const mockedUseSession = jest.mocked(useSession);
@@ -151,5 +156,40 @@ describe('SeatGrid', () => {
     await waitFor(() =>
       expect(screen.getByText('Não foi possível sentar na mesa.')).toBeInTheDocument(),
     );
+  });
+
+  it('mostra "Fechar mesa" só pro ADMIN e chama a API ao confirmar', async () => {
+    mockedUseSession.mockReturnValue({
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin', role: UserRole.ADMIN },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tableApi.getSeats as jest.Mock).mockResolvedValue([VACANT]);
+    (tableApi.closeTable as jest.Mock).mockResolvedValue({});
+
+    renderWithClient(<SeatGrid tableId="table-1" />);
+    await waitFor(() => expect(screen.getByText('Fechar mesa')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Fechar mesa'));
+    await waitFor(() => expect(screen.getByText('Sim, fechar mesa')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Sim, fechar mesa'));
+
+    await waitFor(() => expect(tableApi.closeTable).toHaveBeenCalledWith('table-1'));
+  });
+
+  it('não mostra "Fechar mesa" pro jogador', async () => {
+    mockedUseSession.mockReturnValue({
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu', role: UserRole.PLAYER },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tableApi.getSeats as jest.Mock).mockResolvedValue([VACANT]);
+
+    renderWithClient(<SeatGrid tableId="table-1" />);
+    await waitFor(() => expect(screen.getByText('Sentar')).toBeInTheDocument());
+
+    expect(screen.queryByText('Fechar mesa')).not.toBeInTheDocument();
   });
 });

@@ -3,10 +3,11 @@
 import type { TableSeatDto } from '@poker-system/shared';
 import { UserRole } from '@poker-system/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
 import { tableApi } from '@/lib/api/table';
-import { Badge, Button, Card, Input, Spinner, Toast } from '@/components/ui';
+import { Badge, Button, Card, ConfirmDialog, Input, Spinner, Toast } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
 import { formatMoneySafe } from '@/lib/format';
 
@@ -14,12 +15,14 @@ const POLL_INTERVAL_MS = 5_000;
 
 export function SeatGrid({ tableId }: { tableId: string }) {
   const { user } = useSession();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [openSeat, setOpenSeat] = useState<number | null>(null);
   const [buyInAmount, setBuyInAmount] = useState('');
   const [adjustSeat, setAdjustSeat] = useState<string | null>(null);
   const [adjustAmount, setAdjustAmount] = useState('');
+  const [confirmingClose, setConfirmingClose] = useState(false);
 
   const {
     data: seats,
@@ -80,6 +83,19 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     },
   });
 
+  const closeMutation = useMutation({
+    mutationFn: () => tableApi.closeTable(tableId),
+    onSuccess: () => {
+      setError(null);
+      invalidate();
+      router.push('/lobby');
+    },
+    onError: (caught: unknown) => {
+      setConfirmingClose(false);
+      setError(caught instanceof ApiError ? caught.message : 'Não foi possível fechar a mesa.');
+    },
+  });
+
   function handleSit(event: FormEvent<HTMLFormElement>, seatNumber: number) {
     event.preventDefault();
     sitMutation.mutate(seatNumber);
@@ -98,6 +114,29 @@ export function SeatGrid({ tableId }: { tableId: string }) {
   return (
     <div className="flex flex-col gap-3">
       {error && <Toast type="error" message={error} />}
+
+      {user?.role === UserRole.ADMIN && (
+        <>
+          <Button
+            size="sm"
+            variant="danger"
+            onClick={() => setConfirmingClose(true)}
+            className="self-end"
+          >
+            Fechar mesa
+          </Button>
+          <ConfirmDialog
+            open={confirmingClose}
+            title="Fechar a mesa?"
+            description="Isso faz cash-out de todos os jogadores sentados."
+            confirmLabel="Sim, fechar mesa"
+            danger
+            loading={closeMutation.isPending}
+            onConfirm={() => closeMutation.mutate()}
+            onCancel={() => setConfirmingClose(false)}
+          />
+        </>
+      )}
 
       <ul className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
         {seats.map((seat) => (
