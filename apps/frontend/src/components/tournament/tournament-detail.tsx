@@ -1,12 +1,13 @@
 'use client';
 
 import { TournamentEntryStatus, TournamentStatus, UserRole } from '@poker-system/shared';
+import type { TournamentEntryDto } from '@poker-system/shared';
 import type { BadgeVariant } from '@/components/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
 import { tournamentApi } from '@/lib/api/tournament';
-import { Badge, Button, Card, Input, Spinner, Toast } from '@/components/ui';
+import { Badge, Button, Card, ErrorState, Input, Skeleton, Toast } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
 import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
 
@@ -24,6 +25,24 @@ const ENTRY_STATUS_VARIANT: Record<TournamentEntryStatus, BadgeVariant> = {
   [TournamentEntryStatus.ELIMINATED]: 'danger',
   [TournamentEntryStatus.PAID]: 'success',
   [TournamentEntryStatus.REFUNDED]: 'neutral',
+};
+
+// Ordem de leitura: quem ainda tá na mesa primeiro, depois quem falta
+// entrar, depois quem já saiu — não a ordem alfabética do enum.
+const STATUS_ORDER: TournamentEntryStatus[] = [
+  TournamentEntryStatus.PLAYING,
+  TournamentEntryStatus.REGISTERED,
+  TournamentEntryStatus.PAID,
+  TournamentEntryStatus.ELIMINATED,
+  TournamentEntryStatus.REFUNDED,
+];
+
+const STATUS_GROUP_LABEL: Record<TournamentEntryStatus, string> = {
+  [TournamentEntryStatus.PLAYING]: 'Jogando',
+  [TournamentEntryStatus.REGISTERED]: 'Inscritos',
+  [TournamentEntryStatus.PAID]: 'Premiados',
+  [TournamentEntryStatus.ELIMINATED]: 'Eliminados',
+  [TournamentEntryStatus.REFUNDED]: 'Reembolsados',
 };
 
 export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
@@ -91,9 +110,16 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
     eliminateMutation.mutate(entryId);
   }
 
-  if (isLoading) return <Spinner size="sm" label="Carregando torneio" />;
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-28 w-full rounded-lg" />
+        <Skeleton className="h-32 w-full rounded-lg" />
+      </div>
+    );
+  }
   if (isError || !tournament) {
-    return <p className="text-danger">Não foi possível carregar o torneio.</p>;
+    return <ErrorState description="Não foi possível carregar o torneio." />;
   }
 
   const isAdmin = user?.role === UserRole.ADMIN;
@@ -105,6 +131,11 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const canFinish =
     tournament.status === TournamentStatus.REGISTERING ||
     tournament.status === TournamentStatus.RUNNING;
+
+  const entryGroups = STATUS_ORDER.map((status) => ({
+    status,
+    entries: tournament.entries.filter((entry) => entry.status === status),
+  })).filter((group) => group.entries.length > 0);
 
   return (
     <div className="flex flex-col gap-4">
@@ -151,11 +182,17 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
       </Card>
 
       <Card title="Grade de premiação">
-        <ul className="flex flex-col gap-1">
+        <ul className="flex flex-col gap-3">
           {tournament.prizes.map((prize) => (
-            <li key={prize.position} className="flex justify-between text-sm">
-              <span className="text-muted">{prize.position}º lugar</span>
-              <span className="font-ledger">{prize.percentage}%</span>
+            <li key={prize.position} className="flex items-center gap-3 text-sm">
+              <span className="w-16 shrink-0 text-muted">{prize.position}º lugar</span>
+              <span className="h-2 flex-1 overflow-hidden rounded-full bg-surface-hover">
+                <span
+                  className="block h-full rounded-full bg-accent"
+                  style={{ width: `${prize.percentage}%` }}
+                />
+              </span>
+              <span className="font-ledger w-14 shrink-0 text-right">{prize.percentage}%</span>
             </li>
           ))}
         </ul>
@@ -165,71 +202,111 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
         {tournament.entries.length === 0 ? (
           <p className="text-sm text-muted">Nenhuma inscrição ainda.</p>
         ) : (
-          <ul className="flex flex-col gap-2">
-            {tournament.entries.map((entry) => (
-              <li
-                key={entry.id}
-                className="flex flex-col gap-1 border-b border-border py-2 last:border-0"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate font-medium">{entry.userName}</span>
-                  <Badge variant={ENTRY_STATUS_VARIANT[entry.status]}>{entry.status}</Badge>
-                </div>
-                <p className="font-ledger text-xs text-muted">
-                  {entry.finalPosition ? `${entry.finalPosition}º lugar · ` : ''}
-                  {entry.prizeAmount
-                    ? `Prêmio ${formatMoneySafe(entry.prizeAmount)}`
-                    : `${entry.chipStack} fichas`}
+          <div className="flex flex-col gap-4">
+            {entryGroups.map((group) => (
+              <div key={group.status}>
+                <p className="text-xs font-medium tracking-wide text-muted uppercase">
+                  {STATUS_GROUP_LABEL[group.status]} · {group.entries.length}
                 </p>
-
-                {isAdmin && entry.status === TournamentEntryStatus.REGISTERED && (
-                  <>
-                    {eliminating === entry.id ? (
-                      <form
-                        onSubmit={(e) => handleEliminate(e, entry.id)}
-                        className="flex flex-col gap-2 sm:flex-row sm:items-center"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <Input
-                            type="number"
-                            min={1}
-                            placeholder="Colocação final (opcional)"
-                            value={finalPosition}
-                            onChange={(e) => setFinalPosition(e.target.value)}
-                          />
-                        </div>
-                        <div className="flex gap-2">
-                          <Button
-                            type="submit"
-                            size="sm"
-                            fullWidth
-                            loading={eliminateMutation.isPending}
-                          >
-                            Confirmar
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            fullWidth
-                            onClick={() => setEliminating(null)}
-                          >
-                            Cancelar
-                          </Button>
-                        </div>
-                      </form>
-                    ) : (
-                      <Button size="sm" variant="ghost" onClick={() => setEliminating(entry.id)}>
-                        Eliminar
-                      </Button>
-                    )}
-                  </>
-                )}
-              </li>
+                <ul className="mt-2 flex flex-col gap-2 divide-y divide-border">
+                  {group.entries.map((entry) => (
+                    <EntryRow
+                      key={entry.id}
+                      entry={entry}
+                      isAdmin={isAdmin}
+                      isEliminating={eliminating === entry.id}
+                      finalPosition={finalPosition}
+                      onFinalPositionChange={setFinalPosition}
+                      onStartEliminate={() => setEliminating(entry.id)}
+                      onCancelEliminate={() => setEliminating(null)}
+                      onSubmitEliminate={(e) => handleEliminate(e, entry.id)}
+                      eliminating={eliminateMutation.isPending}
+                    />
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </Card>
     </div>
+  );
+}
+
+interface EntryRowProps {
+  entry: TournamentEntryDto;
+  isAdmin: boolean;
+  isEliminating: boolean;
+  finalPosition: string;
+  onFinalPositionChange: (value: string) => void;
+  onStartEliminate: () => void;
+  onCancelEliminate: () => void;
+  onSubmitEliminate: (event: FormEvent<HTMLFormElement>) => void;
+  eliminating: boolean;
+}
+
+function EntryRow({
+  entry,
+  isAdmin,
+  isEliminating,
+  finalPosition,
+  onFinalPositionChange,
+  onStartEliminate,
+  onCancelEliminate,
+  onSubmitEliminate,
+  eliminating,
+}: EntryRowProps) {
+  return (
+    <li className="flex flex-col gap-1 pt-2 first:pt-0">
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate font-medium">{entry.userName}</span>
+        <Badge variant={ENTRY_STATUS_VARIANT[entry.status]}>{entry.status}</Badge>
+      </div>
+      <p className="font-ledger text-xs text-muted">
+        {entry.finalPosition ? `${entry.finalPosition}º lugar · ` : ''}
+        {entry.prizeAmount
+          ? `Prêmio ${formatMoneySafe(entry.prizeAmount)}`
+          : `${entry.chipStack} fichas`}
+      </p>
+
+      {isAdmin && entry.status === TournamentEntryStatus.REGISTERED && (
+        <>
+          {isEliminating ? (
+            <form
+              onSubmit={onSubmitEliminate}
+              className="flex flex-col gap-2 sm:flex-row sm:items-center"
+            >
+              <div className="min-w-0 flex-1">
+                <Input
+                  type="number"
+                  min={1}
+                  placeholder="Colocação final (opcional)"
+                  value={finalPosition}
+                  onChange={(e) => onFinalPositionChange(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button type="submit" size="sm" fullWidth loading={eliminating}>
+                  Confirmar
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  fullWidth
+                  onClick={onCancelEliminate}
+                >
+                  Cancelar
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <Button size="sm" variant="ghost" onClick={onStartEliminate}>
+              Eliminar
+            </Button>
+          )}
+        </>
+      )}
+    </li>
   );
 }

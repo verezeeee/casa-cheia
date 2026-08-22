@@ -5,7 +5,7 @@ import { TournamentStatus } from '@poker-system/shared';
 import type { BadgeVariant } from '@/components/ui';
 import { useQuery } from '@tanstack/react-query';
 import { tournamentApi } from '@/lib/api/tournament';
-import { Badge, Card, EmptyState, Spinner } from '@/components/ui';
+import { Badge, EmptyState, ErrorState, Reveal, RevealItem, Skeleton } from '@/components/ui';
 import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
 
 const STATUS_VARIANT: Record<TournamentStatus, BadgeVariant> = {
@@ -22,9 +22,20 @@ export function TournamentList() {
     queryFn: () => tournamentApi.listTournaments(),
   });
 
-  if (isLoading) return <Spinner size="sm" label="Carregando torneios" />;
+  if (isLoading) {
+    return (
+      <div className="flex flex-col divide-y divide-border rounded-lg border border-border bg-surface">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="flex flex-col gap-2 p-4">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-3 w-56" />
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (isError || !data) {
-    return <p className="text-danger">Não foi possível carregar os torneios.</p>;
+    return <ErrorState description="Não foi possível carregar os torneios." />;
   }
 
   const tournaments = data.items;
@@ -38,28 +49,27 @@ export function TournamentList() {
   }
 
   return (
-    <ul className="grid gap-4 sm:grid-cols-2">
+    <Reveal className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
       {tournaments.map((tournament) => (
-        <li key={tournament.id}>
-          <Link href={`/tournaments/${tournament.id}`}>
-            <Card className="transition-shadow hover:shadow-md">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="font-display font-semibold">{tournament.name}</p>
-                  <p className="font-ledger text-sm text-muted">
-                    Buy-in {formatMoneySafe(tournament.buyIn)} + {formatMoneySafe(tournament.fee)}
-                  </p>
-                </div>
-                <Badge variant={STATUS_VARIANT[tournament.status]}>{tournament.status}</Badge>
-              </div>
-              <p className="mt-2 text-sm text-muted">
+        <RevealItem key={tournament.id}>
+          <Link
+            href={`/tournaments/${tournament.id}`}
+            className="flex items-start justify-between gap-3 p-4 transition-colors hover:bg-surface-hover"
+          >
+            <div className="min-w-0">
+              <p className="font-display font-semibold">{tournament.name}</p>
+              <p className="font-ledger text-sm text-muted">
+                Buy-in {formatMoneySafe(tournament.buyIn)} + {formatMoneySafe(tournament.fee)}
+              </p>
+              <p className="mt-1.5 text-sm text-muted">
                 {tournament.registeredPlayers}/{tournament.maxPlayers} inscritos ·{' '}
                 {formatDateTimeSafe(tournament.startsAt)}
               </p>
-            </Card>
+            </div>
+            <Badge variant={STATUS_VARIANT[tournament.status]}>{tournament.status}</Badge>
           </Link>
-        </li>
+        </RevealItem>
       ))}
-    </ul>
+    </Reveal>
   );
 }
