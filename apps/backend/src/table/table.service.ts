@@ -371,22 +371,6 @@ export class TableService {
         throw new BadRequestException('Stack insuficiente para este ajuste.');
       }
 
-      if (amount.isPositive()) {
-        const ceiling = await this.getTableChipCeiling(tableId);
-        const otherActiveStacks = await this.prisma.tableSession.aggregate({
-          where: { tableId, status: 'ACTIVE', id: { not: sessionId } },
-          _sum: { currentStack: true },
-        });
-        const totalAfter = (
-          otherActiveStacks._sum.currentStack ?? new Prisma.Decimal(0)
-        ).add(newStack);
-        if (totalAfter.greaterThan(ceiling)) {
-          throw new BadRequestException(
-            'Ajuste ultrapassa o total de fichas que entraram na mesa (buy-ins - cash-outs).',
-          );
-        }
-      }
-
       const updateResult = await this.prisma.tableSession.updateMany({
         where: { id: sessionId, version: fresh.version },
         data: { currentStack: newStack, version: { increment: 1 } },
@@ -414,28 +398,6 @@ export class TableService {
     throw new ConflictException(
       'Muita concorrência nesta sessão — tente novamente.',
     );
-  }
-
-  /**
-   * Teto de fichas que podem estar em jogo na mesa: total historicamente
-   * comprado (`totalBuyIn`) menos o que já saiu (`totalCashOut`), somado
-   * sobre TODAS as sessões da mesa (ativas ou não — dinheiro já sacado não
-   * conta mais). Só é conferido em ajustes de crédito (`HAND_RESULT`
-   * positivo, `ADJUSTMENT` positivo): débito nunca pode furar o teto.
-   *
-   * ponytail: checagem em nível de aplicação (lê-então-decide), não uma
-   * `CHECK` de banco — dois `recordMovement` concorrentes na mesma mesa
-   * podem, em teoria, passar do teto juntos. Endurecer com constraint/lock
-   * se isso virar problema real.
-   */
-  private async getTableChipCeiling(tableId: string): Promise<Prisma.Decimal> {
-    const agg = await this.prisma.tableSession.aggregate({
-      where: { tableId },
-      _sum: { totalBuyIn: true, totalCashOut: true },
-    });
-    const totalBuyIn = agg._sum.totalBuyIn ?? new Prisma.Decimal(0);
-    const totalCashOut = agg._sum.totalCashOut ?? new Prisma.Decimal(0);
-    return totalBuyIn.sub(totalCashOut);
   }
 
   private async mustGetSession(tableId: string, sessionId: string) {
