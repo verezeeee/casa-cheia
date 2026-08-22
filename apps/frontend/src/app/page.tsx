@@ -10,7 +10,7 @@ const FEATURES: Array<{ label: string; description: string }> = [
 export default function Home() {
   return (
     <>
-      <header className="flex items-center justify-between border-b border-border px-6 py-4">
+      <header className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6 sm:py-4">
         <span className="font-display text-lg font-semibold tracking-tight">
           <span className="text-accent">♠</span> Poker System
         </span>
@@ -18,7 +18,7 @@ export default function Home() {
       </header>
 
       <main className="flex flex-1 flex-col bg-brand text-brand-foreground">
-        <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-start justify-center gap-6 px-6 py-20">
+        <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-start justify-center gap-6 px-4 py-14 sm:px-6 sm:py-20">
           <p className="font-mono text-xs tracking-[0.2em] text-accent uppercase">
             Gestão de casa de poker
           </p>
@@ -41,7 +41,7 @@ export default function Home() {
         </div>
       </main>
 
-      <footer className="flex items-center justify-center border-t border-border px-6 py-3">
+      <footer className="flex items-center justify-center border-t border-border px-4 py-3 sm:px-6">
         <ApiStatus />
       </footer>
     </>

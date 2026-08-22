@@ -7,7 +7,7 @@ import { WithdrawalForm } from '@/components/wallet/withdrawal-form';
 export default function WalletPage() {
   return (
     <RequireAuth>
-      <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-6">
+      <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 sm:p-6">
         <h1 className="font-display text-2xl font-semibold tracking-tight">Carteira</h1>
         <BalanceCard />
         <div className="grid gap-6 sm:grid-cols-2">

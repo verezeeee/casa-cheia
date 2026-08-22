@@ -114,7 +114,7 @@ describe('TournamentDetail', () => {
       }),
     );
 
-    fireEvent.click(screen.getByText('Encerrar e pagar premiação'));
+    fireEvent.click(screen.getByText('Encerrar torneio'));
     await waitFor(() => expect(tournamentApi.finishTournament).toHaveBeenCalledWith('trn-1'));
   });
 

@@ -128,6 +128,7 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
         {canRegister && (
           <Button
             className="mt-3"
+            fullWidth
             loading={registerMutation.isPending}
             onClick={() => registerMutation.mutate()}
           >
@@ -140,10 +141,11 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
           <Button
             className="mt-3"
             variant="secondary"
+            fullWidth
             loading={finishMutation.isPending}
             onClick={() => finishMutation.mutate()}
           >
-            Encerrar e pagar premiação
+            Encerrar torneio
           </Button>
         )}
       </Card>
@@ -170,7 +172,7 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
                 className="flex flex-col gap-1 border-b border-border py-2 last:border-0"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">{entry.userName}</span>
+                  <span className="min-w-0 truncate font-medium">{entry.userName}</span>
                   <Badge variant={ENTRY_STATUS_VARIANT[entry.status]}>{entry.status}</Badge>
                 </div>
                 <p className="font-ledger text-xs text-muted">
@@ -185,26 +187,36 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
                     {eliminating === entry.id ? (
                       <form
                         onSubmit={(e) => handleEliminate(e, entry.id)}
-                        className="flex items-center gap-2"
+                        className="flex flex-col gap-2 sm:flex-row sm:items-center"
                       >
-                        <Input
-                          type="number"
-                          min={1}
-                          placeholder="Colocação final (opcional)"
-                          value={finalPosition}
-                          onChange={(e) => setFinalPosition(e.target.value)}
-                        />
-                        <Button type="submit" size="sm" loading={eliminateMutation.isPending}>
-                          Confirmar
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setEliminating(null)}
-                        >
-                          Cancelar
-                        </Button>
+                        <div className="min-w-0 flex-1">
+                          <Input
+                            type="number"
+                            min={1}
+                            placeholder="Colocação final (opcional)"
+                            value={finalPosition}
+                            onChange={(e) => setFinalPosition(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            type="submit"
+                            size="sm"
+                            fullWidth
+                            loading={eliminateMutation.isPending}
+                          >
+                            Confirmar
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            fullWidth
+                            onClick={() => setEliminating(null)}
+                          >
+                            Cancelar
+                          </Button>
+                        </div>
                       </form>
                     ) : (
                       <Button size="sm" variant="ghost" onClick={() => setEliminating(entry.id)}>

@@ -25,17 +25,14 @@ export function AuthStatus() {
     );
   }
 
+  // Navegação entre seções fica no `BottomNav` das páginas autenticadas —
+  // aqui (só a home pública) o essencial é entrar e sair, sem repetir os
+  // mesmos links (que não caberiam numa tela de 375px).
   return (
     <div className="flex items-center gap-3 text-sm">
-      <span className="text-muted">Olá, {user?.name}</span>
+      <span className="hidden text-muted sm:inline">Olá, {user?.name}</span>
       <Link href="/lobby" className="font-medium text-accent hover:underline">
-        Lobby
-      </Link>
-      <Link href="/tournaments" className="font-medium text-accent hover:underline">
-        Torneios
-      </Link>
-      <Link href="/wallet" className="font-medium text-accent hover:underline">
-        Carteira
+        Ir para o lobby
       </Link>
       <Button variant="secondary" size="sm" onClick={() => void logout()}>
         Sair

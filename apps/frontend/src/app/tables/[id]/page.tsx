@@ -6,7 +6,7 @@ export default async function TableDetailPage({ params }: { params: Promise<{ id
 
   return (
     <RequireAuth>
-      <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
+      <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 sm:p-6">
         <h1 className="font-display text-2xl font-semibold tracking-tight">Mesa</h1>
         <SeatGrid tableId={id} />
       </main>

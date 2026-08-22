@@ -139,18 +139,21 @@ export function CreateTournamentForm() {
           {prizePercentages.map((percentage, index) => (
             <div key={index} className="flex items-center gap-2">
               <span className="font-mono text-xs text-muted">{index + 1}º</span>
-              <Input
-                inputMode="decimal"
-                placeholder="40.00"
-                required
-                value={percentage}
-                onChange={(e) => updatePrize(index, e.target.value)}
-              />
+              <div className="min-w-0 flex-1">
+                <Input
+                  inputMode="decimal"
+                  placeholder="40.00"
+                  required
+                  value={percentage}
+                  onChange={(e) => updatePrize(index, e.target.value)}
+                />
+              </div>
               {prizePercentages.length > 1 && (
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
+                  className="shrink-0"
                   onClick={() => setPrizePercentages((prev) => prev.filter((_, i) => i !== index))}
                 >
                   Remover

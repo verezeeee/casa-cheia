@@ -50,7 +50,7 @@ describe('AuthStatus', () => {
 
     render(<AuthStatus />);
     expect(screen.getByText('Olá, Ana')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Torneios' })).toHaveAttribute('href', '/tournaments');
+    expect(screen.getByRole('link', { name: 'Ir para o lobby' })).toHaveAttribute('href', '/lobby');
 
     screen.getByRole('button', { name: 'Sair' }).click();
     expect(logout).toHaveBeenCalledTimes(1);

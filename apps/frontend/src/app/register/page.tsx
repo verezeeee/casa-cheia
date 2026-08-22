@@ -29,7 +29,7 @@ export default function RegisterPage() {
       // mesmas credenciais para não pedir a senha duas vezes ao jogador.
       await authApi.register({ name, email, password });
       await login({ email, password });
-      router.push('/');
+      router.push('/lobby');
     } catch (caught) {
       setError(
         caught instanceof ApiError
@@ -42,7 +42,7 @@ export default function RegisterPage() {
   }
 
   return (
-    <main className="flex flex-1 items-center justify-center bg-brand p-8">
+    <main className="flex flex-1 items-center justify-center bg-brand p-4 sm:p-8">
       <Card className="w-full max-w-sm">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>

@@ -52,7 +52,7 @@ export function TransactionList() {
             {items.map((transaction) => (
               <li
                 key={transaction.id}
-                className="flex items-center justify-between gap-3 py-2 text-sm"
+                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 text-sm"
               >
                 <div>
                   <p className="font-medium">{TYPE_LABEL[transaction.type]}</p>

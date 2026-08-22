@@ -86,12 +86,13 @@ export function DepositForm() {
             />
           </FormField>
 
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={handleRefreshBalance}>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button variant="secondary" fullWidth onClick={handleRefreshBalance}>
               Já paguei, atualizar saldo
             </Button>
             <Button
               variant="ghost"
+              fullWidth
               onClick={() => {
                 setCharge(null);
                 setAmount('');

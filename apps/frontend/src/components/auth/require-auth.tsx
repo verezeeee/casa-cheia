@@ -3,6 +3,8 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { useSession } from '@/components/providers/session-provider';
+import { BottomNav } from '@/components/layout/bottom-nav';
+import { TopBar } from '@/components/layout/top-bar';
 import { Spinner } from '@/components/ui';
 
 /**
@@ -10,6 +12,10 @@ import { Spinner } from '@/components/ui';
  * 'loading'`), mostra um spinner em vez de piscar o conteúdo protegido ou
  * redirecionar cedo demais — a hidratação inicial sempre chama `me()` (ver
  * `SessionProvider`), então "loading" é sempre transitório, nunca final.
+ *
+ * Também é o único lugar (todas as páginas protegidas passam por aqui) que
+ * monta o chrome de navegação (`TopBar`/`BottomNav`) — cada página só
+ * precisa cuidar do próprio conteúdo, nunca da casca.
  */
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { status } = useSession();
@@ -29,5 +35,11 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     );
   }
 
-  return <>{children}</>;
+  return (
+    <div className="flex flex-1 flex-col">
+      <TopBar />
+      <div className="flex-1 pb-20">{children}</div>
+      <BottomNav />
+    </div>
+  );
 }

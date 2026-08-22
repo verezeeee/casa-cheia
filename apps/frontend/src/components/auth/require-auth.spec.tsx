@@ -9,6 +9,7 @@ jest.mock('@/components/providers/session-provider', () => ({
 const replace = jest.fn();
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
+  usePathname: () => '/lobby',
 }));
 
 const mockedUseSession = jest.mocked(useSession);
