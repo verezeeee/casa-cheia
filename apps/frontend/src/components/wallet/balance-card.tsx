@@ -1,5 +1,6 @@
 'use client';
 
+import { Spade } from '@phosphor-icons/react';
 import { useQuery } from '@tanstack/react-query';
 import { walletApi } from '@/lib/api/wallet';
 import { Spinner } from '@/components/ui';
@@ -28,7 +29,8 @@ export function BalanceCard() {
       ) : isError || !data ? (
         <p className="text-danger">Não foi possível carregar o saldo.</p>
       ) : (
-        <p className="suit-pip font-display font-ledger mt-1 text-4xl font-semibold tracking-tight">
+        <p className="font-display font-ledger mt-1 flex items-center gap-1.5 text-4xl font-semibold tracking-tight">
+          <Spade weight="fill" size={28} className="text-accent" aria-hidden="true" />
           {formatMoneySafe(data.balance)}
         </p>
       )}

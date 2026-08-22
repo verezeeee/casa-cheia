@@ -61,7 +61,7 @@
   --color-muted: var(--muted);
 
   --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-display), ui-serif, Georgia, serif;
+  --font-display: var(--font-display), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-mono), ui-monospace, monospace;
 }
 
@@ -89,15 +89,6 @@ body {
   margin-top: 0.625rem;
   height: 1px;
   background: linear-gradient(to right, var(--border) 0%, var(--border) 60%, transparent 100%);
-}
-
-/* Marca de naipe em brass — o toque assinado ao lado de números/títulos
-   centrais (saldo, cabeçalhos de página). Discreto, não decorativo em série. */
-.suit-pip::before {
-  content: '♠';
-  color: var(--accent);
-  margin-right: 0.5em;
-  font-family: var(--font-display), serif;
 }
 
 @media (prefers-reduced-motion: reduce) {

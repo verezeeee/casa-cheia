@@ -1,5 +1,6 @@
 'use client';
 
+import { PokerChip, Trophy, Wallet } from '@phosphor-icons/react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/components/ui';
@@ -10,15 +11,14 @@ import { cn } from '@/components/ui';
  * visível, sem gesto extra pra abrir. Continua funcional em telas largas —
  * não há necessidade de uma segunda variante "desktop".
  *
- * Cada aba usa um naipe de baralho como ícone em vez de um SVG genérico —
- * mesma linguagem visual do `suit-pip` do saldo (♠) e do wordmark do
- * cabeçalho: zero dependência de ícones, e a metáfora ("mesa", "torneio",
- * "dinheiro") já é a do próprio produto.
+ * Ícones Phosphor (não os naipes de texto de antes, que dependiam da fonte
+ * de emoji do sistema): contorno quando inativo, preenchido + cor de
+ * destaque quando ativo — o mesmo padrão de tab bar do iOS/Material.
  */
 const TABS = [
-  { href: '/lobby', matches: ['/lobby', '/tables'], label: 'Mesas', glyph: '♠' },
-  { href: '/tournaments', matches: ['/tournaments'], label: 'Torneios', glyph: '♣' },
-  { href: '/wallet', matches: ['/wallet'], label: 'Carteira', glyph: '♦' },
+  { href: '/lobby', matches: ['/lobby', '/tables'], label: 'Mesas', Icon: PokerChip },
+  { href: '/tournaments', matches: ['/tournaments'], label: 'Torneios', Icon: Trophy },
+  { href: '/wallet', matches: ['/wallet'], label: 'Carteira', Icon: Wallet },
 ] as const;
 
 function isActive(pathname: string, matches: readonly string[]): boolean {
@@ -42,13 +42,11 @@ export function BottomNav() {
                 href={tab.href}
                 aria-current={active ? 'page' : undefined}
                 className={cn(
-                  'flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs font-medium',
+                  'flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs font-medium transition-colors duration-150',
                   active ? 'text-accent' : 'text-muted',
                 )}
               >
-                <span className="text-lg leading-none" aria-hidden="true">
-                  {tab.glyph}
-                </span>
+                <tab.Icon weight={active ? 'fill' : 'regular'} size={22} aria-hidden="true" />
                 {tab.label}
               </Link>
             </li>

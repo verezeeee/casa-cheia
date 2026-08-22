@@ -1,5 +1,6 @@
 import { AuthStatus } from '@/components/auth/auth-status';
 import { ApiStatus } from '@/components/health/api-status';
+import { Logo } from '@/components/layout/logo';
 
 const FEATURES: Array<{ label: string; description: string }> = [
   { label: 'Carteira', description: 'Saldo, depósito e saque via PIX, com extrato completo.' },
@@ -11,9 +12,7 @@ export default function Home() {
   return (
     <>
       <header className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6 sm:py-4">
-        <span className="font-display text-lg font-semibold tracking-tight">
-          <span className="text-accent">♠</span> Casa Cheia
-        </span>
+        <Logo className="text-lg" iconSize={20} />
         <AuthStatus />
       </header>
 

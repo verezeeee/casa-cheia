@@ -1,8 +1,10 @@
 'use client';
 
+import { SignOut } from '@phosphor-icons/react';
 import Link from 'next/link';
 import { useSession } from '@/components/providers/session-provider';
 import { Button } from '@/components/ui';
+import { Logo } from './logo';
 
 /**
  * Cabeçalho mínimo das páginas autenticadas: identidade (wordmark + sessão)
@@ -15,12 +17,13 @@ export function TopBar() {
 
   return (
     <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-      <Link href="/lobby" className="font-display text-base font-semibold tracking-tight">
-        <span className="text-accent">♠</span> Casa Cheia
+      <Link href="/lobby">
+        <Logo className="text-base" />
       </Link>
       <div className="flex min-w-0 items-center gap-2">
         <span className="hidden truncate text-sm text-muted sm:inline">{user?.name}</span>
         <Button variant="ghost" size="sm" onClick={() => void logout()}>
+          <SignOut weight="regular" size={16} aria-hidden="true" />
           Sair
         </Button>
       </div>

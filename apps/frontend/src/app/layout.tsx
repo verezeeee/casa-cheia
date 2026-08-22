@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Fraunces, IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google';
+import { Geist, IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google';
 import { MotionProvider } from '@/components/providers/motion-provider';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { SessionProvider } from '@/components/providers/session-provider';
@@ -8,16 +8,16 @@ import './globals.css';
 
 /**
  * Sistema tipográfico (ver design tokens em globals.css):
- * - Fraunces: serifada de destaque — títulos e o número do saldo, o único
- *   lugar onde a personalidade visual "fala alto".
+ * - Geist: grotesca de destaque — títulos e o número do saldo. Serifada
+ *   ficava editorial demais para um software de gestão (era Fraunces antes;
+ *   trocada por não combinar com o resto da interface).
  * - IBM Plex Sans: interface/corpo — legível em formulários e telas densas.
  * - IBM Plex Mono: dados tabulares (dinheiro, fichas, datas) com
  *   `tabular-nums`, para colunas alinharem como um livro-caixa de verdade.
  */
-const displayFont = Fraunces({
+const displayFont = Geist({
   variable: '--font-display',
   subsets: ['latin'],
-  axes: ['opsz', 'SOFT', 'WONK'],
 });
 
 const bodyFont = IBM_Plex_Sans({

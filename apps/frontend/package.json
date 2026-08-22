@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.0",
+    "@phosphor-icons/react": "^2.1.10",
     "@poker-system/shared": "workspace:*",
     "@tanstack/react-query": "^5.101.4",
     "framer-motion": "^13.1.1",
