@@ -231,7 +231,21 @@ export class TableService {
     sessionId: string,
     idempotencyKey: string,
   ): Promise<TableSeatDto> {
-    const ledgerKey = `cashout:${idempotencyKey}`;
+    const session = await this.mustGetSession(tableId, sessionId);
+    if (session.userId !== userId) {
+      throw new ForbiddenException(
+        'Você só pode fazer cash-out da sua própria sessão.',
+      );
+    }
+    return this.doCashOut(tableId, sessionId, `cashout:${idempotencyKey}`);
+  }
+
+  /** Núcleo do cash-out, sem checagem de dono — reaproveitado pelo fechamento de mesa pelo admin. */
+  private async doCashOut(
+    tableId: string,
+    sessionId: string,
+    ledgerKey: string,
+  ): Promise<TableSeatDto> {
     const existingTxn = await this.prisma.walletTransaction.findUnique({
       where: { idempotencyKey: ledgerKey },
     });
@@ -241,21 +255,15 @@ export class TableService {
       );
     }
 
-    const wallet = await this.prisma.wallet.findUniqueOrThrow({
-      where: { userId },
-    });
-
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const fresh = await this.mustGetSession(tableId, sessionId);
-      if (fresh.userId !== userId) {
-        throw new ForbiddenException(
-          'Você só pode fazer cash-out da sua própria sessão.',
-        );
-      }
       if (fresh.status !== 'ACTIVE') {
         throw new BadRequestException('Sessão já encerrada.');
       }
 
+      const wallet = await this.prisma.wallet.findUniqueOrThrow({
+        where: { userId: fresh.userId },
+      });
       const amount = fresh.currentStack;
 
       try {
@@ -312,6 +320,38 @@ export class TableService {
     );
   }
 
+  /**
+   * Fecha a mesa: faz cash-out de todas as sessões ativas (devolve o stack
+   * para a wallet de cada jogador, mesmo lançamento usado no cash-out normal)
+   * e marca a mesa como CLOSED. Idempotente — mesa já fechada só retorna.
+   */
+  async closeTable(tableId: string): Promise<TableSummaryDto> {
+    const table = await this.prisma.table.findUnique({
+      where: { id: tableId },
+    });
+    if (!table) throw new NotFoundException('Mesa não encontrada.');
+
+    if (table.status !== 'CLOSED') {
+      const activeSessions = await this.prisma.tableSession.findMany({
+        where: { tableId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      for (const { id: sessionId } of activeSessions) {
+        await this.doCashOut(tableId, sessionId, `close-table:${sessionId}`);
+      }
+      await this.prisma.table.update({
+        where: { id: tableId },
+        data: { status: 'CLOSED' },
+      });
+    }
+
+    return toTableSummaryDto({
+      ...table,
+      status: 'CLOSED',
+      _count: { sessions: 0 },
+    });
+  }
+
   /** Registra HAND_RESULT/ADJUSTMENT — NUNCA cruza a wallet (ver StackMovementReason em table.prisma). */
   async recordMovement(
     adminId: string,
@@ -329,6 +369,22 @@ export class TableService {
       const newStack = fresh.currentStack.add(amount);
       if (newStack.isNegative()) {
         throw new BadRequestException('Stack insuficiente para este ajuste.');
+      }
+
+      if (amount.isPositive()) {
+        const ceiling = await this.getTableChipCeiling(tableId);
+        const otherActiveStacks = await this.prisma.tableSession.aggregate({
+          where: { tableId, status: 'ACTIVE', id: { not: sessionId } },
+          _sum: { currentStack: true },
+        });
+        const totalAfter = (
+          otherActiveStacks._sum.currentStack ?? new Prisma.Decimal(0)
+        ).add(newStack);
+        if (totalAfter.greaterThan(ceiling)) {
+          throw new BadRequestException(
+            'Ajuste ultrapassa o total de fichas que entraram na mesa (buy-ins - cash-outs).',
+          );
+        }
       }
 
       const updateResult = await this.prisma.tableSession.updateMany({
@@ -358,6 +414,28 @@ export class TableService {
     throw new ConflictException(
       'Muita concorrência nesta sessão — tente novamente.',
     );
+  }
+
+  /**
+   * Teto de fichas que podem estar em jogo na mesa: total historicamente
+   * comprado (`totalBuyIn`) menos o que já saiu (`totalCashOut`), somado
+   * sobre TODAS as sessões da mesa (ativas ou não — dinheiro já sacado não
+   * conta mais). Só é conferido em ajustes de crédito (`HAND_RESULT`
+   * positivo, `ADJUSTMENT` positivo): débito nunca pode furar o teto.
+   *
+   * ponytail: checagem em nível de aplicação (lê-então-decide), não uma
+   * `CHECK` de banco — dois `recordMovement` concorrentes na mesma mesa
+   * podem, em teoria, passar do teto juntos. Endurecer com constraint/lock
+   * se isso virar problema real.
+   */
+  private async getTableChipCeiling(tableId: string): Promise<Prisma.Decimal> {
+    const agg = await this.prisma.tableSession.aggregate({
+      where: { tableId },
+      _sum: { totalBuyIn: true, totalCashOut: true },
+    });
+    const totalBuyIn = agg._sum.totalBuyIn ?? new Prisma.Decimal(0);
+    const totalCashOut = agg._sum.totalCashOut ?? new Prisma.Decimal(0);
+    return totalBuyIn.sub(totalCashOut);
   }
 
   private async mustGetSession(tableId: string, sessionId: string) {

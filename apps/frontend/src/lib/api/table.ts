@@ -10,6 +10,7 @@ const TABLE_PATHS = {
     `/tables/${tableId}/sessions/${sessionId}/cash-out`,
   movements: (tableId: string, sessionId: string) =>
     `/tables/${tableId}/sessions/${sessionId}/movements`,
+  close: (tableId: string) => `/tables/${tableId}/close`,
 } as const;
 
 export function listTables(cursor?: string): Promise<PaginatedResponse<TableSummaryDto>> {
@@ -55,4 +56,17 @@ export function recordMovement(
   return httpClient.post<TableSeatDto>(TABLE_PATHS.movements(tableId, sessionId), input);
 }
 
-export const tableApi = { listTables, createTable, getSeats, sitAtTable, cashOut, recordMovement };
+/** ADMIN. Faz cash-out de todo mundo sentado e fecha a mesa. */
+export function closeTable(tableId: string): Promise<TableSummaryDto> {
+  return httpClient.post<TableSummaryDto>(TABLE_PATHS.close(tableId));
+}
+
+export const tableApi = {
+  listTables,
+  createTable,
+  getSeats,
+  sitAtTable,
+  cashOut,
+  recordMovement,
+  closeTable,
+};

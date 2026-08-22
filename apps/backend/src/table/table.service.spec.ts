@@ -39,11 +39,25 @@ function buildPrisma() {
 
   return {
     tx,
-    table: { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn() },
+    table: {
+      create: jest.fn(),
+      findUnique: jest.fn(),
+      findMany: jest.fn(),
+      update: jest.fn(),
+    },
     tableSession: {
       findUnique: jest.fn(),
       findMany: jest.fn(),
       updateMany: jest.fn(),
+      // Default: teto de fichas "infinito" — testes que não exercitam o
+      // teto não precisam sobrescrever isto.
+      aggregate: jest.fn().mockResolvedValue({
+        _sum: {
+          totalBuyIn: new Prisma.Decimal('1000000.00'),
+          totalCashOut: new Prisma.Decimal('0.00'),
+          currentStack: new Prisma.Decimal('0.00'),
+        },
+      }),
     },
     stackMovement: { create: jest.fn() },
     wallet: { findUniqueOrThrow: jest.fn() },
@@ -293,6 +307,61 @@ describe('TableService', () => {
     });
   });
 
+  describe('closeTable', () => {
+    it('faz cash-out de todas as sessões ativas e marca a mesa como CLOSED', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.table.findUnique.mockResolvedValue({ ...TABLE, status: 'OPEN' });
+      prisma.tableSession.findMany.mockResolvedValue([{ id: 'session-1' }]);
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        userId: 'user-1',
+        status: 'ACTIVE',
+        seatNumber: 3,
+        currentStack: new Prisma.Decimal('80.00'),
+        version: 0,
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-3' });
+      prisma.tx.tableSession.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.closeTable('table-1');
+
+      expect(prisma.tableSession.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tableId: 'table-1', status: 'ACTIVE' },
+        }),
+      );
+      expect(walletService.applyLedgerEntry).toHaveBeenCalledWith(
+        prisma.tx,
+        WALLET.id,
+        expect.objectContaining({ type: 'TABLE_CASH_OUT' }),
+      );
+      expect(prisma.table.update).toHaveBeenCalledWith({
+        where: { id: 'table-1' },
+        data: { status: 'CLOSED' },
+      });
+      expect(result.status).toBe('CLOSED');
+    });
+
+    it('é idempotente: mesa já fechada não refaz cash-out', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        status: 'CLOSED',
+      });
+
+      const result = await service.closeTable('table-1');
+
+      expect(prisma.tableSession.findMany).not.toHaveBeenCalled();
+      expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
+      expect(prisma.table.update).not.toHaveBeenCalled();
+      expect(result.status).toBe('CLOSED');
+    });
+  });
+
   describe('recordMovement', () => {
     it('rejeita ajuste que deixaria o stack negativo', async () => {
       const { service, prisma } = buildService();
@@ -349,6 +418,62 @@ describe('TableService', () => {
         }),
       );
       expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
+    });
+
+    it('rejeita crédito que ultrapassa o total de fichas que entraram na mesa', async () => {
+      const { service, prisma } = buildService();
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        userId: 'user-1',
+        status: 'ACTIVE',
+        seatNumber: 1,
+        currentStack: new Prisma.Decimal('50.00'),
+        version: 0,
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+      // Mesa só viu 50.00 de buy-in no total (nenhum cash-out) — creditar
+      // mais 30.00 (chegando a 80.00) não pode ser aceito.
+      prisma.tableSession.aggregate.mockResolvedValue({
+        _sum: {
+          totalBuyIn: new Prisma.Decimal('50.00'),
+          totalCashOut: new Prisma.Decimal('0.00'),
+          currentStack: new Prisma.Decimal('0.00'),
+        },
+      });
+
+      await expect(
+        service.recordMovement('admin-1', 'table-1', 'session-1', {
+          amount: '30.00',
+          reason: 'HAND_RESULT',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.tableSession.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('não aplica o teto em débito — é assim que se corrige mesa acima do teto', async () => {
+      const { service, prisma } = buildService();
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        userId: 'user-1',
+        status: 'ACTIVE',
+        seatNumber: 1,
+        currentStack: new Prisma.Decimal('50.00'),
+        version: 0,
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+      prisma.tableSession.updateMany.mockResolvedValue({ count: 1 });
+
+      const seat = await service.recordMovement(
+        'admin-1',
+        'table-1',
+        'session-1',
+        { amount: '-30.00', reason: 'ADJUSTMENT' },
+      );
+
+      expect(seat.currentStack).toBe('20.00');
+      expect(prisma.tableSession.aggregate).not.toHaveBeenCalled();
     });
   });
 });

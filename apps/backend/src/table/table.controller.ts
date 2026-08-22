@@ -91,4 +91,11 @@ export class TableController {
   ): Promise<TableSeatDto> {
     return this.tableService.recordMovement(user.id, tableId, sessionId, dto);
   }
+
+  @Post(':id/close')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async closeTable(@Param('id') tableId: string): Promise<TableSummaryDto> {
+    return this.tableService.closeTable(tableId);
+  }
 }
