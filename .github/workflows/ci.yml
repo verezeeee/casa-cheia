@@ -65,6 +65,9 @@ jobs:
           key: turbo-lint-${{ github.job }}-${{ github.sha }}
           restore-keys: turbo-lint-${{ github.job }}-
 
+      - name: Generate Prisma Client
+        run: pnpm --filter @poker-system/backend exec prisma generate
+
       - name: Format check
         run: pnpm run format:check
 
