@@ -11,8 +11,14 @@ ignoredBuiltDependencies:
   - unrs-resolver
 
 # O Prisma precisa rodar seu script de build (download dos engines nativos
-# e geração do client) durante o install.
+# e geração do client) durante o install. O argon2 (hash de senha) precisa
+# do próprio postinstall pra selecionar/linkar o binário nativo certo —
+# sem isso, a lib carrega um .node incompatível e qualquer chamada real
+# (hash/verify) crasha o processo com SIGSEGV, sem lançar uma exceção JS
+# capturável (visto direto em CI: password-hasher/crypto.module/auth.service
+# são os únicos specs que exercitam argon2 de verdade, e os 3 morriam).
 onlyBuiltDependencies:
   - '@prisma/client'
   - '@prisma/engines'
+  - argon2
   - prisma
