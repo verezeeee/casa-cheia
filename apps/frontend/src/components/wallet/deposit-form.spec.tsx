@@ -62,7 +62,7 @@ describe('DepositForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copiar código PIX' }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('000201-copia-e-cola'));
-    expect(await screen.findByRole('button', { name: 'Código copiado ✓' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Código copiado' })).toBeInTheDocument();
   });
 
   it('mostra o erro da API quando a criação falha', async () => {

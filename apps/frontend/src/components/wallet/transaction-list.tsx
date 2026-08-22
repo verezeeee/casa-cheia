@@ -3,7 +3,7 @@
 import type { WalletTransactionDto } from '@poker-system/shared';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { walletApi } from '@/lib/api/wallet';
-import { Badge, Card, EmptyState, Spinner, type BadgeVariant } from '@/components/ui';
+import { Badge, Card, EmptyState, ErrorState, Skeleton, type BadgeVariant } from '@/components/ui';
 import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
 
 const TYPE_LABEL: Record<WalletTransactionDto['type'], string> = {
@@ -38,9 +38,13 @@ export function TransactionList() {
   return (
     <Card title="Extrato">
       {isLoading ? (
-        <Spinner size="sm" label="Carregando extrato" />
+        <div className="flex flex-col gap-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
       ) : isError ? (
-        <p className="text-danger">Não foi possível carregar o extrato.</p>
+        <ErrorState description="Não foi possível carregar o extrato." />
       ) : items.length === 0 ? (
         <EmptyState
           title="Nenhuma movimentação ainda"

@@ -1,5 +1,6 @@
 'use client';
 
+import { Check, Copy } from '@phosphor-icons/react';
 import type { PixChargeResponse } from '@poker-system/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -81,6 +82,9 @@ export function DepositForm() {
           </Button>
         </form>
       ) : (
+        // Tratamento de "canhoto de recibo": a régua tracejada entre o QR e o
+        // copia-e-cola é a mesma linguagem de perfuração do `.ledger-rule`
+        // usado no resto do produto, não um clip-path novo.
         <div className="flex flex-col gap-4">
           <div>
             <p className="text-sm text-muted">Escaneie o QR Code no app do seu banco.</p>
@@ -94,17 +98,22 @@ export function DepositForm() {
             <img
               src={charge.qrCodeImageUrl}
               alt="QR Code PIX para pagamento do depósito"
-              className="mx-auto h-48 w-48 rounded-md border border-border bg-white p-2"
+              className="mx-auto h-48 w-48 rounded-lg border border-border bg-white p-2"
             />
           )}
 
           <Button variant="secondary" fullWidth onClick={() => void handleCopyCode()}>
-            {copied ? 'Código copiado ✓' : 'Copiar código PIX'}
+            {copied ? (
+              <Check weight="bold" size={16} aria-hidden="true" />
+            ) : (
+              <Copy weight="regular" size={16} aria-hidden="true" />
+            )}
+            {copied ? 'Código copiado' : 'Copiar código PIX'}
           </Button>
 
-          <div>
+          <div className="border-t border-dashed border-border pt-4">
             <p className="text-sm font-medium text-foreground">Copia e cola</p>
-            <p className="font-mono mt-1.5 rounded-md border border-border bg-background p-2 text-xs break-all">
+            <p className="font-mono mt-1.5 rounded-lg border border-border bg-background p-2 text-xs break-all">
               {charge.qrCodePayload}
             </p>
             <p className="mt-1 text-xs text-muted">

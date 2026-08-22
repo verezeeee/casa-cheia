@@ -3,7 +3,7 @@
 import { Spade } from '@phosphor-icons/react';
 import { useQuery } from '@tanstack/react-query';
 import { walletApi } from '@/lib/api/wallet';
-import { Spinner } from '@/components/ui';
+import { Skeleton } from '@/components/ui';
 import { formatMoneySafe } from '@/lib/format';
 
 /**
@@ -25,7 +25,7 @@ export function BalanceCard() {
         Saldo disponível
       </p>
       {isLoading ? (
-        <Spinner size="sm" label="Carregando saldo" />
+        <Skeleton className="mt-2 h-9 w-40 bg-brand-foreground/10" />
       ) : isError || !data ? (
         <p className="text-danger">Não foi possível carregar o saldo.</p>
       ) : (
