@@ -114,7 +114,12 @@ export function DepositForm() {
 
           <p className="text-xs text-muted">Expira às {formatDateTimeSafe(charge.expiresAt)}.</p>
 
-          <div className="flex flex-col gap-2 sm:flex-row">
+          {/* Sempre em coluna, mesmo em telas largas: na /wallet este card
+              divide espaço com o de saque (`sm:grid-cols-2`), então a
+              largura real do card é bem menor que o viewport — um
+              `sm:flex-row` aqui (baseado no viewport, não no container)
+              voltava a espremer os rótulos longos lado a lado. */}
+          <div className="flex flex-col gap-2">
             <Button fullWidth onClick={handleRefreshBalance}>
               Já paguei, atualizar saldo
             </Button>
