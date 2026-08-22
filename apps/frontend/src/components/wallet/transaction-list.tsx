@@ -83,7 +83,7 @@ export function TransactionList() {
               type="button"
               onClick={() => void fetchNextPage()}
               disabled={isFetchingNextPage}
-              className="self-center text-sm font-medium text-accent hover:underline disabled:opacity-60"
+              className="self-center text-sm font-medium text-accent transition-colors duration-200 hover:underline disabled:opacity-60"
             >
               {isFetchingNextPage ? 'Carregando...' : 'Carregar mais'}
             </button>

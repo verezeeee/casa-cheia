@@ -1,11 +1,10 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { AuthLayout } from '@/components/layout/auth-layout';
 import { useSession } from '@/components/providers/session-provider';
-import { Button, Card, FormField, Input, Toast } from '@/components/ui';
+import { Button, Card, FormField, Input, TextLink, Toast } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
 
 export default function LoginPage() {
@@ -72,10 +71,7 @@ export default function LoginPage() {
           </Button>
 
           <p className="text-center text-sm text-muted">
-            Não tem conta?{' '}
-            <Link href="/register" className="font-medium text-accent hover:underline">
-              Cadastre-se
-            </Link>
+            Não tem conta? <TextLink href="/register">Cadastre-se</TextLink>
           </p>
         </form>
       </Card>

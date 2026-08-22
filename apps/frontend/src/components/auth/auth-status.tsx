@@ -1,8 +1,7 @@
 'use client';
 
-import Link from 'next/link';
 import { useSession } from '@/components/providers/session-provider';
-import { Button, Spinner } from '@/components/ui';
+import { Button, Spinner, TextLink } from '@/components/ui';
 
 /** Indicador de sessão + ações de entrar/sair, usado no cabeçalho das páginas públicas. */
 export function AuthStatus() {
@@ -15,12 +14,8 @@ export function AuthStatus() {
   if (status === 'unauthenticated') {
     return (
       <div className="flex items-center gap-3 text-sm">
-        <Link href="/login" className="font-medium text-accent hover:underline">
-          Entrar
-        </Link>
-        <Link href="/register" className="font-medium text-accent hover:underline">
-          Cadastrar
-        </Link>
+        <TextLink href="/login">Entrar</TextLink>
+        <TextLink href="/register">Cadastrar</TextLink>
       </div>
     );
   }
@@ -31,9 +26,7 @@ export function AuthStatus() {
   return (
     <div className="flex items-center gap-3 text-sm">
       <span className="hidden text-muted sm:inline">Olá, {user?.name}</span>
-      <Link href="/lobby" className="font-medium text-accent hover:underline">
-        Ir para o lobby
-      </Link>
+      <TextLink href="/lobby">Ir para o lobby</TextLink>
       <Button variant="secondary" size="sm" onClick={() => void logout()}>
         Sair
       </Button>

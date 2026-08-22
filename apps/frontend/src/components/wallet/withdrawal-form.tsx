@@ -70,7 +70,7 @@ export function WithdrawalForm() {
             onChange={(event) =>
               setPixKeyType(event.target.value as RequestWithdrawalRequest['pixKeyType'])
             }
-            className="h-11 w-full rounded-md border border-border bg-background px-3 text-base text-foreground"
+            className="h-11 w-full rounded-lg border border-border bg-background px-3 text-base text-foreground transition-colors duration-200 hover:border-muted focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-1 focus-visible:ring-offset-background focus-visible:outline-none"
           >
             {PIX_KEY_TYPES.map((type) => (
               <option key={type} value={type}>

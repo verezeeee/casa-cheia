@@ -17,7 +17,7 @@ export function TopBar() {
 
   return (
     <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-      <Link href="/lobby">
+      <Link href="/lobby" className="transition-opacity duration-200 hover:opacity-80">
         <Logo className="text-base" />
       </Link>
       <div className="flex min-w-0 items-center gap-2">

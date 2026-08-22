@@ -16,4 +16,5 @@ export { Input, type InputProps } from './input';
 export { Reveal, RevealItem } from './reveal';
 export { Skeleton, type SkeletonProps } from './skeleton';
 export { Spinner, type SpinnerProps, type SpinnerSize } from './spinner';
+export { TextLink, type TextLinkProps } from './text-link';
 export { Toast, type ToastProps, type ToastType } from './toast';

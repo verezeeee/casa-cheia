@@ -1,11 +1,10 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { AuthLayout } from '@/components/layout/auth-layout';
 import { useSession } from '@/components/providers/session-provider';
-import { Button, Card, FormField, Input, Toast } from '@/components/ui';
+import { Button, Card, FormField, Input, TextLink, Toast } from '@/components/ui';
 import { authApi } from '@/lib/api/auth';
 import { ApiError } from '@/lib/http-client';
 
@@ -91,10 +90,7 @@ export default function RegisterPage() {
           </Button>
 
           <p className="text-center text-sm text-muted">
-            Já tem conta?{' '}
-            <Link href="/login" className="font-medium text-accent hover:underline">
-              Entrar
-            </Link>
+            Já tem conta? <TextLink href="/login">Entrar</TextLink>
           </p>
         </form>
       </Card>
