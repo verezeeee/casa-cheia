@@ -92,9 +92,11 @@ describe('SeatGrid', () => {
 
     renderWithClient(<SeatGrid tableId="table-1" />);
     await waitFor(() => expect(screen.getByText('Eu')).toBeInTheDocument());
-
     expect(screen.getByText('Outro')).toBeInTheDocument();
-    expect(screen.getAllByText('Cash-out')).toHaveLength(1);
+
+    // abre o diálogo do próprio assento pra ver as ações
+    fireEvent.click(screen.getByText('Eu'));
+    await waitFor(() => expect(screen.getAllByText('Cash-out')).toHaveLength(1));
 
     fireEvent.click(screen.getByText('Cash-out'));
     await waitFor(() =>
@@ -117,11 +119,14 @@ describe('SeatGrid', () => {
     (tableApi.recordMovement as jest.Mock).mockResolvedValue({ ...OTHER, currentStack: '75.00' });
 
     renderWithClient(<SeatGrid tableId="table-1" />);
+    await waitFor(() => expect(screen.getByText('Outro')).toBeInTheDocument());
+
+    // abre o diálogo do assento pra ver o formulário de ajuste
+    fireEvent.click(screen.getByText('Outro'));
     await waitFor(() =>
       expect(screen.getByText('Ajustar stack (resultado de mão)')).toBeInTheDocument(),
     );
 
-    fireEvent.click(screen.getByText('Ajustar stack (resultado de mão)'));
     fireEvent.change(screen.getByPlaceholderText('+25.00 ou -25.00'), {
       target: { value: '25.00' },
     });

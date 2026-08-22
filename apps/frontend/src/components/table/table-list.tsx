@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { tableApi } from '@/lib/api/table';
-import { Badge, Card, EmptyState, Spinner } from '@/components/ui';
+import { Badge, cn, EmptyState, ErrorState, Reveal, RevealItem, Skeleton } from '@/components/ui';
 import { formatMoneySafe } from '@/lib/format';
 
 export function TableList() {
@@ -12,9 +12,20 @@ export function TableList() {
     queryFn: () => tableApi.listTables(),
   });
 
-  if (isLoading) return <Spinner size="sm" label="Carregando mesas" />;
+  if (isLoading) {
+    return (
+      <div className="flex flex-col divide-y divide-border rounded-lg border border-border bg-surface">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="flex flex-col gap-2 p-4">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-3 w-56" />
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (isError || !data) {
-    return <p className="text-danger">Não foi possível carregar as mesas.</p>;
+    return <ErrorState description="Não foi possível carregar as mesas." />;
   }
 
   const tables = data.items;
@@ -28,30 +39,40 @@ export function TableList() {
   }
 
   return (
-    <ul className="grid gap-4 sm:grid-cols-2">
+    <Reveal className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
       {tables.map((table) => (
-        <li key={table.id}>
-          <Link href={`/tables/${table.id}`}>
-            <Card className="transition-shadow hover:shadow-md">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="font-display font-semibold">{table.name}</p>
-                  <p className="font-ledger text-sm text-muted">
-                    Blinds {formatMoneySafe(table.smallBlind)}/{formatMoneySafe(table.bigBlind)} ·
-                    Buy-in {formatMoneySafe(table.minBuyIn)}–{formatMoneySafe(table.maxBuyIn)}
-                  </p>
-                </div>
-                <Badge variant={table.status === 'OPEN' ? 'success' : 'neutral'}>
-                  {table.status}
-                </Badge>
-              </div>
-              <p className="mt-2 text-sm text-muted">
-                {table.occupiedSeats}/{table.maxSeats} assentos ocupados
+        <RevealItem key={table.id}>
+          <Link
+            href={`/tables/${table.id}`}
+            className="flex items-start justify-between gap-3 p-4 transition-colors hover:bg-surface-hover"
+          >
+            <div className="min-w-0">
+              <p className="font-display font-semibold">{table.name}</p>
+              <p className="font-ledger text-sm text-muted">
+                Blinds {formatMoneySafe(table.smallBlind)}/{formatMoneySafe(table.bigBlind)} ·
+                Buy-in {formatMoneySafe(table.minBuyIn)}–{formatMoneySafe(table.maxBuyIn)}
               </p>
-            </Card>
+              <div className="mt-1.5 flex items-center gap-2">
+                <div className="flex gap-0.5" aria-hidden="true">
+                  {Array.from({ length: table.maxSeats }).map((_, i) => (
+                    <span
+                      key={i}
+                      className={cn(
+                        'h-1.5 w-1.5 rounded-full',
+                        i < table.occupiedSeats ? 'bg-accent' : 'bg-border',
+                      )}
+                    />
+                  ))}
+                </div>
+                <span className="text-sm text-muted">
+                  {table.occupiedSeats}/{table.maxSeats} assentos ocupados
+                </span>
+              </div>
+            </div>
+            <Badge variant={table.status === 'OPEN' ? 'success' : 'neutral'}>{table.status}</Badge>
           </Link>
-        </li>
+        </RevealItem>
       ))}
-    </ul>
+    </Reveal>
   );
 }

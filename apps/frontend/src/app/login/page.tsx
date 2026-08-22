@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
+import { AuthLayout } from '@/components/layout/auth-layout';
 import { useSession } from '@/components/providers/session-provider';
 import { Button, Card, FormField, Input, Toast } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
@@ -34,7 +35,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex flex-1 items-center justify-center bg-brand p-4 sm:p-8">
+    <AuthLayout>
       <Card className="w-full max-w-sm">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
@@ -78,6 +79,6 @@ export default function LoginPage() {
           </p>
         </form>
       </Card>
-    </main>
+    </AuthLayout>
   );
 }

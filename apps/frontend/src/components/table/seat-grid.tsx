@@ -4,23 +4,47 @@ import type { TableSeatDto } from '@poker-system/shared';
 import { UserRole } from '@poker-system/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { useState, type CSSProperties, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
 import { tableApi } from '@/lib/api/table';
-import { Badge, Button, Card, ConfirmDialog, Input, Spinner, Toast } from '@/components/ui';
+import {
+  Button,
+  cn,
+  ConfirmDialog,
+  Dialog,
+  ErrorState,
+  Input,
+  Skeleton,
+  Toast,
+} from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
 import { formatMoneySafe } from '@/lib/format';
 
 const POLL_INTERVAL_MS = 5_000;
+
+/**
+ * Posição de um assento ao redor da elipse, em porcentagem do container
+ * (raio menor que 50% pra sobrar "rail" entre o feltro e os assentos —
+ * ver `inset-*` do feltro abaixo). Só faz sentido em `sm:`+: em telas
+ * estreitas os assentos viram lista vertical simples (ver className dos
+ * chips), então a posição é ignorada — `left`/`top` não têm efeito num
+ * elemento `position: static`.
+ */
+function seatPosition(index: number, total: number): CSSProperties {
+  const angle = (2 * Math.PI * index) / total - Math.PI / 2;
+  return {
+    left: `${50 + 44 * Math.cos(angle)}%`,
+    top: `${50 + 42 * Math.sin(angle)}%`,
+  };
+}
 
 export function SeatGrid({ tableId }: { tableId: string }) {
   const { user } = useSession();
   const router = useRouter();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
-  const [openSeat, setOpenSeat] = useState<number | null>(null);
+  const [selectedSeatNumber, setSelectedSeatNumber] = useState<number | null>(null);
   const [buyInAmount, setBuyInAmount] = useState('');
-  const [adjustSeat, setAdjustSeat] = useState<string | null>(null);
   const [adjustAmount, setAdjustAmount] = useState('');
   const [confirmingClose, setConfirmingClose] = useState(false);
 
@@ -36,10 +60,22 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     refetchInterval: POLL_INTERVAL_MS,
   });
 
+  // Deriva do resultado ao vivo da query em vez de guardar uma cópia do
+  // assento no estado: depois de um ajuste de stack, o diálogo mostra o
+  // valor atualizado assim que o poll seguinte chega, sem sincronizar nada
+  // manualmente.
+  const dialogSeat = seats?.find((seat) => seat.seatNumber === selectedSeatNumber) ?? null;
+
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: ['tables', tableId, 'seats'] });
     void queryClient.invalidateQueries({ queryKey: ['tables'] });
     void queryClient.invalidateQueries({ queryKey: ['wallet', 'balance'] });
+  }
+
+  function closeSeatDialog() {
+    setSelectedSeatNumber(null);
+    setBuyInAmount('');
+    setAdjustAmount('');
   }
 
   const sitMutation = useMutation({
@@ -47,8 +83,7 @@ export function SeatGrid({ tableId }: { tableId: string }) {
       tableApi.sitAtTable(tableId, { seatNumber, buyInAmount }, crypto.randomUUID()),
     onSuccess: () => {
       setError(null);
-      setOpenSeat(null);
-      setBuyInAmount('');
+      closeSeatDialog();
       invalidate();
     },
     onError: (caught: unknown) => {
@@ -60,6 +95,7 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     mutationFn: (sessionId: string) => tableApi.cashOut(tableId, sessionId, crypto.randomUUID()),
     onSuccess: () => {
       setError(null);
+      closeSeatDialog();
       invalidate();
     },
     onError: (caught: unknown) => {
@@ -72,7 +108,6 @@ export function SeatGrid({ tableId }: { tableId: string }) {
       tableApi.recordMovement(tableId, sessionId, { amount: adjustAmount, reason: 'HAND_RESULT' }),
     onSuccess: () => {
       setError(null);
-      setAdjustSeat(null);
       setAdjustAmount('');
       invalidate();
     },
@@ -96,26 +131,36 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     },
   });
 
-  function handleSit(event: FormEvent<HTMLFormElement>, seatNumber: number) {
+  function handleSitSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    sitMutation.mutate(seatNumber);
+    if (dialogSeat) sitMutation.mutate(dialogSeat.seatNumber);
   }
 
-  function handleAdjust(event: FormEvent<HTMLFormElement>, sessionId: string) {
+  function handleAdjustSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    adjustMutation.mutate(sessionId);
+    if (dialogSeat?.sessionId) adjustMutation.mutate(dialogSeat.sessionId);
   }
 
-  if (isLoading) return <Spinner size="sm" label="Carregando assentos" />;
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-2">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-14 w-full" />
+        ))}
+      </div>
+    );
+  }
   if (isError || !seats) {
-    return <p className="text-danger">Não foi possível carregar os assentos.</p>;
+    return <ErrorState description="Não foi possível carregar os assentos." />;
   }
+
+  const isAdmin = user?.role === UserRole.ADMIN;
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {error && <Toast type="error" message={error} />}
 
-      {user?.role === UserRole.ADMIN && (
+      {isAdmin && (
         <>
           <Button
             size="sm"
@@ -138,155 +183,188 @@ export function SeatGrid({ tableId }: { tableId: string }) {
         </>
       )}
 
-      <ul className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-        {seats.map((seat) => (
-          <li key={seat.seatNumber}>
-            <SeatCard
+      {/* Elipse de feltro (decorativa) + assentos ao redor, em sm:+. Em
+          telas estreitas os assentos ficam em fluxo normal (lista), o
+          feltro some — uma mesa "de cima" não cabe legível em 375px. */}
+      <div className="relative sm:aspect-[16/10] sm:min-h-[380px]">
+        <div
+          aria-hidden="true"
+          className="absolute inset-[14%] hidden rounded-[50%] bg-brand shadow-inner sm:block"
+        />
+        <div className="flex flex-col gap-2 sm:contents">
+          {seats.map((seat, index) => (
+            <SeatChip
+              key={seat.seatNumber}
               seat={seat}
               isMine={seat.userId === user?.id}
-              isAdmin={user?.role === UserRole.ADMIN}
-              isOpen={openSeat === seat.seatNumber}
-              buyInAmount={buyInAmount}
-              onBuyInAmountChange={setBuyInAmount}
-              onToggleSit={() => setOpenSeat(openSeat === seat.seatNumber ? null : seat.seatNumber)}
-              onSubmitSit={(e) => handleSit(e, seat.seatNumber)}
-              sitting={sitMutation.isPending}
-              onCashOut={() => seat.sessionId && cashOutMutation.mutate(seat.sessionId)}
-              cashingOut={cashOutMutation.isPending}
-              isAdjusting={adjustSeat === seat.sessionId}
-              adjustAmount={adjustAmount}
-              onAdjustAmountChange={setAdjustAmount}
-              onToggleAdjust={() =>
-                setAdjustSeat(adjustSeat === seat.sessionId ? null : seat.sessionId)
-              }
-              onSubmitAdjust={(e) => seat.sessionId && handleAdjust(e, seat.sessionId)}
-              adjusting={adjustMutation.isPending}
+              onSelect={() => setSelectedSeatNumber(seat.seatNumber)}
+              style={seatPosition(index, seats.length)}
             />
-          </li>
-        ))}
-      </ul>
+          ))}
+        </div>
+      </div>
+
+      <Dialog
+        open={dialogSeat !== null}
+        onClose={closeSeatDialog}
+        title={dialogSeat ? `Assento ${dialogSeat.seatNumber}` : ''}
+      >
+        {dialogSeat && (
+          <SeatDialogBody
+            seat={dialogSeat}
+            isMine={dialogSeat.userId === user?.id}
+            isAdmin={isAdmin}
+            buyInAmount={buyInAmount}
+            onBuyInAmountChange={setBuyInAmount}
+            onSubmitSit={handleSitSubmit}
+            sitting={sitMutation.isPending}
+            onCashOut={() => dialogSeat.sessionId && cashOutMutation.mutate(dialogSeat.sessionId)}
+            cashingOut={cashOutMutation.isPending}
+            adjustAmount={adjustAmount}
+            onAdjustAmountChange={setAdjustAmount}
+            onSubmitAdjust={handleAdjustSubmit}
+            adjusting={adjustMutation.isPending}
+          />
+        )}
+      </Dialog>
     </div>
   );
 }
 
-interface SeatCardProps {
+interface SeatChipProps {
+  seat: TableSeatDto;
+  isMine: boolean;
+  onSelect: () => void;
+  style: CSSProperties;
+}
+
+/**
+ * Um assento — botão único que abre o diálogo de ação (sentar/cash-out/
+ * ajuste). `sm:absolute` com a posição vinda de `seatPosition` desenha a
+ * mesa em elipse; sem essa classe (mobile) o `style` de posição é ignorado
+ * (não tem efeito em `position: static`) e o botão flui como item de lista.
+ */
+function SeatChip({ seat, isMine, onSelect, style }: SeatChipProps) {
+  const vacant = seat.userId === null;
+  const label = vacant
+    ? `Assento ${seat.seatNumber}, vago`
+    : `Assento ${seat.seatNumber}, ${seat.userName}${isMine ? ' (você)' : ''}, ${formatMoneySafe(seat.currentStack ?? '0')}`;
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      style={style}
+      aria-haspopup="dialog"
+      aria-label={label}
+      className={cn(
+        'rounded-lg border p-2.5 text-center transition-all duration-300 hover:scale-[1.02] active:scale-95',
+        'sm:absolute sm:w-24 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:hover:z-10 sm:hover:scale-110',
+        vacant
+          ? 'border-dashed border-border bg-surface/70 text-muted hover:border-accent hover:text-accent'
+          : 'border-border bg-surface shadow-sm',
+        isMine && 'border-accent',
+      )}
+    >
+      <p className="font-mono text-[10px] tracking-wide text-muted uppercase">
+        Assento {seat.seatNumber}
+      </p>
+      {vacant ? (
+        <p className="mt-1 text-xs font-semibold">Sentar</p>
+      ) : (
+        <>
+          <p className="mt-1 truncate text-xs font-semibold">{seat.userName}</p>
+          <p className="font-ledger text-xs text-muted">
+            {formatMoneySafe(seat.currentStack ?? '0')}
+          </p>
+          {isMine && <p className="text-[10px] font-semibold text-accent">Você</p>}
+        </>
+      )}
+    </button>
+  );
+}
+
+interface SeatDialogBodyProps {
   seat: TableSeatDto;
   isMine: boolean;
   isAdmin: boolean;
-  isOpen: boolean;
   buyInAmount: string;
   onBuyInAmountChange: (value: string) => void;
-  onToggleSit: () => void;
   onSubmitSit: (event: FormEvent<HTMLFormElement>) => void;
   sitting: boolean;
   onCashOut: () => void;
   cashingOut: boolean;
-  isAdjusting: boolean;
   adjustAmount: string;
   onAdjustAmountChange: (value: string) => void;
-  onToggleAdjust: () => void;
   onSubmitAdjust: (event: FormEvent<HTMLFormElement>) => void;
   adjusting: boolean;
 }
 
-function SeatCard({
+function SeatDialogBody({
   seat,
   isMine,
   isAdmin,
-  isOpen,
   buyInAmount,
   onBuyInAmountChange,
-  onToggleSit,
   onSubmitSit,
   sitting,
   onCashOut,
   cashingOut,
-  isAdjusting,
   adjustAmount,
   onAdjustAmountChange,
-  onToggleAdjust,
   onSubmitAdjust,
   adjusting,
-}: SeatCardProps) {
+}: SeatDialogBodyProps) {
   const vacant = seat.userId === null;
 
+  if (vacant) {
+    return (
+      <form onSubmit={onSubmitSit} className="flex flex-col gap-3">
+        <Input
+          inputMode="decimal"
+          placeholder="Valor do buy-in"
+          required
+          value={buyInAmount}
+          onChange={(e) => onBuyInAmountChange(e.target.value)}
+        />
+        <Button type="submit" loading={sitting} fullWidth>
+          Confirmar
+        </Button>
+      </form>
+    );
+  }
+
   return (
-    <Card>
-      <div className="flex items-center justify-between">
-        <p className="font-mono text-xs tracking-wide text-muted uppercase">
-          Assento {seat.seatNumber}
+    <div className="flex flex-col gap-3">
+      <div>
+        <p className="font-semibold">
+          {seat.userName}
+          {isMine && <span className="ml-1.5 text-xs font-medium text-accent">(você)</span>}
         </p>
-        {!vacant && (
-          <Badge variant={isMine ? 'success' : 'neutral'}>{isMine ? 'Você' : 'Ocupado'}</Badge>
-        )}
+        <p className="font-ledger text-lg">{formatMoneySafe(seat.currentStack ?? '0')}</p>
       </div>
 
-      {vacant ? (
-        <div className="mt-2">
-          {isOpen ? (
-            <form onSubmit={onSubmitSit} className="flex flex-col gap-2">
-              <Input
-                inputMode="decimal"
-                placeholder="Valor do buy-in"
-                required
-                value={buyInAmount}
-                onChange={(e) => onBuyInAmountChange(e.target.value)}
-              />
-              <div className="flex gap-2">
-                <Button type="submit" size="sm" loading={sitting}>
-                  Confirmar
-                </Button>
-                <Button type="button" size="sm" variant="ghost" onClick={onToggleSit}>
-                  Cancelar
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <Button size="sm" variant="secondary" onClick={onToggleSit}>
-              Sentar
-            </Button>
-          )}
-        </div>
-      ) : (
-        <div className="mt-2 flex flex-col gap-2">
-          <p className="font-semibold">{seat.userName}</p>
-          <p className="font-ledger text-lg">{formatMoneySafe(seat.currentStack ?? '0')}</p>
-
-          {isMine && (
-            <Button size="sm" variant="secondary" loading={cashingOut} onClick={onCashOut}>
-              Cash-out
-            </Button>
-          )}
-
-          {isAdmin && !isMine && (
-            <>
-              {isAdjusting ? (
-                <form onSubmit={onSubmitAdjust} className="flex flex-col gap-2">
-                  <Input
-                    inputMode="decimal"
-                    placeholder="+25.00 ou -25.00"
-                    required
-                    value={adjustAmount}
-                    onChange={(e) => onAdjustAmountChange(e.target.value)}
-                  />
-                  <div className="flex gap-2">
-                    <Button type="submit" size="sm" loading={adjusting}>
-                      Aplicar
-                    </Button>
-                    <Button type="button" size="sm" variant="ghost" onClick={onToggleAdjust}>
-                      Cancelar
-                    </Button>
-                  </div>
-                </form>
-              ) : (
-                <Button size="sm" variant="ghost" onClick={onToggleAdjust}>
-                  Ajustar stack (resultado de mão)
-                </Button>
-              )}
-            </>
-          )}
-        </div>
+      {isMine && (
+        <Button variant="secondary" loading={cashingOut} onClick={onCashOut} fullWidth>
+          Cash-out
+        </Button>
       )}
-    </Card>
+
+      {isAdmin && !isMine && (
+        <form onSubmit={onSubmitAdjust} className="flex flex-col gap-2 border-t border-border pt-3">
+          <p className="text-sm font-medium text-foreground">Ajustar stack (resultado de mão)</p>
+          <Input
+            inputMode="decimal"
+            placeholder="+25.00 ou -25.00"
+            required
+            value={adjustAmount}
+            onChange={(e) => onAdjustAmountChange(e.target.value)}
+          />
+          <Button type="submit" size="sm" loading={adjusting}>
+            Aplicar
+          </Button>
+        </form>
+      )}
+    </div>
   );
 }
