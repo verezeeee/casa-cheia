@@ -1,4 +1,7 @@
+'use client';
+
 import { Spade } from '@phosphor-icons/react/dist/ssr';
+import { motion } from 'framer-motion';
 import type { ReactNode } from 'react';
 import { Logo } from './logo';
 
@@ -12,7 +15,12 @@ import { Logo } from './logo';
 export function AuthLayout({ children }: { children: ReactNode }) {
   return (
     <main className="flex min-h-[100dvh] flex-1 flex-col md:flex-row">
-      <div className="relative hidden flex-1 flex-col justify-between overflow-hidden bg-brand p-10 text-brand-foreground md:flex">
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.4 }}
+        className="relative hidden flex-1 flex-col justify-between overflow-hidden bg-brand p-10 text-brand-foreground md:flex"
+      >
         <Spade
           weight="fill"
           size={420}
@@ -32,10 +40,16 @@ export function AuthLayout({ children }: { children: ReactNode }) {
         <p className="relative text-xs text-brand-foreground/50">
           © {new Date().getFullYear()} Casa Cheia
         </p>
-      </div>
+      </motion.div>
 
       <div className="flex flex-1 items-center justify-center bg-background p-4 sm:p-8">
-        {children}
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+        >
+          {children}
+        </motion.div>
       </div>
     </main>
   );

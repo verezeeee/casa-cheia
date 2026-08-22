@@ -44,7 +44,7 @@ export function TableList() {
         <RevealItem key={table.id}>
           <Link
             href={`/tables/${table.id}`}
-            className="flex items-start justify-between gap-3 p-4 transition-colors hover:bg-surface-hover"
+            className="flex items-start justify-between gap-3 p-4 transition-all duration-200 hover:bg-surface-hover active:scale-[0.99]"
           >
             <div className="min-w-0">
               <p className="font-display font-semibold">{table.name}</p>

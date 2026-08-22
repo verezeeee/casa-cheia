@@ -54,7 +54,7 @@ export function TournamentList() {
         <RevealItem key={tournament.id}>
           <Link
             href={`/tournaments/${tournament.id}`}
-            className="flex items-start justify-between gap-3 p-4 transition-colors hover:bg-surface-hover"
+            className="flex items-start justify-between gap-3 p-4 transition-all duration-200 hover:bg-surface-hover active:scale-[0.99]"
           >
             <div className="min-w-0">
               <p className="font-display font-semibold">{tournament.name}</p>

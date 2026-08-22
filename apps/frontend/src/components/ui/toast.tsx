@@ -1,5 +1,6 @@
 'use client';
 
+import { motion } from 'framer-motion';
 import type { ReactNode } from 'react';
 import { cn } from './cn';
 
@@ -42,10 +43,13 @@ export function Toast({
   const assertive = type === 'error' || type === 'warning';
 
   return (
-    <div
+    <motion.div
       data-type={type}
       role={assertive ? 'alert' : 'status'}
       aria-live={assertive ? 'assertive' : 'polite'}
+      initial={{ opacity: 0, y: -6, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
       className={cn(
         'flex w-full items-start gap-3 rounded-lg border px-4 py-3 text-sm shadow-sm',
         styles[type],
@@ -67,6 +71,6 @@ export function Toast({
           <span aria-hidden="true">&times;</span>
         </button>
       )}
-    </div>
+    </motion.div>
   );
 }

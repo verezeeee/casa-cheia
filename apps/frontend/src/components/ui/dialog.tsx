@@ -1,5 +1,6 @@
 'use client';
 
+import { motion } from 'framer-motion';
 import { useEffect, useId, useRef, type MouseEvent, type ReactNode } from 'react';
 import { cn } from './cn';
 
@@ -32,6 +33,14 @@ export interface DialogProps {
  * Base de qualquer notificação que precise interromper o fluxo do usuário —
  * nunca `window.confirm`/`alert`, que é modal do navegador, fora do controle
  * visual do produto (ver `ConfirmDialog`, que usa este componente).
+ *
+ * Entrada animada (fade + scale) via `animate` amarrado a `open` — não
+ * `initial`/mount, porque o `<dialog>` nunca desmonta entre aberturas (só
+ * alterna `hidden`/`showModal`), então um `initial` só dispararia na
+ * primeira vez. Fechar continua instantâneo (sem esperar a animação): fazer
+ * o oposto exigiria destravar `hidden` do `open` e adiar o `close()` nativo
+ * até o fim da transição — complexidade que a saída não paga, diferente da
+ * abertura, que é o momento que o usuário de fato olha.
  */
 export function Dialog({ open, onClose, title, children, footer, className }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -68,13 +77,15 @@ export function Dialog({ open, onClose, title, children, footer, className }: Di
   }
 
   return (
-    <dialog
+    <motion.dialog
       ref={ref}
       hidden={!open}
       onClose={onClose}
       onCancel={onClose}
       onClick={handleBackdropClick}
       aria-labelledby={titleId}
+      animate={open ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.97 }}
+      transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
       className={cn(
         'fixed inset-0 m-auto max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm overflow-y-auto',
         'rounded-lg border border-border bg-surface p-0 text-foreground shadow-lg',
@@ -88,6 +99,6 @@ export function Dialog({ open, onClose, title, children, footer, className }: Di
         {children && <div className="mt-2 text-sm text-muted">{children}</div>}
       </div>
       {footer && <div className="flex justify-end gap-2 border-t border-border p-3">{footer}</div>}
-    </dialog>
+    </motion.dialog>
   );
 }

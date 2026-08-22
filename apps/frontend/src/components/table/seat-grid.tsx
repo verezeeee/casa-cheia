@@ -3,6 +3,7 @@
 import type { TableSeatDto } from '@poker-system/shared';
 import { UserRole } from '@poker-system/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { useState, type CSSProperties, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
@@ -199,6 +200,7 @@ export function SeatGrid({ tableId }: { tableId: string }) {
               isMine={seat.userId === user?.id}
               onSelect={() => setSelectedSeatNumber(seat.seatNumber)}
               style={seatPosition(index, seats.length)}
+              index={index}
             />
           ))}
         </div>
@@ -236,6 +238,7 @@ interface SeatChipProps {
   isMine: boolean;
   onSelect: () => void;
   style: CSSProperties;
+  index: number;
 }
 
 /**
@@ -243,18 +246,28 @@ interface SeatChipProps {
  * ajuste). `sm:absolute` com a posição vinda de `seatPosition` desenha a
  * mesa em elipse; sem essa classe (mobile) o `style` de posição é ignorado
  * (não tem efeito em `position: static`) e o botão flui como item de lista.
+ *
+ * Entrada com stagger por `index` — só `opacity` (não `scale`/`x`/`y`):
+ * o framer-motion gerencia `transform` inline quando anima essas
+ * propriedades, o que atropelaria as classes `sm:-translate-x-1/2
+ * sm:-translate-y-1/2` que centralizam o chip no ponto calculado. Como o
+ * `key` é `seat.seatNumber` (estável entre polls de 5s), a animação de
+ * montagem dispara uma vez só, não a cada refetch.
  */
-function SeatChip({ seat, isMine, onSelect, style }: SeatChipProps) {
+function SeatChip({ seat, isMine, onSelect, style, index }: SeatChipProps) {
   const vacant = seat.userId === null;
   const label = vacant
     ? `Assento ${seat.seatNumber}, vago`
     : `Assento ${seat.seatNumber}, ${seat.userName}${isMine ? ' (você)' : ''}, ${formatMoneySafe(seat.currentStack ?? '0')}`;
 
   return (
-    <button
+    <motion.button
       type="button"
       onClick={onSelect}
       style={style}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ delay: index * 0.04, duration: 0.3 }}
       aria-haspopup="dialog"
       aria-label={label}
       className={cn(
@@ -280,7 +293,7 @@ function SeatChip({ seat, isMine, onSelect, style }: SeatChipProps) {
           {isMine && <p className="text-[10px] font-semibold text-accent">Você</p>}
         </>
       )}
-    </button>
+    </motion.button>
   );
 }
 
