@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Geist, IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google';
+import { Fustat, IBM_Plex_Mono, Inter_Tight } from 'next/font/google';
 import { MotionProvider } from '@/components/providers/motion-provider';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { SessionProvider } from '@/components/providers/session-provider';
@@ -7,20 +7,21 @@ import { ServiceWorkerRegister } from '@/components/pwa/service-worker-register'
 import './globals.css';
 
 /**
- * Sistema tipográfico (ver design tokens em globals.css):
- * - Geist: grotesca de destaque — títulos e o número do saldo. Serifada
- *   ficava editorial demais para um software de gestão (era Fraunces antes;
- *   trocada por não combinar com o resto da interface).
- * - IBM Plex Sans: interface/corpo — legível em formulários e telas densas.
+ * Sistema tipográfico alinhado ao design system do AbacatePay (ver tokens de
+ * cor em globals.css):
+ * - Fustat: destaque — títulos, navegação, botões, número do saldo.
+ * - Inter Tight: corpo — legível em formulários e telas densas.
  * - IBM Plex Mono: dados tabulares (dinheiro, fichas, datas) com
- *   `tabular-nums`, para colunas alinharem como um livro-caixa de verdade.
+ *   `tabular-nums`, para colunas alinharem como um livro-caixa de verdade —
+ *   conceito próprio do produto, fora do escopo do AbacatePay (site sem
+ *   tabela de dados), mantido porque ainda é a escolha certa aqui.
  */
-const displayFont = Geist({
+const displayFont = Fustat({
   variable: '--font-display',
   subsets: ['latin'],
 });
 
-const bodyFont = IBM_Plex_Sans({
+const bodyFont = Inter_Tight({
   variable: '--font-body',
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
@@ -53,7 +54,10 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  themeColor: '#14110d',
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#e2e7f1' },
+    { media: '(prefers-color-scheme: dark)', color: '#12201f' },
+  ],
 };
 
 export default function RootLayout({

@@ -54,7 +54,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         aria-invalid={invalid || undefined}
         aria-describedby={describedBy}
         className={cn(
-          'h-11 w-full rounded-md border bg-background px-3 text-base text-foreground',
+          'h-11 w-full rounded-lg border bg-background px-3 text-base text-foreground',
           'placeholder:text-muted focus-visible:outline-none focus-visible:ring-2',
           'focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-1 focus-visible:ring-offset-background',
           'disabled:cursor-not-allowed disabled:opacity-60',

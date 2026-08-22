@@ -77,7 +77,7 @@ export function Dialog({ open, onClose, title, children, footer, className }: Di
       aria-labelledby={titleId}
       className={cn(
         'fixed inset-0 m-auto max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm overflow-y-auto',
-        'rounded-md border border-border bg-surface p-0 text-foreground shadow-lg',
+        'rounded-lg border border-border bg-surface p-0 text-foreground shadow-lg',
         className,
       )}
     >

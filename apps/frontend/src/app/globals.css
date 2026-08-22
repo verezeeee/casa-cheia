@@ -1,46 +1,48 @@
 @import 'tailwindcss';
 
 /*
- * Design tokens — "livro-caixa de casa de poker": feltro escuro, tinta e
- * papel de ledger, latão como destaque. Dark é o modo primário (uma casa de
- * poker de verdade funciona à noite); light é o modo alternativo, mesma
- * paleta em "papel".
+ * Design tokens — alinhados ao design system do AbacatePay (processador PIX
+ * do produto): verde-lima como ação primária, verde-petróleo para texto de
+ * destaque, fundo bege/azul-claro. Flat, sem gradiente vibrante; light é o
+ * modo primário (é o único que o próprio AbacatePay tem — nunca teve dark).
+ * O dark abaixo é derivado (mesmas relações de matiz) pra não regredir quem
+ * já usa o app com `prefers-color-scheme: dark`.
  */
 :root {
-  --background: #f6f1e4; /* parchment */
-  --foreground: #201c14; /* tinta quente */
-  --surface: #fbf8f0; /* cartão, um tom acima do fundo */
-  --surface-hover: #f1ead8;
-  --border: #ded2b0; /* régua de ledger */
-  --brand: #17352a; /* baize — feltro */
-  --brand-foreground: #f6f1e4;
-  --accent: #a97a2f; /* brass — ação primária (escurecido p/ contraste AA em parchment) */
-  --accent-foreground: #1c1508;
-  --danger: #9c3b34;
-  --danger-foreground: #fbf8f0;
-  --success: #2f6449;
-  --success-foreground: #fbf8f0;
-  --muted: #6b6455;
-  --focus-ring: #a97a2f;
+  --background: #e2e7f1; /* azul-claro — bg das seções, onde o conteúdo vive */
+  --foreground: #204749; /* verde-petróleo escuro — texto e títulos */
+  --surface: #ffffff; /* cartão */
+  --surface-hover: #f6f8fa;
+  --border: #e2e7f1; /* visível sobre --surface (branco), não sobre --background */
+  --brand: #1a3a3c; /* verde-petróleo mais escuro — bloco de destaque (saldo, painel de auth) */
+  --brand-foreground: #f6f8fa;
+  --accent: #9eea6c; /* verde-lima — ação primária */
+  --accent-foreground: #204749;
+  --danger: #b3261e;
+  --danger-foreground: #ffffff;
+  --success: #2f6b0c; /* verde escurecido a partir do primary-strong (#58c411) p/ contraste AA em texto sobre --background */
+  --success-foreground: #ffffff;
+  --muted: #4c5267;
+  --focus-ring: #58c411;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #14110d; /* ink */
-    --foreground: #f0e9d8; /* parchment claro */
-    --surface: #1c2820; /* baize escuro, o cartão se destaca da tinta */
-    --surface-hover: #223226;
-    --border: #33301f;
-    --brand: #2e5945;
-    --brand-foreground: #f0e9d8;
-    --accent: #d4a24e; /* brass mais claro para contraste em fundo escuro */
-    --accent-foreground: #1c1508;
-    --danger: #d66a5f;
-    --danger-foreground: #1c1508;
-    --success: #5fa37e;
-    --success-foreground: #0d1a13;
-    --muted: #a79e89;
-    --focus-ring: #d4a24e;
+    --background: #12201f;
+    --foreground: #eff1e7;
+    --surface: #1a2e2c;
+    --surface-hover: #223a37;
+    --border: #2c4441;
+    --brand: #1f3b38;
+    --brand-foreground: #eff1e7;
+    --accent: #9eea6c;
+    --accent-foreground: #12201f;
+    --danger: #e4746b;
+    --danger-foreground: #1c0f0d;
+    --success: #7fce4c;
+    --success-foreground: #0d1a0a;
+    --muted: #a9b0c2;
+    --focus-ring: #9eea6c;
   }
 }
 

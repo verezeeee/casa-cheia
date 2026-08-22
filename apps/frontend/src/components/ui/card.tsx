@@ -29,7 +29,7 @@ export function Card({ padding = 'md', title, footer, className, children, ...re
   return (
     <div
       className={cn(
-        'rounded-md border border-border bg-surface text-foreground shadow-sm',
+        'rounded-lg border border-border bg-surface text-foreground shadow-sm',
         paddings[padding],
         className,
       )}

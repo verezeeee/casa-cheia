@@ -19,18 +19,18 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   type?: 'button' | 'submit' | 'reset';
 }
 
+// Pill + inverte cor no hover + leve "pop" de escala — o padrão de botão do
+// AbacatePay (identidade flat, sem sombra/gradiente) aplicado aos 4 variants.
 const base =
-  'inline-flex items-center justify-center gap-2 rounded-md font-sans font-semibold ' +
-  'tracking-[0.01em] transition-colors duration-150 ' +
+  'inline-flex items-center justify-center gap-2 rounded-full font-sans font-semibold ' +
+  'tracking-[0.01em] transition-all duration-300 ' +
+  'hover:scale-[1.02] active:scale-[0.98] disabled:hover:scale-100 ' +
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ' +
   'focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-background ' +
   'disabled:cursor-not-allowed disabled:opacity-60';
 
-// Latão como placa pressionada: sombra interna sutil no primary, nunca flat.
 const variants: Record<ButtonVariant, string> = {
-  primary:
-    'bg-accent text-accent-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_1px_2px_rgba(0,0,0,0.25)] ' +
-    'hover:brightness-110 active:brightness-95',
+  primary: 'bg-accent text-accent-foreground hover:bg-foreground hover:text-accent',
   secondary: 'border border-border text-foreground hover:bg-surface-hover',
   danger: 'bg-danger text-danger-foreground hover:brightness-110',
   ghost: 'text-foreground hover:bg-surface-hover',
