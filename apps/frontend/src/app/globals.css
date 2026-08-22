@@ -91,6 +91,13 @@ body {
   background: linear-gradient(to right, var(--border) 0%, var(--border) 60%, transparent 100%);
 }
 
+/* Fundo escurecido do <dialog> nativo (usado por `Dialog`/`ConfirmDialog`).
+   CSS puro em vez da variante `backdrop:` do Tailwind — que não se mostrou
+   confiável para algo tão visível quanto isso. */
+dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

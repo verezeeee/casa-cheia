@@ -20,6 +20,15 @@ export interface DialogProps {
  * Clique fora do card fecha (checagem de bounding box — o clique no
  * `::backdrop` chega com `target` igual ao próprio `<dialog>`).
  *
+ * `inset-0 m-auto` reafirma a centralização que o navegador dá de graça a
+ * `dialog:modal` — o Preflight do Tailwind zera `margin` em `*`, o que
+ * quebra o truque de `margin: auto` do UA stylesheet e prende a caixa no
+ * canto superior esquerdo. `m-auto` é utilitário (camada `utilities`, depois
+ * da `base` do Preflight na cascata), então volta a vencer. O fundo
+ * escurecido (`::backdrop`) é regra própria em globals.css pelo mesmo
+ * motivo: a variante `backdrop:` do Tailwind não é confiável o bastante
+ * aqui para algo tão visível quanto isso.
+ *
  * Base de qualquer notificação que precise interromper o fluxo do usuário —
  * nunca `window.confirm`/`alert`, que é modal do navegador, fora do controle
  * visual do produto (ver `ConfirmDialog`, que usa este componente).
@@ -67,7 +76,8 @@ export function Dialog({ open, onClose, title, children, footer, className }: Di
       onClick={handleBackdropClick}
       aria-labelledby={titleId}
       className={cn(
-        'w-[calc(100%-2rem)] max-w-sm rounded-md border border-border bg-surface p-0 text-foreground shadow-lg backdrop:bg-black/50',
+        'fixed inset-0 m-auto max-h-[85dvh] w-[calc(100%-2rem)] max-w-sm overflow-y-auto',
+        'rounded-md border border-border bg-surface p-0 text-foreground shadow-lg',
         className,
       )}
     >
