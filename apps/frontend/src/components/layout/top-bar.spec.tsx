@@ -25,7 +25,7 @@ describe('TopBar', () => {
     render(<TopBar />);
 
     expect(screen.getByText('Ana')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Poker System/ })).toHaveAttribute('href', '/lobby');
+    expect(screen.getByRole('link', { name: /Casa Cheia/ })).toHaveAttribute('href', '/lobby');
   });
 
   it('chama logout ao clicar em Sair', () => {

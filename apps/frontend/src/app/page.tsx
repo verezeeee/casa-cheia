@@ -12,7 +12,7 @@ export default function Home() {
     <>
       <header className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6 sm:py-4">
         <span className="font-display text-lg font-semibold tracking-tight">
-          <span className="text-accent">♠</span> Poker System
+          <span className="text-accent">♠</span> Casa Cheia
         </span>
         <AuthStatus />
       </header>

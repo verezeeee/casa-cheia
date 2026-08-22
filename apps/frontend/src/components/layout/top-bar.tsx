@@ -16,7 +16,7 @@ export function TopBar() {
   return (
     <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
       <Link href="/lobby" className="font-display text-base font-semibold tracking-tight">
-        <span className="text-accent">♠</span> Poker System
+        <span className="text-accent">♠</span> Casa Cheia
       </Link>
       <div className="flex min-w-0 items-center gap-2">
         <span className="hidden truncate text-sm text-muted sm:inline">{user?.name}</span>

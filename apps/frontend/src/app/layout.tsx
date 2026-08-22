@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Fraunces, IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google';
+import { MotionProvider } from '@/components/providers/motion-provider';
 import { QueryProvider } from '@/components/providers/query-provider';
 import { SessionProvider } from '@/components/providers/session-provider';
 import { ServiceWorkerRegister } from '@/components/pwa/service-worker-register';
@@ -32,13 +33,13 @@ const monoFont = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Poker System',
+  title: 'Casa Cheia',
   description: 'Plataforma de poker online - cash games e torneios.',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'Poker System',
+    title: 'Casa Cheia',
   },
   icons: {
     icon: [
@@ -66,12 +67,14 @@ export default function RootLayout({
       className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground font-sans">
-        <QueryProvider>
-          <SessionProvider>
-            {children}
-            <ServiceWorkerRegister />
-          </SessionProvider>
-        </QueryProvider>
+        <MotionProvider>
+          <QueryProvider>
+            <SessionProvider>
+              {children}
+              <ServiceWorkerRegister />
+            </SessionProvider>
+          </QueryProvider>
+        </MotionProvider>
       </body>
     </html>
   );
