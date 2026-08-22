@@ -33,7 +33,7 @@ export function BottomNav() {
       aria-label="Navegação principal"
       className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)]"
     >
-      <ul className="mx-auto flex w-full max-w-3xl">
+      <ul className="mx-auto flex w-full max-w-3xl gap-1 p-1.5">
         {TABS.map((tab) => {
           const active = isActive(pathname, tab.matches);
           return (
@@ -42,7 +42,8 @@ export function BottomNav() {
                 href={tab.href}
                 aria-current={active ? 'page' : undefined}
                 className={cn(
-                  'flex min-h-14 flex-col items-center justify-center gap-0.5 text-xs font-medium transition-colors duration-150',
+                  'flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-full text-xs',
+                  'font-medium transition-all duration-300 hover:bg-surface-hover',
                   active ? 'text-accent' : 'text-muted',
                 )}
               >
