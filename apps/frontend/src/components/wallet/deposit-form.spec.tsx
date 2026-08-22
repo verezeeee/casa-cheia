@@ -34,13 +34,35 @@ describe('DepositForm', () => {
     fireEvent.change(screen.getByLabelText('Valor'), { target: { value: '50.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Gerar QR Code PIX' }));
 
-    await waitFor(() =>
-      expect(screen.getByDisplayValue('000201-copia-e-cola')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText('000201-copia-e-cola')).toBeInTheDocument());
+    expect(screen.getByText('R$ 50,00')).toBeInTheDocument();
     expect(walletApi.createDeposit).toHaveBeenCalledWith(
       { amount: '50.00' },
       expect.any(String) as unknown,
     );
+  });
+
+  it('copia o código PIX para a área de transferência e mostra confirmação', async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    (walletApi.createDeposit as jest.Mock).mockResolvedValue({
+      id: 'chg_1',
+      amount: '50.00',
+      status: 'PENDING',
+      qrCodePayload: '000201-copia-e-cola',
+      qrCodeImageUrl: null,
+      expiresAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    renderWithClient(<DepositForm />);
+    fireEvent.change(screen.getByLabelText('Valor'), { target: { value: '50.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar QR Code PIX' }));
+    await waitFor(() => expect(screen.getByText('000201-copia-e-cola')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copiar código PIX' }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('000201-copia-e-cola'));
+    expect(await screen.findByRole('button', { name: 'Código copiado ✓' })).toBeInTheDocument();
   });
 
   it('mostra o erro da API quando a criação falha', async () => {
