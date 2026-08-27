@@ -1,3 +1,4 @@
+import { setAccessToken } from '../http-client';
 import { tournamentApi } from './tournament';
 
 const API_URL = 'http://localhost:3001/api';
@@ -79,5 +80,72 @@ describe('api/tournament', () => {
     const [url, init] = lastCall();
     expect(url).toBe(`${API_URL}/tournaments/trn-1/finish`);
     expect(init.body).toBeUndefined();
+  });
+
+  it('redraw faz POST em .../redraw sem corpo', async () => {
+    mockJsonResponse({ tournamentId: 'trn-1', tables: [] });
+    await tournamentApi.redraw('trn-1');
+    const [url, init] = lastCall();
+    expect(url).toBe(`${API_URL}/tournaments/trn-1/redraw`);
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
+  it.each([
+    ['startClock', 'start'],
+    ['pauseClock', 'pause'],
+    ['resumeClock', 'resume'],
+    ['nextLevel', 'next'],
+    ['previousLevel', 'previous'],
+  ] as const)('%s faz POST em /tournaments/:id/clock/%s', async (fn, action) => {
+    mockJsonResponse({ clockStatus: 'RUNNING' });
+    await tournamentApi[fn]('trn-1');
+    const [url, init] = lastCall();
+    expect(url).toBe(`${API_URL}/tournaments/trn-1/clock/${action}`);
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
+  it('updateBlindLevel faz PATCH em /tournaments/:id/blind-levels/:levelNumber', async () => {
+    mockJsonResponse({ clockStatus: 'RUNNING' });
+    await tournamentApi.updateBlindLevel('trn-1', 4, { durationSeconds: 900 });
+    const [url, init] = lastCall();
+    expect(url).toBe(`${API_URL}/tournaments/trn-1/blind-levels/4`);
+    expect(init.method).toBe('PATCH');
+    expect(init.body).toBe(JSON.stringify({ durationSeconds: 900 }));
+  });
+
+  describe('rotas públicas de display (TV sem login)', () => {
+    // A TV do salão não tem sessão: `httpClient` só anexa `Authorization`
+    // quando há token em memória, então a chamada precisa sair mesmo assim.
+    beforeEach(() => setAccessToken(null));
+    afterEach(() => setAccessToken(null));
+
+    it('getClock faz GET em /display/tournaments/:id/clock sem Authorization', async () => {
+      mockJsonResponse({ clockStatus: 'RUNNING', serverTime: '2026-08-22T20:00:00.000Z' });
+      await tournamentApi.getClock('trn-1');
+      const [url, init] = lastCall();
+      expect(url).toBe(`${API_URL}/display/tournaments/trn-1/clock`);
+      expect(init.method).toBe('GET');
+      expect(init.headers as Record<string, string>).not.toHaveProperty('Authorization');
+    });
+
+    it('getTableMap faz GET em /display/tournaments/:id/tables sem Authorization', async () => {
+      mockJsonResponse({ tournamentId: 'trn-1', tables: [] });
+      await tournamentApi.getTableMap('trn-1');
+      const [url, init] = lastCall();
+      expect(url).toBe(`${API_URL}/display/tournaments/trn-1/tables`);
+      expect(init.method).toBe('GET');
+      expect(init.headers as Record<string, string>).not.toHaveProperty('Authorization');
+    });
+
+    it('anexa Authorization quando o staff está logado (backend ignora)', async () => {
+      setAccessToken('token-staff');
+      mockJsonResponse({ tournamentId: 'trn-1', tables: [] });
+      await tournamentApi.getTableMap('trn-1');
+      expect((lastCall()[1].headers as Record<string, string>).Authorization).toBe(
+        'Bearer token-staff',
+      );
+    });
   });
 });

@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
 import { tournamentApi } from '@/lib/api/tournament';
-import { Badge, Button, Card, ErrorState, Input, Skeleton, Toast } from '@/components/ui';
+import { Badge, Button, Card, ErrorState, Input, Skeleton, TextLink, Toast } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
 import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
 
@@ -44,6 +44,16 @@ const STATUS_GROUP_LABEL: Record<TournamentEntryStatus, string> = {
   [TournamentEntryStatus.ELIMINATED]: 'Eliminados',
   [TournamentEntryStatus.REFUNDED]: 'Reembolsados',
 };
+
+/**
+ * "Ticket" do jogador. `null` enquanto o torneio não atribuiu assento (ou em
+ * entries anteriores ao MVP de mesas, onde os campos nem existem no payload).
+ */
+function seatLabel(entry: TournamentEntryDto): string | null {
+  return entry.tableNumber != null && entry.seatNumber != null
+    ? `Mesa ${entry.tableNumber} · Assento ${entry.seatNumber}`
+    : null;
+}
 
 export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const { user } = useSession();
@@ -124,6 +134,7 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
 
   const isAdmin = user?.role === UserRole.ADMIN;
   const myEntry = tournament.entries.find((e) => e.userId === user?.id);
+  const myTicket = myEntry ? seatLabel(myEntry) : null;
   const canRegister =
     !myEntry &&
     tournament.status === TournamentStatus.REGISTERING &&
@@ -155,6 +166,19 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
         <p className="mt-2 text-sm text-muted">
           {tournament.registeredPlayers}/{tournament.maxPlayers} inscritos
         </p>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+          <TextLink href={`/tournaments/${tournamentId}/tables`}>Ver mesas</TextLink>
+          <TextLink href={`/tournaments/${tournamentId}/clock`}>Controlar relógio</TextLink>
+          {/* Nova aba: a TV roda num segundo monitor enquanto o staff
+              continua operando nesta tela. */}
+          <TextLink
+            href={`/display/tournaments/${tournamentId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Tela de TV
+          </TextLink>
+        </div>
 
         {canRegister && (
           <Button
@@ -166,7 +190,12 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
             Inscrever-se
           </Button>
         )}
-        {myEntry && <p className="mt-3 text-sm text-success">Você está inscrito neste torneio.</p>}
+        {myEntry &&
+          (myTicket ? (
+            <p className="font-display mt-3 text-lg font-semibold text-success">{myTicket}</p>
+          ) : (
+            <p className="mt-3 text-sm text-success">Você está inscrito neste torneio.</p>
+          ))}
 
         {isAdmin && canFinish && (
           <Button
@@ -256,6 +285,8 @@ function EntryRow({
   onSubmitEliminate,
   eliminating,
 }: EntryRowProps) {
+  const ticket = seatLabel(entry);
+
   return (
     <li className="flex flex-col gap-1 pt-2 first:pt-0">
       <div className="flex items-center justify-between gap-2">
@@ -267,6 +298,7 @@ function EntryRow({
         {entry.prizeAmount
           ? `Prêmio ${formatMoneySafe(entry.prizeAmount)}`
           : `${entry.chipStack} fichas`}
+        {ticket ? ` · ${ticket}` : ''}
       </p>
 
       {isAdmin && entry.status === TournamentEntryStatus.REGISTERED && (

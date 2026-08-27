@@ -6,6 +6,7 @@
  * ...). Duplicá-los aqui abriria espaço para divergência silenciosa entre as
  * duas pontas.
  */
+import type { BlindLevelDto } from '@poker-system/shared';
 
 /** Corpo de `POST /auth/register`. */
 export interface RegisterRequest {
@@ -75,10 +76,56 @@ export interface CreateTournamentRequest {
   maxPlayers: number;
   /** ISO 8601. */
   startsAt: string;
+  /** Assentos por mesa aberta pelo torneio. Ausente = 9 (default do backend). */
+  tableCapacity?: number;
+  /** Preset de blinds a COPIAR na criação. Ausente = torneio sem relógio. */
+  blindStructureId?: string;
+  /** `false`/ausente = freezeout. */
+  allowReentry?: boolean;
+  /** Reentradas por jogador. Ausente = ilimitado. */
+  maxReentries?: number;
+  /** Último nível em que se pode reentrar. Ausente = sem corte. */
+  reentryUntilLevel?: number;
   prizes: TournamentPrizeInput[];
 }
 
 /** Corpo de `POST /tournaments/:id/entries/:entryId/eliminate` (ADMIN). */
 export interface EliminateEntryRequest {
   finalPosition?: number;
+}
+
+/**
+ * Um nível na criação/substituição de um preset de blinds.
+ *
+ * Herda os campos obrigatórios do DTO de resposta para não divergir dele; o
+ * que muda no request é só a opcionalidade (`ante`, `isBreak` e `breakLabel`
+ * têm default no backend) — `breakLabel` é `string | undefined` aqui e
+ * `string | null` na resposta.
+ */
+export interface BlindLevelInput extends Pick<
+  BlindLevelDto,
+  'levelNumber' | 'smallBlind' | 'bigBlind' | 'durationSeconds'
+> {
+  ante?: number;
+  isBreak?: boolean;
+  /** Obrigatório quando `isBreak` — validado no backend. */
+  breakLabel?: string;
+}
+
+/**
+ * Corpo de `POST /blind-structures` e de `PUT /blind-structures/:id` (ADMIN).
+ * O mesmo tipo serve aos dois porque o PUT substitui a grade inteira.
+ */
+export interface CreateBlindStructureRequest {
+  name: string;
+  /** `levelNumber` sequencial de 1 a N, sem buracos. */
+  levels: BlindLevelInput[];
+}
+
+/** Corpo de `PATCH /tournaments/:id/blind-levels/:levelNumber` (ADMIN). Parcial. */
+export interface UpdateBlindLevelRequest {
+  smallBlind?: number;
+  bigBlind?: number;
+  ante?: number;
+  durationSeconds?: number;
 }

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
   UnauthorizedException,
@@ -15,7 +16,6 @@ import type {
   WalletTransactionDto,
 } from '@poker-system/shared';
 import { Prisma, type Wallet, type WebhookEvent } from '@prisma/client';
-import { createHmac } from 'node:crypto';
 import { timingSafeEqual } from '../common/crypto/timing-safe-equal';
 import {
   AbacatePayClient,
@@ -46,6 +46,8 @@ const DEFAULT_PAGE_SIZE = 20;
 
 @Injectable()
 export class WalletService {
+  private readonly logger = new Logger(WalletService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -142,6 +144,13 @@ export class WalletService {
       }
       throw error;
     }
+
+    // Sem valor nem dado de cliente no log — só o id do gateway, para
+    // correlacionar com o painel do AbacatePay/suporte ao investigar um
+    // depósito específico.
+    this.logger.log(
+      `[createDeposit] usuário ${userId} — PIX ${result.externalId} criado no gateway.`,
+    );
 
     const charge = await this.prisma.pixCharge.create({
       data: {
@@ -256,24 +265,43 @@ export class WalletService {
   }
 
   /**
-   * Processa um webhook do AbacatePay já com o corpo bruto (a assinatura é
-   * calculada sobre os bytes exatos — nunca sobre um JSON re-serializado,
-   * que pode divergir em espaços/ordem de chaves e invalidar o HMAC).
+   * Processa um webhook do AbacatePay já com o corpo bruto.
    *
-   * NOTA: o nome do evento (`event.eventType`, ver `parseWebhookEvent`) é
-   * confirmado contra o enum real do AbacatePay v2 (`transparent.completed`
-   * etc., via client oficial `abacatepay-mcp`). O envelope exato do corpo
-   * (`{id, event, data: {id}}`) e o esquema de assinatura HMAC continuam
-   * sem confirmação por um webhook real recebido — o cliente MCP só CHAMA
-   * a API, não documenta o payload que ela ENVIA para webhooks. Ajustar se
-   * um webhook real divergir.
+   * CONFIRMADO CONTRA UMA ENTREGA REAL (23/08/2026, `transparent.completed`,
+   * dev mode — ver `AbacatePayConfig` em `integrations/abacatepay/types.ts`
+   * para o payload completo). Duas coisas que a versão anterior deste
+   * método adivinhava ERRADO, agora corrigidas:
+   *
+   * 1. Auth não é HMAC. O AbacatePay manda o segredo configurado NO
+   *    WEBHOOK, em texto puro, no header `X-Webhook-Secret` (com fallback
+   *    na query string `?webhookSecret=...` — mesmo valor, redundante,
+   *    provavelmente para proxies que descartam headers custom). Não há
+   *    timestamp nem janela anti-replay: a proteção contra replay vem só
+   *    do dedup por `externalEventId` abaixo (`@@unique([provider,
+   *    externalEventId])`) — um webhook capturado e reenviado é um no-op,
+   *    não chega a reprocessar, mas também não é rejeitado por "idade".
+   *    Existe também um `X-Webhook-Signature` (aparenta HMAC/base64) que
+   *    este service NÃO verifica — o secret em texto puro já autentica a
+   *    origem, e adicionar uma segunda verificação cujo algoritmo não está
+   *    documentado só arriscaria rejeitar webhooks legítimos por engano.
+   * 2. O id do recurso não é `data.id` — é `data.<recurso>.id`, onde
+   *    `<recurso>` é o primeiro segmento de `event` antes do ponto
+   *    (`transparent` em `transparent.completed`). Ver `parseWebhookEvent`.
+   *
+   * `transfer.completed`/`transfer.failed` (reconciliação de saque) ainda
+   * NÃO foram vistos numa entrega real — só `transparent.completed`. O
+   * nome do evento é a melhor hipótese contra o enum do AbacatePay v2 (não
+   * há um evento `pix.*`/`transaction.*`; `payout.*` é o outro par do
+   * enum, mas cobre `createPayout` — saldo para chave PIX da PRÓPRIA loja,
+   * fluxo que este service não expõe). Ajustar `webhookProcessors()` e
+   * `parseWebhookEvent` se uma entrega real divergir.
    */
   async handleWebhook(
     rawBody: Buffer,
-    signatureHeader: string | undefined,
-    timestampHeader: string | undefined,
+    secretHeader: string | undefined,
+    secretQuery: string | undefined,
   ): Promise<void> {
-    this.verifyWebhookSignature(rawBody, signatureHeader, timestampHeader);
+    this.verifyWebhookSecret(secretHeader, secretQuery);
 
     const event = parseWebhookEvent(rawBody);
 
@@ -284,7 +312,12 @@ export class WalletService {
           provider: 'abacatepay',
           externalEventId: event.externalEventId,
           eventType: event.eventType,
-          signature: signatureHeader ?? '',
+          // Coluna nasceu para uma assinatura HMAC; hoje guarda o secret
+          // recebido (header ou query), só como trilha auditável de
+          // "o que provou a origem desta requisição" — não é mais um
+          // segredo que precise ficar oculto (é o mesmo valor configurado
+          // em `ABACATEPAY_WEBHOOK_SECRET`, já em texto puro no request).
+          signature: secretHeader ?? secretQuery ?? '',
           payload: event.raw,
         },
       });
@@ -297,11 +330,8 @@ export class WalletService {
       throw error;
     }
 
-    // Nosso depósito é sempre um PIX "transparente" (ver AbacatePayClient),
-    // então o evento de pagamento confirmado é `transparent.completed` —
-    // `billing.paid` não existe no enum de eventos do AbacatePay v2
-    // (confirmado contra o client oficial `abacatepay-mcp`).
-    if (event.eventType !== 'transparent.completed') {
+    const processEvent = this.webhookProcessors()[event.eventType];
+    if (!processEvent) {
       await this.prisma.webhookEvent.update({
         where: { id: webhookEvent.id },
         data: { processedAt: new Date() },
@@ -310,7 +340,7 @@ export class WalletService {
     }
 
     try {
-      await this.creditDeposit(event.chargeExternalId);
+      await processEvent(event.dataId);
       await this.prisma.webhookEvent.update({
         where: { id: webhookEvent.id },
         data: { processedAt: new Date() },
@@ -324,6 +354,19 @@ export class WalletService {
       });
       throw error;
     }
+  }
+
+  /** Dispatch de `event.eventType` → handler. Ver nota em `handleWebhook`. */
+  private webhookProcessors(): Record<
+    string,
+    ((dataId: string) => Promise<void>) | undefined
+  > {
+    return {
+      'transparent.completed': (dataId) => this.creditDeposit(dataId),
+      'transfer.completed': (dataId) => this.completeWithdrawal(dataId),
+      'transfer.failed': (dataId) =>
+        this.failWithdrawal(dataId, 'Transferência recusada pelo gateway.'),
+    };
   }
 
   private async creditDeposit(chargeExternalId: string): Promise<void> {
@@ -354,6 +397,73 @@ export class WalletService {
       await tx.pixCharge.update({
         where: { id: charge.id },
         data: { status: 'PAID', paidAt: new Date() },
+      });
+    });
+  }
+
+  /**
+   * Saque que o gateway concluiu — só atualiza status/`processedAt`. O
+   * saldo já foi debitado (reservado) em `requestWithdrawal`, na hora do
+   * pedido; sucesso na entrega não move dinheiro de novo.
+   */
+  private async completeWithdrawal(externalId: string): Promise<void> {
+    const withdrawal = await this.prisma.pixWithdrawal.findUnique({
+      where: { externalId },
+    });
+    if (!withdrawal) {
+      throw new NotFoundException(
+        `PixWithdrawal não encontrado: ${externalId}.`,
+      );
+    }
+    // Defesa redundante ao dedup de WebhookEvent: evita reprocessar um
+    // saque que já saiu de PROCESSING.
+    if (withdrawal.status !== 'PROCESSING') return;
+
+    await this.prisma.pixWithdrawal.update({
+      where: { id: withdrawal.id },
+      data: { status: 'COMPLETED', processedAt: new Date() },
+    });
+  }
+
+  /**
+   * Saque que o gateway aceitou (`PROCESSING`) e depois falhou de forma
+   * assíncrona — diferente da falha SÍNCRONA em `requestWithdrawal` (4xx
+   * imediato, já estornada ali). Aqui o valor já estava reservado desde o
+   * pedido e precisa voltar agora. Lançamento inverso, nunca edita o débito
+   * original (ledger append-only) — mesmo padrão da falha síncrona.
+   */
+  private async failWithdrawal(
+    externalId: string,
+    reason: string,
+  ): Promise<void> {
+    const withdrawal = await this.prisma.pixWithdrawal.findUnique({
+      where: { externalId },
+    });
+    if (!withdrawal) {
+      throw new NotFoundException(
+        `PixWithdrawal não encontrado: ${externalId}.`,
+      );
+    }
+    if (withdrawal.status !== 'PROCESSING') return;
+
+    const wallet = await this.prisma.wallet.findUniqueOrThrow({
+      where: { userId: withdrawal.userId },
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.applyLedgerEntry(tx, wallet.id, {
+        type: 'PIX_WITHDRAWAL',
+        amount: withdrawal.amount,
+        idempotencyKey: `withdrawal-webhook-reversal:${withdrawal.id}`,
+        description: 'Estorno de saque PIX falhado após aceite do gateway',
+      });
+      await tx.pixWithdrawal.update({
+        where: { id: withdrawal.id },
+        data: {
+          status: 'FAILED',
+          failureReason: reason,
+          processedAt: new Date(),
+        },
       });
     });
   }
@@ -426,36 +536,26 @@ export class WalletService {
     return transaction;
   }
 
-  private verifyWebhookSignature(
-    rawBody: Buffer,
-    signatureHeader: string | undefined,
-    timestampHeader: string | undefined,
+  /**
+   * O AbacatePay não assina o corpo — manda o segredo configurado no
+   * webhook em texto puro (header, com a query string como fallback; ver
+   * docblock de `handleWebhook`). Comparação em tempo constante mesmo
+   * assim: é uma igualdade de segredo, o mesmo raciocínio de qualquer
+   * comparação de token/senha.
+   */
+  private verifyWebhookSecret(
+    secretHeader: string | undefined,
+    secretQuery: string | undefined,
   ): void {
     const config = this.configService.get<AbacatePayConfig>('abacatePay') ?? {};
-    const secret = config.webhookSecret ?? '';
-    const tolerance = config.webhookToleranceSeconds ?? 300;
+    const configured = config.webhookSecret ?? '';
+    const provided = secretHeader ?? secretQuery;
 
-    if (!signatureHeader || !timestampHeader) {
-      throw new UnauthorizedException('Assinatura do webhook ausente.');
+    if (!provided) {
+      throw new UnauthorizedException('Secret do webhook ausente.');
     }
-
-    const timestamp = Number(timestampHeader);
-    const nowSeconds = Date.now() / 1000;
-    if (
-      !Number.isFinite(timestamp) ||
-      Math.abs(nowSeconds - timestamp) > tolerance
-    ) {
-      throw new UnauthorizedException(
-        'Timestamp do webhook fora da janela anti-replay.',
-      );
-    }
-
-    const expected = createHmac('sha256', secret)
-      .update(`${timestampHeader}.${rawBody.toString('utf8')}`)
-      .digest('hex');
-
-    if (!timingSafeEqual(expected, signatureHeader)) {
-      throw new UnauthorizedException('Assinatura do webhook inválida.');
+    if (!timingSafeEqual(configured, provided)) {
+      throw new UnauthorizedException('Secret do webhook inválido.');
     }
   }
 
@@ -482,11 +582,19 @@ function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60_000);
 }
 
-/** Shape mínimo assumido do payload do webhook — ver nota em `handleWebhook`. */
+/**
+ * Shape do payload do webhook — CONFIRMADO contra uma entrega real de
+ * `transparent.completed` (ver docblock de `handleWebhook`):
+ * `{id, event, apiVersion, devMode, data: {transparent: {id, ...}, ...}}`.
+ * `dataId` é o id da entidade afetada — `data.transparent.id` para
+ * `transparent.*`, por inferência `data.transfer.id` para `transfer.*`
+ * (mesmo padrão `data.<recurso>.id`, onde `<recurso>` é o primeiro
+ * segmento de `event` antes do ponto — não confirmado por entrega real).
+ */
 interface ParsedWebhookEvent {
   externalEventId: string;
   eventType: string;
-  chargeExternalId: string;
+  dataId: string;
   raw: Prisma.InputJsonValue;
 }
 
@@ -501,22 +609,29 @@ function parseWebhookEvent(rawBody: Buffer): ParsedWebhookEvent {
   const externalEventId = body.id;
   const eventType = body.event;
   const data = body.data as Record<string, unknown> | undefined;
-  const chargeExternalId = data?.id;
+  // `<recurso>` = primeiro segmento de `eventType` ("transparent" de
+  // "transparent.completed"). Ver docblock da interface acima.
+  const resource =
+    typeof eventType === 'string' ? eventType.split('.')[0] : undefined;
+  const resourceData = resource
+    ? (data?.[resource] as Record<string, unknown> | undefined)
+    : undefined;
+  const dataId = resourceData?.id;
 
   if (
     typeof externalEventId !== 'string' ||
     typeof eventType !== 'string' ||
-    typeof chargeExternalId !== 'string'
+    typeof dataId !== 'string'
   ) {
     throw new BadRequestException(
-      'Payload do webhook fora do contrato esperado (id/event/data.id).',
+      'Payload do webhook fora do contrato esperado (id/event/data.<recurso>.id).',
     );
   }
 
   return {
     externalEventId,
     eventType,
-    chargeExternalId,
+    dataId,
     raw: body as Prisma.InputJsonValue,
   };
 }

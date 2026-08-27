@@ -111,3 +111,26 @@ export function formatDateTimeSafe(value: string, fallback = '—'): string {
     return fallback;
   }
 }
+
+/**
+ * Formata uma duração em milissegundos como contagem regressiva: `mm:ss`, ou
+ * `h:mm:ss` a partir de uma hora (nível de torneio raramente passa disso, mas
+ * um intervalo longo passa).
+ *
+ * Arredonda para CIMA: um nível de 20 min começa exibindo "20:00" (e não
+ * "19:59"), e "00:01" só vira "00:00" quando o tempo realmente acabou.
+ *
+ * Ao contrário de `formatMoney`/`formatDateTime`, entrada inválida aqui NÃO
+ * lança: o argumento é um número calculado localmente (relógio derivado de
+ * `levelEndsAt`), não uma string de contrato com a API — e a TV do salão não
+ * pode quebrar por um `NaN` transitório.
+ */
+export function formatCountdown(ms: number): string {
+  const totalSeconds = Number.isFinite(ms) ? Math.max(0, Math.ceil(ms / 1000)) : 0;
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  const pad = (value: number) => String(value).padStart(2, '0');
+
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
+}

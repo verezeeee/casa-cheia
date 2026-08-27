@@ -30,3 +30,19 @@ export * from './interfaces/tournament-summary.dto';
 export * from './interfaces/tournament-entry.dto';
 export * from './interfaces/tournament-detail-response.interface';
 export * from './interfaces/paginated-response.interface';
+
+// --- MT / Mesas de Torneio ------------------------------------------------
+// Enums espelham 1:1 (mesmos literais, mesma ordem) os enums de `base.prisma`.
+export * from './enums/tournament-clock-status.enum';
+export * from './enums/tournament-table-status.enum';
+export * from './enums/tournament-seat-reason.enum';
+
+// Estrutura de blinds (preset) e relógio.
+export * from './interfaces/blind-level.dto';
+export * from './interfaces/blind-structure.dto';
+export * from './interfaces/tournament-clock.dto';
+
+// Mapa de mesas do torneio.
+export * from './interfaces/tournament-seat.dto';
+export * from './interfaces/tournament-table.dto';
+export * from './interfaces/tournament-table-map.dto';

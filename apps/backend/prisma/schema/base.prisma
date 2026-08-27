@@ -167,3 +167,49 @@ enum TournamentEntryStatus {
   PAID
   REFUNDED
 }
+
+/// Estado do relógio de blinds do torneio (MT-DB-01).
+///
+/// - NOT_STARTED: torneio criado, relógio nunca iniciado. `currentLevelNumber`
+///   é nulo.
+/// - RUNNING: nível corrente correndo. `levelEndsAt` preenchido e
+///   `clockRemainingMs` NULO — o tempo restante é derivado do relógio do
+///   SERVIDOR (`levelEndsAt - now`), nunca do dispositivo que exibe.
+/// - PAUSED: relógio congelado. `levelEndsAt` nulo e `clockRemainingMs`
+///   preenchido — sem essa coluna, pausar perderia o restante do nível.
+/// - FINISHED: último nível concluído. Terminal.
+///
+/// A coerência RUNNING⇔`levelEndsAt` / PAUSED⇔`clockRemainingMs` é reforçada
+/// no banco por `CHECK` (`tournaments_clock_state_coherent`, MT-DB-05).
+enum TournamentClockStatus {
+  NOT_STARTED
+  RUNNING
+  PAUSED
+  FINISHED
+}
+
+/// Estado operacional de uma mesa de torneio (MT-DB-01).
+///
+/// - OPEN: mesa em uso, recebe assentos.
+/// - CLOSED: mesa quebrada pelo rebalanceamento. Terminal e definitivo — não
+///   se reabre uma mesa fechada; abre-se uma nova com outro `tableNumber`,
+///   preservando a trilha histórica dos assentos que ela teve.
+enum TournamentTableStatus {
+  OPEN
+  CLOSED
+}
+
+/// Motivo da atribuição de um assento de torneio (MT-DB-01).
+///
+/// - INITIAL: primeira alocação da inscrição (incluindo reentry, que também
+///   entra por distribuição inicial sobre o estado corrente).
+/// - BALANCE: movido pelo rebalanceamento entre mesas desiguais.
+/// - BREAK: movido porque a mesa de origem foi quebrada.
+/// - MANUAL_REDRAW: sorteio manual disparado pelo diretor do torneio — o único
+///   motivo em que `TournamentSeat.movedById` é obrigatório (há um ator humano).
+enum TournamentSeatReason {
+  INITIAL
+  BALANCE
+  BREAK
+  MANUAL_REDRAW
+}

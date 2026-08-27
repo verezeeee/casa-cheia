@@ -1,10 +1,13 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
+  IsBoolean,
   IsInt,
   IsISO8601,
   IsOptional,
+  IsUUID,
   Matches,
+  Max,
   Min,
   MaxLength,
   MinLength,
@@ -53,6 +56,47 @@ export class CreateTournamentDto {
     message: 'guaranteedPrize deve ser um decimal monetário.',
   })
   guaranteedPrize?: string;
+
+  /**
+   * Preset de blinds a COPIAR para dentro do torneio (MT-BE-03). Os níveis são
+   * duplicados na criação: editar o preset depois não altera este torneio.
+   * Ausente = torneio sem relógio de blinds (retrocompatível).
+   */
+  @IsOptional()
+  @IsUUID()
+  blindStructureId?: string;
+
+  /**
+   * Capacidade das mesas abertas por este torneio. Default 9 aplicado no
+   * service (e não como valor inicial da propriedade) porque o default de
+   * classe depende de `exposeDefaultValues` do class-transformer — `?? 9` no
+   * service é uma linha e não depende de configuração do pipe.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2)
+  @Max(10)
+  tableCapacity?: number;
+
+  /** Reentry (MT-BE-09). `false` = freezeout, o comportamento anterior. */
+  @IsOptional()
+  @IsBoolean()
+  allowReentry?: boolean;
+
+  /** Quantas REENTRADAS por jogador (fora a inscrição original). Nulo = ilimitado. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  maxReentries?: number;
+
+  /** Último nível de blind em que ainda se pode reentrar. Nulo = sem corte. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  reentryUntilLevel?: number;
 
   /**
    * Grade de premiação completa. A soma dos `percentage` precisa fechar

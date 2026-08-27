@@ -1,4 +1,5 @@
 export { Badge, type BadgeProps, type BadgeVariant } from './badge';
+export { BackLink, type BackLinkProps } from './back-link';
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from './button';
 export { Card, type CardPadding, type CardProps } from './card';
 export { cn } from './cn';

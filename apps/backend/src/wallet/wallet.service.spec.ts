@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { Prisma, type PixCharge, type Wallet } from '@prisma/client';
-import { createHmac } from 'node:crypto';
 import {
   AbacatePayRequestError,
   AbacatePayUnavailableError,
@@ -33,7 +32,6 @@ const WALLET_CONFIG = {
 };
 const ABACATEPAY_CONFIG = {
   webhookSecret: 'shh-secret',
-  webhookToleranceSeconds: 300,
 };
 
 /** Fake mínimo de `PrismaService`, com o `tx` interativo compartilhado entre chamadas. */
@@ -55,6 +53,7 @@ function buildPrisma() {
       create: jest.fn(),
       update: jest.fn(),
       findFirst: jest.fn(),
+      findUnique: jest.fn(),
     },
     webhookEvent: { create: jest.fn(), update: jest.fn() },
     $transaction: jest.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
@@ -395,55 +394,66 @@ describe('WalletService', () => {
   });
 
   describe('handleWebhook', () => {
-    function sign(body: string, timestamp: string): string {
-      return createHmac('sha256', ABACATEPAY_CONFIG.webhookSecret)
-        .update(`${timestamp}.${body}`)
-        .digest('hex');
+    const SECRET = ABACATEPAY_CONFIG.webhookSecret;
+
+    /**
+     * Envelope confirmado contra uma entrega real do AbacatePay (23/08/2026,
+     * `transparent.completed`, dev mode) — ver docblock de `handleWebhook`.
+     * `resource` é o primeiro segmento de `event` ("transparent" de
+     * "transparent.completed"); `data[resource].id` é o que o service lê.
+     */
+    function webhookBody(
+      eventId: string,
+      event: string,
+      resource: string,
+      dataId: string,
+    ): string {
+      return JSON.stringify({
+        id: eventId,
+        event,
+        apiVersion: 2,
+        devMode: true,
+        data: { [resource]: { id: dataId } },
+      });
     }
 
-    it('rejeita sem assinatura/timestamp', async () => {
+    it('rejeita sem secret (nem header nem query)', async () => {
       const { service } = buildService();
       await expect(
         service.handleWebhook(Buffer.from('{}'), undefined, undefined),
       ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
-    it('rejeita timestamp fora da janela anti-replay', async () => {
+    it('rejeita secret inválido', async () => {
       const { service } = buildService();
-      const body = '{}';
-      const oldTimestamp = String(Math.floor(Date.now() / 1000) - 10_000);
-
       await expect(
-        service.handleWebhook(
-          Buffer.from(body),
-          sign(body, oldTimestamp),
-          oldTimestamp,
-        ),
+        service.handleWebhook(Buffer.from('{}'), 'secret-forjado', undefined),
       ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
-    it('rejeita assinatura inválida', async () => {
-      const { service } = buildService();
-      const body = '{}';
-      const timestamp = String(Math.floor(Date.now() / 1000));
+    it('aceita o secret vindo só da query string (fallback confirmado no request real)', async () => {
+      const { service, prisma } = buildService();
+      const body = webhookBody(
+        'evt-fallback',
+        'checkout.disputed',
+        'checkout',
+        'whatever',
+      );
+      prisma.webhookEvent.create.mockResolvedValue({ id: 'we-fb' });
 
       await expect(
-        service.handleWebhook(
-          Buffer.from(body),
-          'assinatura-forjada',
-          timestamp,
-        ),
-      ).rejects.toBeInstanceOf(UnauthorizedException);
+        service.handleWebhook(Buffer.from(body), undefined, SECRET),
+      ).resolves.toBeUndefined();
     });
 
     it('evento duplicado (replay do provedor) é no-op idempotente', async () => {
       const { service, prisma } = buildService();
-      const body = JSON.stringify({
-        id: 'evt-1',
-        event: 'transparent.completed',
-        data: { id: 'chg-1' },
-      });
-      const timestamp = String(Math.floor(Date.now() / 1000));
+      const body = webhookBody(
+        'evt-1',
+        'transparent.completed',
+        'transparent',
+        'chg-1',
+      );
       prisma.webhookEvent.create.mockRejectedValue(
         new Prisma.PrismaClientKnownRequestError('duplicate', {
           code: 'P2002',
@@ -452,23 +462,19 @@ describe('WalletService', () => {
       );
 
       await expect(
-        service.handleWebhook(
-          Buffer.from(body),
-          sign(body, timestamp),
-          timestamp,
-        ),
+        service.handleWebhook(Buffer.from(body), SECRET, undefined),
       ).resolves.toBeUndefined();
       expect(prisma.pixCharge.findUnique).not.toHaveBeenCalled();
     });
 
     it('credita a wallet quando o evento é transparent.completed e a cobrança existe', async () => {
       const { service, prisma } = buildService();
-      const body = JSON.stringify({
-        id: 'evt-2',
-        event: 'transparent.completed',
-        data: { id: 'chg-1' },
-      });
-      const timestamp = String(Math.floor(Date.now() / 1000));
+      const body = webhookBody(
+        'evt-2',
+        'transparent.completed',
+        'transparent',
+        'chg-1',
+      );
       prisma.webhookEvent.create.mockResolvedValue({ id: 'we-1' });
       prisma.pixCharge.findUnique.mockResolvedValue({
         id: 'charge-1',
@@ -479,11 +485,7 @@ describe('WalletService', () => {
       prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
       mockLockedWallet(prisma, '100.00');
 
-      await service.handleWebhook(
-        Buffer.from(body),
-        sign(body, timestamp),
-        timestamp,
-      );
+      await service.handleWebhook(Buffer.from(body), SECRET, undefined);
 
       expect(prisma.tx.walletTransaction.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -509,12 +511,12 @@ describe('WalletService', () => {
 
     it('cobrança já paga não gera segundo crédito (defesa redundante)', async () => {
       const { service, prisma } = buildService();
-      const body = JSON.stringify({
-        id: 'evt-3',
-        event: 'transparent.completed',
-        data: { id: 'chg-1' },
-      });
-      const timestamp = String(Math.floor(Date.now() / 1000));
+      const body = webhookBody(
+        'evt-3',
+        'transparent.completed',
+        'transparent',
+        'chg-1',
+      );
       prisma.webhookEvent.create.mockResolvedValue({ id: 'we-1' });
       prisma.pixCharge.findUnique.mockResolvedValue({
         id: 'charge-1',
@@ -523,13 +525,120 @@ describe('WalletService', () => {
         amount: new Prisma.Decimal('50.00'),
       });
 
-      await service.handleWebhook(
-        Buffer.from(body),
-        sign(body, timestamp),
-        timestamp,
-      );
+      await service.handleWebhook(Buffer.from(body), SECRET, undefined);
 
       expect(prisma.wallet.findUniqueOrThrow).not.toHaveBeenCalled();
+    });
+
+    it('evento sem handler conhecido só marca o WebhookEvent como processado (no-op)', async () => {
+      const { service, prisma } = buildService();
+      const body = webhookBody(
+        'evt-4',
+        'checkout.disputed',
+        'checkout',
+        'whatever',
+      );
+      prisma.webhookEvent.create.mockResolvedValue({ id: 'we-4' });
+
+      await service.handleWebhook(Buffer.from(body), SECRET, undefined);
+
+      expect(prisma.webhookEvent.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'we-4' },
+          data: expect.objectContaining({
+            processedAt: expect.any(Date) as unknown,
+          }),
+        }),
+      );
+      expect(prisma.pixWithdrawal.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('transfer.completed marca o saque como COMPLETED sem mexer no saldo', async () => {
+      const { service, prisma } = buildService();
+      const body = webhookBody(
+        'evt-5',
+        'transfer.completed',
+        'transfer',
+        'wd-ext-1',
+      );
+      prisma.webhookEvent.create.mockResolvedValue({ id: 'we-5' });
+      prisma.pixWithdrawal.findUnique.mockResolvedValue({
+        id: 'wd-1',
+        userId: WALLET.userId,
+        externalId: 'wd-ext-1',
+        status: 'PROCESSING',
+        amount: new Prisma.Decimal('30.00'),
+      });
+
+      await service.handleWebhook(Buffer.from(body), SECRET, undefined);
+
+      expect(prisma.pixWithdrawal.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'wd-1' },
+          data: expect.objectContaining({ status: 'COMPLETED' }),
+        }),
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('transfer.completed em saque que não está PROCESSING é no-op (defesa redundante)', async () => {
+      const { service, prisma } = buildService();
+      const body = webhookBody(
+        'evt-6',
+        'transfer.completed',
+        'transfer',
+        'wd-ext-1',
+      );
+      prisma.webhookEvent.create.mockResolvedValue({ id: 'we-6' });
+      prisma.pixWithdrawal.findUnique.mockResolvedValue({
+        id: 'wd-1',
+        userId: WALLET.userId,
+        externalId: 'wd-ext-1',
+        status: 'COMPLETED',
+        amount: new Prisma.Decimal('30.00'),
+      });
+
+      await service.handleWebhook(Buffer.from(body), SECRET, undefined);
+
+      expect(prisma.pixWithdrawal.update).not.toHaveBeenCalled();
+    });
+
+    it('transfer.failed estorna o valor reservado e marca o saque como FAILED', async () => {
+      const { service, prisma } = buildService();
+      const body = webhookBody(
+        'evt-7',
+        'transfer.failed',
+        'transfer',
+        'wd-ext-2',
+      );
+      prisma.webhookEvent.create.mockResolvedValue({ id: 'we-7' });
+      prisma.pixWithdrawal.findUnique.mockResolvedValue({
+        id: 'wd-2',
+        userId: WALLET.userId,
+        externalId: 'wd-ext-2',
+        status: 'PROCESSING',
+        amount: new Prisma.Decimal('30.00'),
+      });
+      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      mockLockedWallet(prisma, '70.00');
+
+      await service.handleWebhook(Buffer.from(body), SECRET, undefined);
+
+      expect(prisma.tx.walletTransaction.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: 'PIX_WITHDRAWAL',
+            amount: new Prisma.Decimal('30.00'),
+            idempotencyKey: 'withdrawal-webhook-reversal:wd-2',
+          }),
+        }),
+      );
+      expect(prisma.tx.pixWithdrawal.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'wd-2' },
+          data: expect.objectContaining({ status: 'FAILED' }),
+        }),
+      );
     });
   });
 });

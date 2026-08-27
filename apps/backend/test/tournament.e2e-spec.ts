@@ -1,88 +1,21 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test, TestingModule } from '@nestjs/testing';
-import { PrismaClient } from '@prisma/client';
-import cookieParser from 'cookie-parser';
+import { INestApplication } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
-import { AbacatePayClient } from './../src/integrations/abacatepay';
-
-const prismaDirect = new PrismaClient();
-
-async function registerAndLogin(
-  app: INestApplication<App>,
-  opts: { admin?: boolean } = {},
-): Promise<{ accessToken: string; userId: string }> {
-  const email = `${randomUUID()}@tournament-e2e.test`;
-  const registerRes = await request(app.getHttpServer())
-    .post('/api/auth/register')
-    .send({ email, password: 'senha-forte-123', name: 'Jogador Torneio' })
-    .expect(201);
-
-  if (opts.admin) {
-    await prismaDirect.user.update({
-      where: { id: registerRes.body.id },
-      data: { role: 'ADMIN' },
-    });
-  }
-
-  const loginRes = await request(app.getHttpServer())
-    .post('/api/auth/login')
-    .send({ email, password: 'senha-forte-123' })
-    .expect(200);
-
-  return {
-    accessToken: loginRes.body.accessToken as string,
-    userId: registerRes.body.id as string,
-  };
-}
-
-async function creditWallet(userId: string, amount: string): Promise<void> {
-  const wallet = await prismaDirect.wallet.findUniqueOrThrow({
-    where: { userId },
-  });
-  await prismaDirect.$transaction([
-    prismaDirect.walletTransaction.create({
-      data: {
-        walletId: wallet.id,
-        type: 'ADJUSTMENT',
-        status: 'COMPLETED',
-        amount,
-        balanceAfter: amount,
-        idempotencyKey: `test-credit:${randomUUID()}`,
-        description: 'Crédito de teste (fixture e2e)',
-      },
-    }),
-    prismaDirect.wallet.update({
-      where: { id: wallet.id },
-      data: { balance: amount },
-    }),
-  ]);
-}
+// Fixtures compartilhadas com `tournament-tables.e2e-spec.ts` (MT-QA-01).
+import {
+  bootstrapTestApp,
+  creditWallet,
+  expectSeatInvariants,
+  prismaDirect,
+  registerAndLogin,
+} from './tournament-helpers';
 
 describe('Tournaments (e2e)', () => {
   let app: INestApplication<App>;
 
   beforeAll(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    })
-      .overrideProvider(AbacatePayClient)
-      .useValue({ createPixCharge: jest.fn(), requestPixWithdrawal: jest.fn() })
-      .compile();
-
-    app = moduleFixture.createNestApplication();
-    app.setGlobalPrefix('api');
-    app.use(cookieParser());
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
-    await app.init();
+    app = await bootstrapTestApp();
   });
 
   afterAll(async () => {
@@ -122,6 +55,509 @@ describe('Tournaments (e2e)', () => {
         prizes: [{ position: 1, percentage: '50.00' }],
       })
       .expect(400);
+  });
+
+  it('blind structures: cria preset -> lista -> 409 em uso -> deleta', async () => {
+    const admin = await registerAndLogin(app, { admin: true });
+    const player = await registerAndLogin(app);
+
+    const levels = [
+      { levelNumber: 1, smallBlind: 25, bigBlind: 50, durationSeconds: 1200 },
+      {
+        levelNumber: 2,
+        smallBlind: 50,
+        bigBlind: 100,
+        ante: 100,
+        durationSeconds: 1200,
+      },
+      {
+        levelNumber: 3,
+        smallBlind: 50,
+        bigBlind: 100,
+        durationSeconds: 900,
+        isBreak: true,
+        breakLabel: 'Intervalo · 15 min',
+      },
+    ];
+
+    // Não-admin não cria preset.
+    await request(app.getHttpServer())
+      .post('/api/blind-structures')
+      .set('Authorization', `Bearer ${player.accessToken}`)
+      .send({ name: 'Proibido', levels })
+      .expect(403);
+
+    // Sequência com buraco (1, 3) é rejeitada pelas validações de conjunto.
+    await request(app.getHttpServer())
+      .post('/api/blind-structures')
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        name: 'Buraco',
+        levels: [levels[0], { ...levels[1], levelNumber: 3 }],
+      })
+      .expect(400);
+
+    // Intervalo sem rótulo é rejeitado.
+    await request(app.getHttpServer())
+      .post('/api/blind-structures')
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        name: 'Break sem label',
+        levels: [{ ...levels[0], isBreak: true }],
+      })
+      .expect(400);
+
+    const createRes = await request(app.getHttpServer())
+      .post('/api/blind-structures')
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({ name: 'Turbo 20min', levels })
+      .expect(201);
+    const structureId = createRes.body.id as string;
+    expect(createRes.body.levels).toHaveLength(3);
+    expect(createRes.body.levels[0]).toEqual({
+      levelNumber: 1,
+      smallBlind: 25,
+      bigBlind: 50,
+      ante: 0,
+      durationSeconds: 1200,
+      isBreak: false,
+      breakLabel: null,
+    });
+    expect(createRes.body.levels[2]).toMatchObject({
+      isBreak: true,
+      breakLabel: 'Intervalo · 15 min',
+    });
+
+    // Leitura é liberada a qualquer usuário autenticado.
+    const listRes = await request(app.getHttpServer())
+      .get('/api/blind-structures')
+      .set('Authorization', `Bearer ${player.accessToken}`)
+      .expect(200);
+    expect((listRes.body as Array<{ id: string }>).map((s) => s.id)).toContain(
+      structureId,
+    );
+
+    await request(app.getHttpServer())
+      .get(`/api/blind-structures/${structureId}`)
+      .set('Authorization', `Bearer ${player.accessToken}`)
+      .expect(200);
+
+    // PUT substitui a grade inteira (3 níveis -> 2).
+    const putRes = await request(app.getHttpServer())
+      .put(`/api/blind-structures/${structureId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({ name: 'Turbo 15min', levels: levels.slice(0, 2) })
+      .expect(200);
+    expect(putRes.body).toMatchObject({ name: 'Turbo 15min' });
+    expect(putRes.body.levels).toHaveLength(2);
+
+    // Preset referenciado por um torneio não pode ser excluído (409).
+    // O vínculo é feito direto no banco porque `createTournament` só passa a
+    // aceitar `blindStructureId` em MT-BE-03.
+    const tournamentRes = await request(app.getHttpServer())
+      .post('/api/tournaments')
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        name: 'Torneio com preset',
+        buyIn: '10.00',
+        fee: '1.00',
+        startingStack: 1000,
+        maxPlayers: 2,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        prizes: [{ position: 1, percentage: '100.00' }],
+      })
+      .expect(201);
+    await prismaDirect.tournament.update({
+      where: { id: tournamentRes.body.id as string },
+      data: { blindStructureId: structureId },
+    });
+
+    await request(app.getHttpServer())
+      .delete(`/api/blind-structures/${structureId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .expect(409);
+
+    await prismaDirect.tournament.update({
+      where: { id: tournamentRes.body.id as string },
+      data: { blindStructureId: null },
+    });
+
+    await request(app.getHttpServer())
+      .delete(`/api/blind-structures/${structureId}`)
+      .set('Authorization', `Bearer ${player.accessToken}`)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .delete(`/api/blind-structures/${structureId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .expect(204);
+
+    await request(app.getHttpServer())
+      .get(`/api/blind-structures/${structureId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .expect(404);
+  });
+
+  // MT-BE-03..06 e MT-BE-09, no fluxo que o caixa realmente faz.
+  it('mesas: inscrição senta -> eliminação quebra mesa -> redraw -> reentrada', async () => {
+    const admin = await registerAndLogin(app, { admin: true });
+    const players = await Promise.all([
+      registerAndLogin(app),
+      registerAndLogin(app),
+      registerAndLogin(app),
+      registerAndLogin(app),
+    ]);
+    await Promise.all(players.map((p) => creditWallet(p.userId, '200.00')));
+    const auth = (index: number) => ({
+      Authorization: `Bearer ${players[index].accessToken}`,
+    });
+
+    // Capacidade 2 de propósito: com 4 jogadores o torneio já passa por
+    // abertura de mesa, quebra e redraw sem precisar de 20 fixtures.
+    const createRes = await request(app.getHttpServer())
+      .post('/api/tournaments')
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        name: 'Mesas MVP',
+        buyIn: '10.00',
+        fee: '1.00',
+        startingStack: 5000,
+        maxPlayers: 6,
+        tableCapacity: 2,
+        allowReentry: true,
+        maxReentries: 1,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        prizes: [{ position: 1, percentage: '100.00' }],
+      })
+      .expect(201);
+    const tournamentId = createRes.body.id as string;
+
+    // --- Inscrições: cada uma devolve o ticket (mesa/assento) na hora.
+    const entryIds: string[] = [];
+    const lastKey: string[] = [];
+    for (let index = 0; index < players.length; index += 1) {
+      const key = randomUUID();
+      const res = await request(app.getHttpServer())
+        .post(`/api/tournaments/${tournamentId}/register`)
+        .set(auth(index))
+        .set('Idempotency-Key', key)
+        .expect(201);
+      entryIds.push(res.body.id as string);
+      lastKey.push(key);
+      expect(res.body.tableNumber).not.toBeNull();
+      expect(res.body.seatNumber).not.toBeNull();
+    }
+    // Mesa 1 lota (2 assentos) e a 3ª inscrição abre a mesa 2.
+    expect(entryIds).toHaveLength(4);
+    await expectSeatInvariants(tournamentId);
+
+    const seatOf = async (entryId: string) =>
+      prismaDirect.tournamentSeat.findFirstOrThrow({
+        where: { tournamentEntryId: entryId, active: true },
+        include: { tournamentTable: true },
+      });
+    expect((await seatOf(entryIds[0])).tournamentTable.tableNumber).toBe(1);
+    expect((await seatOf(entryIds[2])).tournamentTable.tableNumber).toBe(2);
+
+    // Replay da MESMA Idempotency-Key devolve o MESMO ticket (armadilha 1).
+    const original = await seatOf(entryIds[3]);
+    const replay = await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/register`)
+      .set(auth(3))
+      .set('Idempotency-Key', lastKey[3])
+      .expect(201);
+    expect(replay.body).toMatchObject({
+      id: entryIds[3],
+      tableNumber: original.tournamentTable.tableNumber,
+      seatNumber: original.seatNumber,
+    });
+
+    // O detalhe do torneio também carrega mesa/assento (ticket do jogador).
+    const detail = await request(app.getHttpServer())
+      .get(`/api/tournaments/${tournamentId}`)
+      .set(auth(0))
+      .expect(200);
+    expect(
+      (detail.body.entries as Array<{ tableNumber: number | null }>).every(
+        (e) => e.tableNumber !== null,
+      ),
+    ).toBe(true);
+
+    // --- Eliminações: a 1ª só libera o assento; a 2ª cruza o limiar e QUEBRA
+    // a mesa 2, movendo o sobrevivente para a mesa 1.
+    for (const entryId of [entryIds[0], entryIds[2]]) {
+      await request(app.getHttpServer())
+        .post(`/api/tournaments/${tournamentId}/entries/${entryId}/eliminate`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({})
+        .expect(201);
+      await expectSeatInvariants(tournamentId);
+    }
+
+    const moved = await seatOf(entryIds[3]);
+    expect(moved.tournamentTable.tableNumber).toBe(1);
+    expect(moved.reason).toBe('BREAK');
+    expect(moved.fromTableId).not.toBeNull();
+    const closed = await prismaDirect.tournamentTable.findFirstOrThrow({
+      where: { tournamentId, tableNumber: 2 },
+    });
+    expect(closed.status).toBe('CLOSED');
+    // O assento antigo virou histórico, não sumiu (append-only).
+    expect(
+      await prismaDirect.tournamentSeat.count({
+        where: { tournamentEntryId: entryIds[0] },
+      }),
+    ).toBe(1);
+
+    // --- Redraw manual: só ADMIN, e devolve o mapa novo.
+    await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/redraw`)
+      .set(auth(1))
+      .expect(403);
+
+    const redrawRes = await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/redraw`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .expect(201);
+    expect(redrawRes.body).toMatchObject({
+      tournamentId,
+      playersRemaining: 2,
+      averageStack: 5000,
+    });
+    await expectSeatInvariants(tournamentId);
+    const redrawSeats = await prismaDirect.tournamentSeat.findMany({
+      where: { active: true, tournamentTable: { tournamentId } },
+    });
+    expect(
+      redrawSeats.every(
+        (s) => s.reason === 'MANUAL_REDRAW' && s.movedById !== null,
+      ),
+    ).toBe(true);
+
+    // --- Reentrada do jogador eliminado: entry NOVA, assento NOVO, prize
+    // pool incrementado; a entry antiga fica intacta.
+    const reentryRes = await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/register`)
+      .set(auth(0))
+      .set('Idempotency-Key', randomUUID())
+      .expect(201);
+    expect(reentryRes.body.id).not.toBe(entryIds[0]);
+    expect(reentryRes.body.tableNumber).not.toBeNull();
+    await expectSeatInvariants(tournamentId);
+
+    const oldEntry = await prismaDirect.tournamentEntry.findUniqueOrThrow({
+      where: { id: entryIds[0] },
+      include: { seats: true },
+    });
+    expect(oldEntry.status).toBe('ELIMINATED');
+    expect(oldEntry.seats.every((s) => !s.active)).toBe(true);
+    const withReentry = await prismaDirect.tournament.findUniqueOrThrow({
+      where: { id: tournamentId },
+    });
+    expect(withReentry.prizePool.toFixed(2)).toBe('50.00'); // 5 buy-ins de 10
+
+    // --- Limite de reentradas: a segunda reentrada do mesmo jogador é 400.
+    await request(app.getHttpServer())
+      .post(
+        `/api/tournaments/${tournamentId}/entries/${reentryRes.body.id}/eliminate`,
+      )
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({})
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/register`)
+      .set(auth(0))
+      .set('Idempotency-Key', randomUUID())
+      .expect(400);
+    await expectSeatInvariants(tournamentId);
+  });
+
+  // MT-QA-03: o relógio de verdade, visto pela rota pública de TV.
+  it('relógio + display: start -> pause congela -> resume -> next -> PATCH aplica delta -> previous no nível 1 = 400', async () => {
+    const admin = await registerAndLogin(app, { admin: true });
+    const player = await registerAndLogin(app);
+    await creditWallet(player.userId, '100.00');
+    const asAdmin = { Authorization: `Bearer ${admin.accessToken}` };
+
+    const structureRes = await request(app.getHttpServer())
+      .post('/api/blind-structures')
+      .set(asAdmin)
+      .send({
+        name: `Display ${randomUUID()}`,
+        levels: [
+          {
+            levelNumber: 1,
+            smallBlind: 25,
+            bigBlind: 50,
+            durationSeconds: 1200,
+          },
+          {
+            levelNumber: 2,
+            smallBlind: 50,
+            bigBlind: 100,
+            durationSeconds: 900,
+          },
+        ],
+      })
+      .expect(201);
+
+    const createRes = await request(app.getHttpServer())
+      .post('/api/tournaments')
+      .set(asAdmin)
+      .send({
+        name: 'TV do salão',
+        buyIn: '10.00',
+        fee: '1.00',
+        startingStack: 5000,
+        maxPlayers: 4,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        blindStructureId: structureRes.body.id as string,
+        prizes: [{ position: 1, percentage: '100.00' }],
+      })
+      .expect(201);
+    const tournamentId = createRes.body.id as string;
+
+    await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/register`)
+      .set('Authorization', `Bearer ${player.accessToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .expect(201);
+
+    const display = (path: 'clock' | 'tables') =>
+      request(app.getHttpServer())
+        .get(`/api/display/tournaments/${tournamentId}/${path}`)
+        .expect(200);
+
+    // --- SEM Authorization: as duas rotas de TV respondem 200 e proíbem cache.
+    const beforeStart = await display('clock');
+    expect(beforeStart.headers['cache-control']).toBe('no-store');
+    expect(beforeStart.body).toMatchObject({
+      clockStatus: 'NOT_STARTED',
+      currentLevel: null,
+      levelEndsAt: null,
+      remainingMs: 0,
+    });
+    expect(typeof beforeStart.body.serverTime).toBe('string');
+
+    // --- start: o display passa a ver RUNNING no nível 1.
+    await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/clock/start`)
+      .set(asAdmin)
+      .expect(201);
+
+    const running = await display('clock');
+    expect(running.body).toMatchObject({ clockStatus: 'RUNNING' });
+    expect(running.body.currentLevel).toMatchObject({
+      levelNumber: 1,
+      smallBlind: 25,
+      bigBlind: 50,
+    });
+    expect(running.body.nextLevel).toMatchObject({ levelNumber: 2 });
+    expect(running.body.remainingMs).toBeLessThanOrEqual(1_200_000);
+    expect(running.body.remainingMs).toBeGreaterThan(1_190_000);
+
+    // Duas TVs consultando em sequência veem o MESMO fim de nível (o servidor
+    // é a fonte única) e o restante só ANDA PARA TRÁS.
+    const secondTv = await display('clock');
+    expect(secondTv.body.levelEndsAt).toBe(running.body.levelEndsAt);
+    expect(secondTv.body.remainingMs).toBeLessThanOrEqual(
+      running.body.remainingMs,
+    );
+
+    // --- pause: `remainingMs` CONGELA entre duas leituras distintas.
+    await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/clock/pause`)
+      .set(asAdmin)
+      .expect(201);
+
+    const paused1 = await display('clock');
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const paused2 = await display('clock');
+    expect(paused1.body.clockStatus).toBe('PAUSED');
+    expect(paused1.body.levelEndsAt).toBeNull();
+    expect(paused2.body.remainingMs).toBe(paused1.body.remainingMs);
+    // Só o `serverTime` avança — é o que a TV usa para corrigir a deriva.
+    expect(Date.parse(paused2.body.serverTime)).toBeGreaterThan(
+      Date.parse(paused1.body.serverTime),
+    );
+
+    // --- resume + next: nível 2 começa inteiro (15 min).
+    await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/clock/resume`)
+      .set(asAdmin)
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/clock/next`)
+      .set(asAdmin)
+      .expect(201);
+
+    const level2 = await display('clock');
+    expect(level2.body.clockStatus).toBe('RUNNING');
+    expect(level2.body.currentLevel.levelNumber).toBe(2);
+    expect(level2.body.nextLevel).toBeNull();
+    expect(level2.body.remainingMs).toBeGreaterThan(890_000);
+
+    // --- PATCH da duração do nível CORRENTE com o relógio RUNNING: o fim do
+    // nível anda pelo DELTA (+5 min), e NÃO é recalculado como now + 20 min —
+    // recalcular ressuscitaria o tempo já decorrido.
+    const patchRes = await request(app.getHttpServer())
+      .patch(`/api/tournaments/${tournamentId}/blind-levels/2`)
+      .set(asAdmin)
+      .send({ durationSeconds: 1200 })
+      .expect(200);
+    expect(Date.parse(patchRes.body.levelEndsAt)).toBe(
+      Date.parse(level2.body.levelEndsAt) + 300_000,
+    );
+
+    const afterPatch = await display('clock');
+    expect(Date.parse(afterPatch.body.levelEndsAt)).toBe(
+      Date.parse(level2.body.levelEndsAt) + 300_000,
+    );
+    expect(afterPatch.body.currentLevel.durationSeconds).toBe(1200);
+    // Prova de que não houve recálculo do zero: sobra menos que a duração cheia.
+    expect(afterPatch.body.remainingMs).toBeLessThan(1_200_000);
+
+    // --- previous no nível 1 é 400 (formato padrão do HttpExceptionFilter).
+    await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/clock/previous`)
+      .set(asAdmin)
+      .expect(201);
+    const back = await request(app.getHttpServer())
+      .post(`/api/tournaments/${tournamentId}/clock/previous`)
+      .set(asAdmin)
+      .expect(400);
+    expect(back.body.message).toBe('O relógio já está no primeiro nível.');
+
+    // --- Mapa de mesas público: 200 sem token e SEM dado sensível.
+    const tables = await display('tables');
+    expect(tables.headers['cache-control']).toBe('no-store');
+    expect(tables.body).toMatchObject({
+      tournamentId,
+      playersRemaining: 1,
+      averageStack: 5000,
+    });
+    expect(tables.body.tables[0].seats[0]).toEqual({
+      entryId: expect.any(String),
+      userName: 'Jogador Torneio',
+      seatNumber: 1,
+      chipStack: 5000,
+    });
+
+    // Assert sobre o JSON SERIALIZADO das duas rotas — tipo TypeScript não
+    // protege ninguém em runtime.
+    const serialized =
+      JSON.stringify(tables.body) + JSON.stringify(level2.body);
+    expect(serialized).not.toContain('userId');
+    expect(serialized).not.toContain('email');
+    expect(serialized).not.toContain(player.userId);
+
+    // Torneio inexistente é 404 nas duas rotas, não 200 com corpo vazio.
+    await request(app.getHttpServer())
+      .get(`/api/display/tournaments/${randomUUID()}/clock`)
+      .expect(404);
+    await request(app.getHttpServer())
+      .get(`/api/display/tournaments/${randomUUID()}/tables`)
+      .expect(404);
   });
 
   it('fluxo completo: criar -> 3 inscrições -> eliminar 3º e 2º -> finish paga 1º/2º', async () => {

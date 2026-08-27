@@ -83,6 +83,14 @@ model User {
   /// Inscrições deste usuário em torneios.
   tournamentEntries TournamentEntry[]
 
+  /// Presets de estrutura de blinds criados por este usuário (sempre um
+  /// `ADMIN`, ver `BlindStructure.createdById`).
+  createdBlindStructures BlindStructure[]
+
+  /// Movimentações de assento de torneio ordenadas manualmente por este
+  /// usuário (redraw do diretor), ver `TournamentSeat.movedById`.
+  tournamentSeatsMoved TournamentSeat[]
+
   @@map("users")
 }
 

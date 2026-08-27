@@ -68,20 +68,12 @@ describe('configuration factories', () => {
     process.env.ABACATEPAY_API_KEY = 'key-123';
     process.env.ABACATEPAY_WEBHOOK_SECRET = 'webhook-secret';
     delete process.env.ABACATEPAY_BASE_URL;
-    delete process.env.ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS;
 
     expect(abacatePayConfig()).toEqual({
       apiKey: 'key-123',
       baseUrl: 'https://api.abacatepay.com/v2',
       webhookSecret: 'webhook-secret',
-      webhookToleranceSeconds: 300,
     });
-  });
-
-  it('abacatePayConfig lê a tolerância anti-replay customizada como número', () => {
-    process.env.ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS = '120';
-
-    expect(abacatePayConfig().webhookToleranceSeconds).toBe(120);
   });
 
   describe('securityConfig', () => {

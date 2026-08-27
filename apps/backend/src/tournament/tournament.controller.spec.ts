@@ -1,6 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
-import { TournamentEntryStatus, TournamentStatus } from '@poker-system/shared';
+import {
+  TournamentClockStatus,
+  TournamentEntryStatus,
+  TournamentStatus,
+} from '@poker-system/shared';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
+import type { TournamentClockService } from './tournament-clock.service';
 import { TournamentController } from './tournament.controller';
 import type { TournamentService } from './tournament.service';
 
@@ -23,6 +28,17 @@ const ENTRY = {
   chipStack: 10_000,
   finalPosition: null,
   prizeAmount: null,
+  tableNumber: null,
+  seatNumber: null,
+};
+
+const CLOCK = {
+  clockStatus: TournamentClockStatus.RUNNING,
+  currentLevel: null,
+  nextLevel: null,
+  levelEndsAt: null,
+  remainingMs: 0,
+  serverTime: new Date().toISOString(),
 };
 
 function buildController() {
@@ -44,10 +60,24 @@ function buildController() {
     eliminateEntry: jest.fn(),
     finishTournament: jest.fn(),
   };
+  const clockService: jest.Mocked<
+    Pick<
+      TournamentClockService,
+      'start' | 'pause' | 'resume' | 'next' | 'previous' | 'updateLevel'
+    >
+  > = {
+    start: jest.fn().mockResolvedValue(CLOCK),
+    pause: jest.fn().mockResolvedValue(CLOCK),
+    resume: jest.fn().mockResolvedValue(CLOCK),
+    next: jest.fn().mockResolvedValue(CLOCK),
+    previous: jest.fn().mockResolvedValue(CLOCK),
+    updateLevel: jest.fn().mockResolvedValue(CLOCK),
+  };
   const controller = new TournamentController(
     tournamentService as unknown as TournamentService,
+    clockService as unknown as TournamentClockService,
   );
-  return { controller, tournamentService };
+  return { controller, tournamentService, clockService };
 }
 
 describe('TournamentController', () => {
@@ -156,5 +186,31 @@ describe('TournamentController', () => {
 
     await controller.finish('trn-1');
     expect(tournamentService.finishTournament).toHaveBeenCalledWith('trn-1');
+  });
+
+  describe('relógio', () => {
+    it.each([
+      ['startClock', 'start'],
+      ['pauseClock', 'pause'],
+      ['resumeClock', 'resume'],
+      ['nextLevel', 'next'],
+      ['previousLevel', 'previous'],
+    ] as const)('%s delega ao clock service', async (route, method) => {
+      const { controller, clockService } = buildController();
+
+      const result = await controller[route]('trn-1');
+
+      expect(clockService[method]).toHaveBeenCalledWith('trn-1');
+      expect(result).toBe(CLOCK);
+    });
+
+    it('updateBlindLevel repassa torneio, nível e payload', async () => {
+      const { controller, clockService } = buildController();
+      const dto = { durationSeconds: 900 };
+
+      await controller.updateBlindLevel('trn-1', 3, dto);
+
+      expect(clockService.updateLevel).toHaveBeenCalledWith('trn-1', 3, dto);
+    });
   });
 });

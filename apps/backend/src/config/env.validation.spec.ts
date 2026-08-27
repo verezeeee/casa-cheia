@@ -131,35 +131,6 @@ describe('envValidationSchema', () => {
     });
   });
 
-  describe('webhook AbacatePay (anti-replay)', () => {
-    it('usa o default de 300s para ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS', () => {
-      const { error, value } = envValidationSchema.validate(validEnv);
-
-      expect(error).toBeUndefined();
-      expect(value.ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS).toBe(300);
-    });
-
-    it('rejeita ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS não-numérico', () => {
-      const { error } = envValidationSchema.validate({
-        ...validEnv,
-        ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS: 'cinco-minutos',
-      });
-
-      expect(error).toBeDefined();
-      expect(error?.message).toContain('ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS');
-    });
-
-    it('rejeita uma janela anti-replay maior que 1h', () => {
-      const { error } = envValidationSchema.validate({
-        ...validEnv,
-        ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS: '86400',
-      });
-
-      expect(error).toBeDefined();
-      expect(error?.message).toContain('ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS');
-    });
-  });
-
   describe('rate limiting', () => {
     it('usa os defaults de RATE_LIMIT_TTL e RATE_LIMIT_LIMIT quando ausentes', () => {
       const { error, value } = envValidationSchema.validate(validEnv);

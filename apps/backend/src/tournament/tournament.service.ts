@@ -6,9 +6,11 @@ import {
 } from '@nestjs/common';
 import type {
   PaginatedResponse,
+  PublicTournamentTableMapDto,
   TournamentDetailResponse,
   TournamentEntryDto,
   TournamentSummaryDto,
+  TournamentTableMapDto,
 } from '@poker-system/shared';
 import { Prisma } from '@prisma/client';
 import { decodeCursor, encodeCursor } from '../common/pagination/cursor';
@@ -16,15 +18,67 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WalletService } from '../wallet/wallet.service';
 import type { CreateTournamentDto } from './dto/create-tournament.dto';
 import type { EliminateEntryDto } from './dto/eliminate-entry.dto';
+import type { Move, TableSnapshot } from './seating';
+import { planInitialSeat, planRebalance, planRedraw } from './seating';
+import type { TournamentTableRow } from './tournament.mappers';
 import {
+  toPublicTournamentTableMapDto,
   toTournamentDetailResponse,
   toTournamentEntryDto,
   toTournamentSummaryDto,
+  toTournamentTableMapDto,
 } from './tournament.mappers';
 
 const DEFAULT_PAGE_SIZE = 20;
 const PERCENTAGE_TOLERANCE = new Prisma.Decimal('0.01'); // folga de arredondamento (centésimos)
 const ONE_HUNDRED = new Prisma.Decimal('100');
+/** Casa com o CHECK `tournaments_table_capacity_valid` (full ring). */
+const DEFAULT_TABLE_CAPACITY = 9;
+/** Inscrições que ocupam vaga e assento — as demais já saíram do torneio. */
+const ALIVE_STATUSES = ['REGISTERED', 'PLAYING'] as const;
+
+/**
+ * Inscrição + assento ATIVO, o "ticket" do PRD §5.1. O `where: { active: true }`
+ * é obrigatório: sem ele o histórico append-only de `TournamentSeat` traria
+ * assentos antigos e o DTO mostraria uma mesa onde o jogador não está mais.
+ */
+const ENTRY_INCLUDE = {
+  user: { select: { name: true } },
+  seats: {
+    where: { active: true },
+    select: {
+      seatNumber: true,
+      tournamentTable: { select: { tableNumber: true } },
+    },
+  },
+} satisfies Prisma.TournamentEntryInclude;
+
+/**
+ * Mesas do torneio com a ocupação corrente. Um único shape para os três usos
+ * (planejar assento, fechar mesa vazia e montar o `TournamentTableMapDto`) —
+ * são no máximo algumas dezenas de linhas por torneio, e uma segunda query
+ * "mais enxuta" pagaria em complexidade o que economizaria em join.
+ */
+const TABLE_SELECT = {
+  id: true,
+  tableNumber: true,
+  capacity: true,
+  status: true,
+  seats: {
+    where: { active: true },
+    select: {
+      seatNumber: true,
+      tournamentEntry: {
+        select: {
+          id: true,
+          userId: true,
+          chipStack: true,
+          user: { select: { name: true } },
+        },
+      },
+    },
+  },
+} satisfies Prisma.TournamentTableSelect;
 
 @Injectable()
 export class TournamentService {
@@ -38,6 +92,12 @@ export class TournamentService {
    * este MVP não modela o estágio DRAFT como um passo à parte (o admin
    * fornece tudo de uma vez); ver `base.prisma`/`tournament.prisma` para a
    * máquina de estados completa que o schema já suporta.
+   *
+   * MT-BE-03: quando vem `blindStructureId`, os níveis do preset são COPIADOS
+   * para `TournamentBlindLevel` no MESMO `create` (nested write ⇒ mesma
+   * transação implícita do Prisma). A partir daí o torneio é dono da sua
+   * grade: editar o preset depois não o afeta. Sem `blindStructureId` o
+   * torneio nasce sem relógio, exatamente como antes deste MVP.
    */
   async createTournament(
     adminId: string,
@@ -59,6 +119,9 @@ export class TournamentService {
       );
     }
 
+    const levels = await this.copyBlindLevels(dto.blindStructureId);
+    assertCoherentReentryConfig(dto, levels.length);
+
     const tournament = await this.prisma.tournament.create({
       data: {
         name: dto.name,
@@ -66,17 +129,23 @@ export class TournamentService {
         fee: dto.fee,
         startingStack: dto.startingStack,
         maxPlayers: dto.maxPlayers,
+        tableCapacity: dto.tableCapacity ?? DEFAULT_TABLE_CAPACITY,
         status: 'REGISTERING',
         startsAt: new Date(dto.startsAt),
         lateRegUntil: dto.lateRegUntil ? new Date(dto.lateRegUntil) : null,
         guaranteedPrize: dto.guaranteedPrize,
         createdById: adminId,
+        blindStructureId: dto.blindStructureId,
+        allowReentry: dto.allowReentry ?? false,
+        maxReentries: dto.maxReentries,
+        reentryUntilLevel: dto.reentryUntilLevel,
         prizes: {
           create: dto.prizes.map((p) => ({
             position: p.position,
             percentage: p.percentage,
           })),
         },
+        blindLevels: { create: levels },
       },
     });
 
@@ -128,7 +197,7 @@ export class TournamentService {
       }),
       this.prisma.tournamentEntry.findMany({
         where: { tournamentId: id },
-        include: { user: { select: { name: true } } },
+        include: ENTRY_INCLUDE,
         orderBy: { registeredAt: 'asc' },
       }),
     ]);
@@ -137,10 +206,46 @@ export class TournamentService {
   }
 
   /**
-   * Inscrição: debita `buyIn + fee` da wallet e cria a `TournamentEntry` na
-   * MESMA transação, com o `Tournament.prizePool`/`version` atualizados sob
-   * lock otimista — mesmo padrão de `TableService.sitAtTable` (criar a
-   * dependência local primeiro, só então mover dinheiro).
+   * Inscrição (MT-BE-04) e REENTRADA (MT-BE-09): debita `buyIn + fee` da
+   * wallet, cria a `TournamentEntry` e SENTA o jogador — tudo na MESMA
+   * transação, serializada por torneio pelo mesmo lock pessimista da
+   * eliminação.
+   *
+   * POR QUE LOCK PESSIMISTA AQUI TAMBÉM (MT-QA-01)
+   * A versão anterior protegia o `prizePool` com lock OTIMISTA de `version` e
+   * 3 tentativas. Sob concorrência real isso é um thundering herd: cada rodada
+   * de retry admite exatamente UM vencedor, então 20 inscrições simultâneas
+   * viravam 4 inscrições e 16 respostas `409 Muita concorrência` — inscrições
+   * legítimas perdidas, com o jogador já na fila do caixa. Inscrição PLANEJA
+   * ASSENTO sobre o mapa de mesas, exatamente como a eliminação; é a mesma
+   * seção crítica e agora usa a mesma serialização (`lockTournament`). Todo
+   * escritor de `TournamentSeat` (inscrição, eliminação, redraw) segura o lock
+   * do torneio — por isso não existe mais colisão de assento a retentar.
+   *
+   * TUDO QUE DECIDE É LIDO DENTRO DA TRANSAÇÃO, depois do lock: torneio,
+   * inscrições anteriores e contagem de vivos. Ler `maxPlayers` fora do lock
+   * deixava duas inscrições simultâneas estourarem a lotação.
+   *
+   * ORDEM DAS ESCRITAS DENTRO DA TRANSAÇÃO (fluxo MT-003)
+   * A entry é inserida antes do lançamento de wallet porque
+   * `WalletTransaction.tournamentEntryId` aponta PARA ela (a FK obriga a
+   * ordem), e não porque a ficha nasce antes do dinheiro: as duas escritas
+   * commitam juntas ou não commitam. Saldo insuficiente ⇒
+   * `applyLedgerEntry` lança ⇒ a transação inteira reverte e não sobra entry,
+   * ficha nem assento. É o padrão já validado do módulo, reafirmado por
+   * MT-003.
+   *
+   * ORDEM DOS LOCKS: torneio ANTES de wallet, aqui e em `finishTournament` —
+   * as duas únicas operações que seguram os dois. Inverter em uma delas
+   * fecharia um ciclo de deadlock.
+   *
+   * COMPOSIÇÃO `planInitialSeat` + `planRebalance` (lacuna deixada em
+   * `seating.ts`): quando a inscrição ABRE uma mesa nova e já havia mesa
+   * aberta, o rebalanceamento roda na mesma transação sobre o estado
+   * pós-abertura. Sem isso a mesa nasceria 9/1 e a invariante `max-min <= 1`
+   * só valeria "no fim das contas"; com isso ela vale a cada commit, que é o
+   * que a tela de staff e o e2e observam. O custo é concentrado: 4-5 moves na
+   * inscrição que abre a mesa, zero nas demais.
    */
   async registerEntry(
     userId: string,
@@ -149,137 +254,419 @@ export class TournamentService {
   ): Promise<TournamentEntryDto> {
     const ledgerKey = `tournament-buyin:${idempotencyKey}`;
 
-    const existingTxn = await this.prisma.walletTransaction.findUnique({
-      where: { idempotencyKey: ledgerKey },
-    });
-    if (existingTxn?.tournamentEntryId) {
-      const existingEntry = await this.prisma.tournamentEntry.findUnique({
-        where: { id: existingTxn.tournamentEntryId },
-        include: { user: { select: { name: true } } },
-      });
-      if (existingEntry) return toTournamentEntryDto(existingEntry);
-    }
+    const replay = await findReplay(this.prisma, ledgerKey);
+    if (replay) return toTournamentEntryDto(replay);
 
     const wallet = await this.prisma.wallet.findUniqueOrThrow({
       where: { userId },
     });
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const tournament = await this.prisma.tournament.findUnique({
-        where: { id: tournamentId },
-      });
-      if (!tournament) throw new NotFoundException('Torneio não encontrado.');
-      if (tournament.status !== 'REGISTERING') {
-        throw new BadRequestException(
-          'Inscrições não estão abertas para este torneio.',
-        );
-      }
+    try {
+      const entry = await this.prisma.$transaction(async (tx) => {
+        await lockTournament(tx, tournamentId);
 
-      // ponytail: contagem lida fora da transação — duas inscrições
-      // simultâneas podem passar aqui juntas e a mesa ultrapassar
-      // maxPlayers em 1-2 vagas na última rodada. Sem impacto financeiro
-      // (cada inscrição debita e credita corretamente); se a casa exigir
-      // capacidade rígida, trocar por SELECT ... FOR UPDATE na linha do
-      // Tournament antes desta contagem.
-      const registeredCount = await this.prisma.tournamentEntry.count({
-        where: { tournamentId, status: { not: 'REFUNDED' } },
-      });
-      if (registeredCount >= tournament.maxPlayers) {
-        throw new BadRequestException('Torneio lotado.');
-      }
+        // Idempotência CONFERIDA DE NOVO, agora sob o lock. A checagem de fora
+        // é só o caminho rápido: num duplo-clique as duas cópias passam por
+        // ela antes de qualquer commit, e a perdedora chegaria aqui achando
+        // que é uma inscrição nova — para virar 400 "não permite reentrada"
+        // (ou 409 "já inscrito"), dizendo ao caixa que falhou uma inscrição
+        // que existe e está paga. Sob o lock, ou a gêmea já commitou e é
+        // encontrada aqui, ou ela ainda nem começou.
+        const twin = await findReplay(tx, ledgerKey);
+        if (twin) return twin;
 
-      const total = new Prisma.Decimal(tournament.buyIn).add(tournament.fee);
-
-      try {
-        const entry = await this.prisma.$transaction(async (tx) => {
-          const created = await tx.tournamentEntry.create({
-            data: {
-              tournamentId,
-              userId,
-              status: 'REGISTERED',
-              chipStack: tournament.startingStack,
-            },
-          });
-
-          const walletTxn = await this.walletService.applyLedgerEntry(
-            tx,
-            wallet.id,
-            {
-              type: 'TOURNAMENT_BUY_IN',
-              amount: total.negated(),
-              idempotencyKey: ledgerKey,
-              description: 'Inscrição em torneio',
-              tournamentEntryId: created.id,
-            },
-          );
-
-          const updateResult = await tx.tournament.updateMany({
-            where: { id: tournamentId, version: tournament.version },
-            data: {
-              prizePool: { increment: tournament.buyIn },
-              version: { increment: 1 },
-            },
-          });
-          if (updateResult.count === 0) {
-            throw new OptimisticLockError();
-          }
-
-          return tx.tournamentEntry.update({
-            where: { id: created.id },
-            data: { buyInTransactionId: walletTxn.id },
-            include: { user: { select: { name: true } } },
-          });
+        const tournament = await tx.tournament.findUniqueOrThrow({
+          where: { id: tournamentId },
         });
 
-        return toTournamentEntryDto(entry);
-      } catch (error) {
-        if (error instanceof OptimisticLockError) continue;
-        if (isUniqueConstraintError(error)) {
-          throw new ConflictException('Você já está inscrito neste torneio.');
-        }
-        throw error;
-      }
-    }
+        // Inscrições ANTERIORES deste jogador neste torneio (as vivas o banco
+        // já barra em `tournament_entries_active_user_unique`): > 0 significa
+        // reentrada, e reentrada tem regras próprias.
+        const previousEntries = await tx.tournamentEntry.count({
+          where: { tournamentId, userId, status: { not: 'REFUNDED' } },
+        });
+        assertRegistrationAllowed(tournament, previousEntries);
 
-    throw new ConflictException(
-      'Muita concorrência nas inscrições — tente novamente.',
-    );
+        // Conta só quem está VIVO: com reentry, o eliminado devolveu a vaga.
+        const aliveCount = await tx.tournamentEntry.count({
+          where: { tournamentId, status: { in: [...ALIVE_STATUSES] } },
+        });
+        if (aliveCount >= tournament.maxPlayers) {
+          throw new BadRequestException('Torneio lotado.');
+        }
+
+        const created = await tx.tournamentEntry.create({
+          data: {
+            tournamentId,
+            userId,
+            status: 'REGISTERED',
+            chipStack: tournament.startingStack,
+          },
+        });
+
+        const walletTxn = await this.walletService.applyLedgerEntry(
+          tx,
+          wallet.id,
+          {
+            type: 'TOURNAMENT_BUY_IN',
+            amount: new Prisma.Decimal(tournament.buyIn)
+              .add(tournament.fee)
+              .negated(),
+            idempotencyKey: ledgerKey,
+            description: 'Inscrição em torneio',
+            tournamentEntryId: created.id,
+          },
+        );
+
+        await tx.tournament.update({
+          where: { id: tournamentId },
+          data: {
+            prizePool: { increment: tournament.buyIn },
+            // `version` continua subindo: é o carimbo de "mudou" que os
+            // leitores usam, mesmo sem servir mais de guarda de concorrência.
+            version: { increment: 1 },
+          },
+        });
+
+        // Plano de assento calculado AQUI DENTRO, sobre o estado lido na
+        // própria transação e sob o lock — nunca sobre leitura anterior.
+        await this.seatEntry(
+          tx,
+          tournamentId,
+          tournament.tableCapacity,
+          created.id,
+        );
+
+        return tx.tournamentEntry.update({
+          where: { id: created.id },
+          data: { buyInTransactionId: walletTxn.id },
+          include: ENTRY_INCLUDE,
+        });
+      });
+
+      return toTournamentEntryDto(entry);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        // Chaves de idempotência DIFERENTES para o mesmo jogador ainda vivo
+        // (`tournament_entries_active_user_unique`): aí é 409 de verdade — o
+        // replay legítimo já foi resolvido dentro da transação.
+        throw new ConflictException('Você já está inscrito neste torneio.');
+      }
+      throw error;
+    }
   }
 
-  /** ADMIN: marca a eliminação e, opcionalmente, a colocação final. */
+  /**
+   * ADMIN: marca a eliminação, LIBERA o assento e rebalanceia/quebra mesas
+   * (MT-BE-05) — tudo numa transação só, serializada por torneio.
+   *
+   * Idempotência: reexecutar dá 400 "Inscrição já foi eliminada", como antes.
+   * Não há `Idempotency-Key` aqui de propósito — não há dinheiro envolvido e
+   * o 400 já é resposta suficiente para o caixa.
+   */
   async eliminateEntry(
     tournamentId: string,
     entryId: string,
     dto: EliminateEntryDto,
   ): Promise<TournamentEntryDto> {
-    const entry = await this.prisma.tournamentEntry.findUnique({
-      where: { id: entryId },
-    });
-    if (!entry || entry.tournamentId !== tournamentId) {
-      throw new NotFoundException('Inscrição não encontrada.');
-    }
-    if (entry.status === 'ELIMINATED' || entry.status === 'PAID') {
-      throw new BadRequestException('Inscrição já foi eliminada.');
-    }
+    const eliminated = await this.prisma.$transaction(async (tx) => {
+      await lockTournament(tx, tournamentId);
 
-    // Primeira eliminação: REGISTERING -> RUNNING (o torneio "começou a jogar").
-    await this.prisma.tournament.updateMany({
-      where: { id: tournamentId, status: 'REGISTERING' },
-      data: { status: 'RUNNING' },
+      const entry = await tx.tournamentEntry.findUnique({
+        where: { id: entryId },
+      });
+      if (!entry || entry.tournamentId !== tournamentId) {
+        throw new NotFoundException('Inscrição não encontrada.');
+      }
+      if (entry.status === 'ELIMINATED' || entry.status === 'PAID') {
+        throw new BadRequestException('Inscrição já foi eliminada.');
+      }
+
+      // Desativação, nunca DELETE: a linha vira histórico (append-only).
+      await tx.tournamentSeat.updateMany({
+        where: { tournamentEntryId: entryId, active: true },
+        data: { active: false, releasedAt: new Date() },
+      });
+
+      // Primeira eliminação: REGISTERING -> RUNNING (o torneio "começou a
+      // jogar") — dentro da mesma transação.
+      await tx.tournament.updateMany({
+        where: { id: tournamentId, status: 'REGISTERING' },
+        data: { status: 'RUNNING' },
+      });
+
+      const updated = await tx.tournamentEntry.update({
+        where: { id: entryId },
+        data: {
+          status: 'ELIMINATED',
+          eliminatedAt: new Date(),
+          finalPosition: dto.finalPosition,
+          chipStack: 0,
+        },
+        include: ENTRY_INCLUDE,
+      });
+
+      // Snapshot PÓS-eliminação, como `planRebalance` espera (decisão (f) de
+      // seating.ts). Na maioria das eliminações o plano é vazio.
+      const tables = await this.readTables(tx, tournamentId);
+      await this.applyMoves(tx, tables, planRebalance(toSnapshots(tables)));
+      await closeEmptyTables(tx, tournamentId);
+
+      return updated;
     });
 
-    const updated = await this.prisma.tournamentEntry.update({
-      where: { id: entryId },
-      data: {
-        status: 'ELIMINATED',
-        eliminatedAt: new Date(),
-        finalPosition: dto.finalPosition,
-        chipStack: 0,
+    return toTournamentEntryDto(eliminated);
+  }
+
+  /**
+   * ADMIN: redraw manual (MT-BE-06) — sorteia TODOS os vivos de novo.
+   *
+   * PERMITIDO COM O RELÓGIO `RUNNING`: quem decide é o diretor do torneio, e
+   * exigir pausa só criaria um passo extra que o staff faria errado no meio de
+   * um nível. O retorno é o mapa novo, para conferência imediata.
+   *
+   * Mesas: reaproveita as ABERTAS (mantendo os números impressos nos tickets)
+   * e abre novas com `max(tableNumber) + 1` se faltar. Mesa `CLOSED` NUNCA é
+   * reaberta — fechar é definitivo (ver `TournamentTable` em
+   * tournament.prisma), e o histórico de assentos dela continua consultável.
+   */
+  async redrawTables(
+    adminId: string,
+    tournamentId: string,
+  ): Promise<TournamentTableMapDto> {
+    return this.prisma.$transaction(async (tx) => {
+      await lockTournament(tx, tournamentId);
+
+      const tournament = await tx.tournament.findUniqueOrThrow({
+        where: { id: tournamentId },
+        select: { tableCapacity: true },
+      });
+      const alive = await tx.tournamentEntry.findMany({
+        where: { tournamentId, status: { in: [...ALIVE_STATUSES] } },
+        select: { id: true },
+        orderBy: { registeredAt: 'asc' },
+      });
+      if (alive.length === 0) {
+        throw new BadRequestException(
+          'Nenhum jogador vivo neste torneio para sortear.',
+        );
+      }
+
+      const tables = await this.readTables(tx, tournamentId);
+      const origin = new Map(
+        tables.flatMap((table) =>
+          table.seats.map((seat) => [
+            seat.tournamentEntry.id,
+            { tableId: table.id, seatNumber: seat.seatNumber },
+          ]),
+        ),
+      );
+
+      const assignments = planRedraw(
+        alive.map((entry) => entry.id),
+        tournament.tableCapacity,
+      );
+      const tableCount = Math.max(...assignments.map((a) => a.tableNumber));
+
+      const open = tables.filter((table) => table.status === 'OPEN');
+      let highest = tables.reduce(
+        (max, table) => Math.max(max, table.tableNumber),
+        0,
+      );
+      const destinations: string[] = [];
+      for (let index = 0; index < tableCount; index += 1) {
+        const reused = open[index];
+        if (reused) {
+          destinations.push(reused.id);
+          continue;
+        }
+        highest += 1;
+        const opened = await tx.tournamentTable.create({
+          data: {
+            tournamentId,
+            tableNumber: highest,
+            capacity: tournament.tableCapacity,
+          },
+        });
+        destinations.push(opened.id);
+      }
+
+      // Solta TODO mundo antes de sentar qualquer um: no redraw um assento de
+      // destino é quase sempre um assento de origem de outra pessoa, e o
+      // índice parcial `tournament_seats_active_seat_unique` recusaria a
+      // sobreposição se as inserções viessem intercaladas.
+      const releasedAt = new Date();
+      await tx.tournamentSeat.updateMany({
+        where: { active: true, tournamentTable: { tournamentId } },
+        data: { active: false, releasedAt },
+      });
+
+      for (const assignment of assignments) {
+        const from = origin.get(assignment.entryId);
+        await tx.tournamentSeat.create({
+          data: {
+            tournamentTableId: destinations[assignment.tableNumber - 1],
+            tournamentEntryId: assignment.entryId,
+            seatNumber: assignment.seatNumber,
+            reason: 'MANUAL_REDRAW',
+            fromTableId: from?.tableId ?? null,
+            fromSeatNumber: from?.seatNumber ?? null,
+            // Ator OBRIGATÓRIO aqui: é o "por quem, se manual" do PRD §5.2.
+            movedById: adminId,
+          },
+        });
+      }
+
+      await closeEmptyTables(tx, tournamentId);
+
+      return toTournamentTableMapDto(
+        tournamentId,
+        await this.readTables(tx, tournamentId),
+      );
+    });
+  }
+
+  /**
+   * Mapa de mesas para EXIBIÇÃO pública (MT-BE-08).
+   *
+   * UMA query: `TABLE_SELECT` já traz assentos ativos + inscrição sentada num
+   * select aninhado, e ele sai pendurado no `findUnique` do torneio para que
+   * um id inexistente vire 404 sem custar uma segunda ida ao banco.
+   *
+   * Sem transação de propósito: é leitura para polling de TV, e o snapshot que
+   * o Postgres devolve numa query só já é consistente.
+   */
+  async readPublicTableMap(
+    tournamentId: string,
+  ): Promise<PublicTournamentTableMapDto> {
+    const tournament = await this.prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      select: {
+        tables: { orderBy: { tableNumber: 'asc' }, select: TABLE_SELECT },
       },
-      include: { user: { select: { name: true } } },
+    });
+    if (!tournament) throw new NotFoundException('Torneio não encontrado.');
+
+    return toPublicTournamentTableMapDto(tournamentId, tournament.tables);
+  }
+
+  /** Mesas do torneio com a ocupação ATIVA. Sempre lida dentro da transação. */
+  private readTables(
+    tx: Prisma.TransactionClient,
+    tournamentId: string,
+  ): Promise<TournamentTableRow[]> {
+    return tx.tournamentTable.findMany({
+      where: { tournamentId },
+      orderBy: { tableNumber: 'asc' },
+      select: TABLE_SELECT,
+    });
+  }
+
+  /**
+   * Senta uma inscrição recém-criada (inscrição inicial ou reentrada) e, se
+   * isso abriu uma mesa nova ao lado de mesas já abertas, rebalanceia — ver o
+   * docblock de `registerEntry` sobre a composição das duas funções.
+   */
+  private async seatEntry(
+    tx: Prisma.TransactionClient,
+    tournamentId: string,
+    tableCapacity: number,
+    entryId: string,
+  ): Promise<void> {
+    const tables = await this.readTables(tx, tournamentId);
+    const plan = planInitialSeat(toSnapshots(tables), tableCapacity);
+
+    let tableId = tables.find(
+      (table) => table.tableNumber === plan.tableNumber,
+    )?.id;
+    if (plan.openNewTable) {
+      const opened = await tx.tournamentTable.create({
+        data: {
+          tournamentId,
+          tableNumber: plan.tableNumber,
+          capacity: plan.capacity,
+        },
+      });
+      tableId = opened.id;
+    }
+
+    await tx.tournamentSeat.create({
+      data: {
+        tournamentTableId: tableId!,
+        tournamentEntryId: entryId,
+        seatNumber: plan.seatNumber,
+        reason: 'INITIAL',
+      },
     });
 
-    return toTournamentEntryDto(updated);
+    if (plan.openNewTable && tables.some((table) => table.status === 'OPEN')) {
+      const after = await this.readTables(tx, tournamentId);
+      await this.applyMoves(tx, after, planRebalance(toSnapshots(after)));
+    }
+  }
+
+  /**
+   * Aplica os `Move`s do planejador: cada um vira desativar a linha corrente +
+   * INSERT da nova (append-only). SEQUENCIAL e na ordem do plano de propósito
+   * — é a mesma ordem em que o planejador mutou o estado dele, então um
+   * destino que só ficou livre por causa de um move anterior já está livre
+   * quando chega a vez dele.
+   */
+  private async applyMoves(
+    tx: Prisma.TransactionClient,
+    tables: TournamentTableRow[],
+    moves: Move[],
+    movedById: string | null = null,
+  ): Promise<void> {
+    if (moves.length === 0) return;
+
+    const tableIds = new Map(
+      tables.map((table) => [table.tableNumber, table.id]),
+    );
+    const releasedAt = new Date();
+
+    for (const move of moves) {
+      await tx.tournamentSeat.updateMany({
+        where: { tournamentEntryId: move.entryId, active: true },
+        data: { active: false, releasedAt },
+      });
+      await tx.tournamentSeat.create({
+        data: {
+          tournamentTableId: tableIds.get(move.toTable)!,
+          tournamentEntryId: move.entryId,
+          seatNumber: move.toSeat,
+          reason: move.reason,
+          fromTableId: tableIds.get(move.fromTable) ?? null,
+          fromSeatNumber: move.fromSeat,
+          movedById,
+        },
+      });
+    }
+  }
+
+  /** Níveis do preset prontos para o nested `create` — 404 se ele não existe. */
+  private async copyBlindLevels(
+    blindStructureId: string | undefined,
+  ): Promise<Prisma.TournamentBlindLevelCreateWithoutTournamentInput[]> {
+    if (!blindStructureId) return [];
+
+    const structure = await this.prisma.blindStructure.findUnique({
+      where: { id: blindStructureId },
+      include: { levels: { orderBy: { levelNumber: 'asc' } } },
+    });
+    if (!structure) {
+      throw new NotFoundException('Estrutura de blinds não encontrada.');
+    }
+
+    return structure.levels.map((level) => ({
+      levelNumber: level.levelNumber,
+      smallBlind: level.smallBlind,
+      bigBlind: level.bigBlind,
+      ante: level.ante,
+      durationSeconds: level.durationSeconds,
+      isBreak: level.isBreak,
+      breakLabel: level.breakLabel,
+    }));
   }
 
   /**
@@ -356,6 +743,12 @@ export class TournamentService {
       winnerId !== null && !payouts.some((p) => p.entryId === winnerId);
 
     await this.prisma.$transaction(async (tx) => {
+      // Mesma ORDEM DE LOCKS de `registerEntry` (torneio → wallet). Sem isto,
+      // um encerramento concorrente com uma inscrição de última hora fecharia
+      // um ciclo torneio↔wallet e o Postgres abortaria uma das duas por
+      // deadlock. Serializa também dois `finish` simultâneos.
+      await lockTournament(tx, tournamentId);
+
       for (const payout of payouts) {
         const entry = byPosition.get(payout.position)!;
         const wallet = await tx.wallet.findUniqueOrThrow({
@@ -403,12 +796,165 @@ export class TournamentService {
   }
 }
 
-/** Sinaliza conflito de `version` para o loop de retry — nunca escapa do método público. */
-class OptimisticLockError extends Error {}
+/**
+ * Ticket já emitido para esta `Idempotency-Key`, se existir. O
+ * `WalletTransaction` é a âncora (é ele que carrega a chave `@unique`, fonte
+ * de verdade do replay — MT-003 item 4) e o `include` do assento é
+ * obrigatório: sem ele o replay devolveria `tableNumber: null` e o caixa
+ * reimprimiria um ticket vazio.
+ *
+ * Recebe o client como parâmetro para servir aos DOIS pontos de checagem: o
+ * caminho rápido, fora da transação, e a reconferência sob o lock.
+ */
+async function findReplay(
+  client: Prisma.TransactionClient,
+  ledgerKey: string,
+): Promise<Prisma.TournamentEntryGetPayload<{
+  include: typeof ENTRY_INCLUDE;
+}> | null> {
+  const existingTxn = await client.walletTransaction.findUnique({
+    where: { idempotencyKey: ledgerKey },
+  });
+  if (!existingTxn?.tournamentEntryId) return null;
+
+  return client.tournamentEntry.findUnique({
+    where: { id: existingTxn.tournamentEntryId },
+    include: ENTRY_INCLUDE,
+  });
+}
 
 function isUniqueConstraintError(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
     error.code === 'P2002'
   );
+}
+
+/**
+ * Serializa as operações de assento de UM torneio. Pessimista, e não o lock
+ * otimista de `version`: duas eliminações concorrentes produzem planos de
+ * movimentação incompatíveis, e refazer N moves em retry é caro e propenso a
+ * laço — o mesmo trade-off que motivou o pessimista na wallet.
+ *
+ * // ponytail: lock por torneio; particionar por mesa se throughput de
+ * // eliminações crescer muito.
+ */
+async function lockTournament(
+  tx: Prisma.TransactionClient,
+  tournamentId: string,
+): Promise<void> {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM tournaments WHERE id = ${tournamentId} FOR UPDATE
+  `;
+  if (rows.length === 0) throw new NotFoundException('Torneio não encontrado.');
+}
+
+/** Mesa sem ninguém sentado não recebe mais ninguém: fechar é definitivo. */
+async function closeEmptyTables(
+  tx: Prisma.TransactionClient,
+  tournamentId: string,
+): Promise<void> {
+  await tx.tournamentTable.updateMany({
+    where: {
+      tournamentId,
+      status: 'OPEN',
+      seats: { none: { active: true } },
+    },
+    data: { status: 'CLOSED' },
+  });
+}
+
+/** Linhas do banco → o snapshot puro que `seating.ts` consome. */
+function toSnapshots(tables: TournamentTableRow[]): TableSnapshot[] {
+  return tables.map((table) => ({
+    tableNumber: table.tableNumber,
+    capacity: table.capacity,
+    isOpen: table.status === 'OPEN',
+    seats: table.seats.map((seat) => ({
+      entryId: seat.tournamentEntry.id,
+      seatNumber: seat.seatNumber,
+    })),
+  }));
+}
+
+/**
+ * Porta de entrada da inscrição (MT-BE-04) e da reentrada (MT-BE-09).
+ *
+ * `previousEntries > 0` ⇒ é reentrada: o índice parcial
+ * `tournament_entries_active_user_unique` garante que nenhuma delas está viva,
+ * então o que resta validar é a POLÍTICA — o torneio permite? quantas já
+ * foram? o relógio ainda está dentro da janela? `maxReentries` conta
+ * REENTRADAS, não inscrições: com `maxReentries = 1` o jogador entra duas
+ * vezes no total.
+ */
+function assertRegistrationAllowed(
+  tournament: {
+    status: string;
+    allowReentry: boolean;
+    maxReentries: number | null;
+    reentryUntilLevel: number | null;
+    currentLevelNumber: number | null;
+  },
+  previousEntries: number,
+): void {
+  const isReentry = previousEntries > 0;
+
+  if (isReentry) {
+    if (!tournament.allowReentry) {
+      throw new BadRequestException('Este torneio não permite reentrada.');
+    }
+    if (
+      tournament.maxReentries !== null &&
+      previousEntries > tournament.maxReentries
+    ) {
+      throw new BadRequestException(
+        `Limite de ${tournament.maxReentries} reentrada(s) por jogador já atingido.`,
+      );
+    }
+    if (
+      tournament.reentryUntilLevel !== null &&
+      tournament.currentLevelNumber !== null &&
+      tournament.currentLevelNumber > tournament.reentryUntilLevel
+    ) {
+      throw new BadRequestException(
+        `Reentradas encerradas — o torneio passou do nível ${tournament.reentryUntilLevel}.`,
+      );
+    }
+  }
+
+  // Reentrada em torneio já RUNNING é o caso NORMAL (o jogador só reentra
+  // depois de ser eliminado, e a primeira eliminação já mudou o status).
+  // Inscrição nova continua exigindo REGISTERING.
+  const open =
+    tournament.status === 'REGISTERING' ||
+    (isReentry && tournament.status === 'RUNNING');
+  if (!open) {
+    throw new BadRequestException(
+      'Inscrições não estão abertas para este torneio.',
+    );
+  }
+}
+
+/** Configuração de reentrada coerente na criação do torneio (MT-BE-03). */
+function assertCoherentReentryConfig(
+  dto: CreateTournamentDto,
+  levelCount: number,
+): void {
+  if (
+    !dto.allowReentry &&
+    (dto.maxReentries !== undefined || dto.reentryUntilLevel !== undefined)
+  ) {
+    throw new BadRequestException(
+      'maxReentries/reentryUntilLevel exigem allowReentry = true.',
+    );
+  }
+  if (
+    dto.reentryUntilLevel !== undefined &&
+    levelCount > 0 &&
+    dto.reentryUntilLevel > levelCount
+  ) {
+    throw new BadRequestException(
+      `reentryUntilLevel (${dto.reentryUntilLevel}) está fora da estrutura de blinds, que tem ${levelCount} níveis.`,
+    );
+  }
 }
