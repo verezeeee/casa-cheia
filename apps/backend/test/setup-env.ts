@@ -65,3 +65,17 @@ for (const [key, value] of Object.entries(TEST_ENV_DEFAULTS)) {
 // COOKIE_DOMAIN é legitimamente vazio; o loop acima o trata como "ausente",
 // então garantimos a chave definida para não cair em `undefined`.
 process.env.COOKIE_DOMAIN ??= '';
+
+// Conexão com o role de aplicação (poker_app: NOSUPERUSER, NOBYPASSRLS, criado
+// por docker/postgres/init/01-app-role.sql). Ainda não é consumida por nenhum
+// código: fica disponível para as suítes de RLS (CL-TEST-01), que precisam
+// falar com o banco como a aplicação fala - RLS é ignorado para o owner
+// "poker" usado pelas migrations, então testar com DATABASE_URL não provaria
+// nada. Derivada da URL de teste efetiva para valer também no CI, onde o
+// host/porta do Postgres não são os do docker-compose.
+if (!process.env.DATABASE_URL_APP_TEST) {
+  const url = new URL(process.env.DATABASE_URL as string);
+  url.username = 'poker_app';
+  url.password = process.env.POKER_APP_DB_PASSWORD ?? 'poker_app';
+  process.env.DATABASE_URL_APP_TEST = url.toString();
+}

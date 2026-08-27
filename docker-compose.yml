@@ -9,10 +9,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-poker}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poker}
       POSTGRES_DB: ${POSTGRES_DB:-poker_system}
+      # Consumida por docker/postgres/init/01-app-role.sql (via psql \getenv).
+      POKER_APP_DB_PASSWORD: ${POKER_APP_DB_PASSWORD:-poker_app}
     ports:
       - '${POSTGRES_PORT:-5432}:5432'
     volumes:
       - poker_postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-poker} -d ${POSTGRES_DB:-poker_system}']
       interval: 5s
@@ -44,6 +47,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-poker}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poker}
       POSTGRES_DB: ${POSTGRES_TEST_DB:-poker_system_test}
+      POKER_APP_DB_PASSWORD: ${POKER_APP_DB_PASSWORD:-poker_app}
       # Banco efêmero: durabilidade não importa e desligar o fsync deixa as
       # suítes de integração sensivelmente mais rápidas.
       PGDATA: /var/lib/postgresql/data/pgdata
@@ -52,6 +56,10 @@ services:
       - '${POSTGRES_TEST_PORT:-5433}:5432'
     tmpfs:
       - /var/lib/postgresql/data
+    volumes:
+      # Datadir em tmpfs: o init roda a cada start do container, não só na
+      # primeira vez - o role poker_app é recriado junto com o cluster.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         [
