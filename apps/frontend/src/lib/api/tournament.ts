@@ -1,11 +1,18 @@
 import type {
   PaginatedResponse,
+  PublicTournamentTableMapDto,
+  TournamentClockDto,
   TournamentDetailResponse,
   TournamentEntryDto,
   TournamentSummaryDto,
+  TournamentTableMapDto,
 } from '@poker-system/shared';
 import { httpClient } from '../http-client';
-import type { CreateTournamentRequest, EliminateEntryRequest } from './types';
+import type {
+  CreateTournamentRequest,
+  EliminateEntryRequest,
+  UpdateBlindLevelRequest,
+} from './types';
 
 const TOURNAMENT_PATHS = {
   base: '/tournaments',
@@ -13,7 +20,20 @@ const TOURNAMENT_PATHS = {
   register: (id: string) => `/tournaments/${id}/register`,
   eliminate: (id: string, entryId: string) => `/tournaments/${id}/entries/${entryId}/eliminate`,
   finish: (id: string) => `/tournaments/${id}/finish`,
+  redraw: (id: string) => `/tournaments/${id}/redraw`,
+  clock: (id: string, action: ClockAction) => `/tournaments/${id}/clock/${action}`,
+  blindLevel: (id: string, levelNumber: number) => `/tournaments/${id}/blind-levels/${levelNumber}`,
+  /**
+   * Leituras PÚBLICAS (`tournament-display.controller.ts`): são os ÚNICOS GETs
+   * de relógio e de mapa de mesas do backend — não existe par autenticado sob
+   * `/tournaments/:id/...` (`@Get(':id')` é catch-all lá). O staff consome as
+   * mesmas rotas; a diferença é só o payload de mesas, que vem sem `userId`.
+   */
+  displayClock: (id: string) => `/display/tournaments/${id}/clock`,
+  displayTables: (id: string) => `/display/tournaments/${id}/tables`,
 } as const;
+
+type ClockAction = 'start' | 'pause' | 'resume' | 'next' | 'previous';
 
 export function listTournaments(cursor?: string): Promise<PaginatedResponse<TournamentSummaryDto>> {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
@@ -51,6 +71,62 @@ export function finishTournament(id: string): Promise<TournamentDetailResponse> 
   return httpClient.post<TournamentDetailResponse>(TOURNAMENT_PATHS.finish(id), undefined);
 }
 
+/**
+ * Estado do relógio. Rota pública: funciona SEM sessão (a TV do salão não faz
+ * login) — `httpClient` só anexa `Authorization` quando há token em memória.
+ */
+export function getClock(id: string): Promise<TournamentClockDto> {
+  return httpClient.get<TournamentClockDto>(TOURNAMENT_PATHS.displayClock(id));
+}
+
+/** Mapa de mesas. Rota pública, mesmo caso de `getClock`: sem `userId` no payload. */
+export function getTableMap(id: string): Promise<PublicTournamentTableMapDto> {
+  return httpClient.get<PublicTournamentTableMapDto>(TOURNAMENT_PATHS.displayTables(id));
+}
+
+/** ADMIN. Redraw manual — devolve o mapa novo (com `userId`), sem precisar de GET. */
+export function redraw(id: string): Promise<TournamentTableMapDto> {
+  return httpClient.post<TournamentTableMapDto>(TOURNAMENT_PATHS.redraw(id), undefined);
+}
+
+function clockAction(id: string, action: ClockAction): Promise<TournamentClockDto> {
+  return httpClient.post<TournamentClockDto>(TOURNAMENT_PATHS.clock(id, action), undefined);
+}
+
+/** ADMIN. Todas as mutações do relógio devolvem o `TournamentClockDto` já atualizado. */
+export function startClock(id: string): Promise<TournamentClockDto> {
+  return clockAction(id, 'start');
+}
+
+/** ADMIN. */
+export function pauseClock(id: string): Promise<TournamentClockDto> {
+  return clockAction(id, 'pause');
+}
+
+/** ADMIN. */
+export function resumeClock(id: string): Promise<TournamentClockDto> {
+  return clockAction(id, 'resume');
+}
+
+/** ADMIN. */
+export function nextLevel(id: string): Promise<TournamentClockDto> {
+  return clockAction(id, 'next');
+}
+
+/** ADMIN. Recusado (400) quando já está no nível 1. */
+export function previousLevel(id: string): Promise<TournamentClockDto> {
+  return clockAction(id, 'previous');
+}
+
+/** ADMIN. Edita um nível da grade DESTE torneio (não o preset). */
+export function updateBlindLevel(
+  id: string,
+  levelNumber: number,
+  input: UpdateBlindLevelRequest,
+): Promise<TournamentClockDto> {
+  return httpClient.patch<TournamentClockDto>(TOURNAMENT_PATHS.blindLevel(id, levelNumber), input);
+}
+
 export const tournamentApi = {
   listTournaments,
   createTournament,
@@ -58,4 +134,13 @@ export const tournamentApi = {
   registerEntry,
   eliminateEntry,
   finishTournament,
+  getClock,
+  getTableMap,
+  redraw,
+  startClock,
+  pauseClock,
+  resumeClock,
+  nextLevel,
+  previousLevel,
+  updateBlindLevel,
 };

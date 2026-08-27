@@ -1,5 +1,6 @@
 import {
   FormatError,
+  formatCountdown,
   formatDateTime,
   formatDateTimeSafe,
   formatMoney,
@@ -99,5 +100,25 @@ describe('formatDateTimeSafe', () => {
   it('devolve o fallback quando inválido', () => {
     expect(formatDateTimeSafe('nope')).toBe('—');
     expect(formatDateTimeSafe('nope', 'sem data')).toBe('sem data');
+  });
+});
+
+describe('formatCountdown', () => {
+  it.each([
+    [0, '00:00'],
+    [999, '00:01'],
+    [1_000, '00:01'],
+    [59_000, '00:59'],
+    [60_000, '01:00'],
+    [20 * 60_000, '20:00'],
+    [3_600_000, '1:00:00'],
+    [3_661_000, '1:01:01'],
+  ])('formata %pms como %s', (input, expected) => {
+    expect(formatCountdown(input)).toBe(expected);
+  });
+
+  it('clampa em zero para durações negativas ou inválidas', () => {
+    expect(formatCountdown(-5_000)).toBe('00:00');
+    expect(formatCountdown(Number.NaN)).toBe('00:00');
   });
 });

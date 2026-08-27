@@ -2,7 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
 import cookieParser from 'cookie-parser';
-import { createHmac, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
@@ -23,11 +23,19 @@ const fakeAbacatePayClient = {
   requestPixWithdrawal: jest.fn(),
 };
 
-function signWebhook(body: string, timestamp: string): string {
-  const secret = process.env.ABACATEPAY_WEBHOOK_SECRET ?? '';
-  return createHmac('sha256', secret)
-    .update(`${timestamp}.${body}`)
-    .digest('hex');
+/**
+ * Envelope confirmado contra uma entrega real do AbacatePay (23/08/2026,
+ * `transparent.completed`, dev mode) — ver docblock de
+ * `WalletService.handleWebhook`.
+ */
+function webhookBody(event: string, resource: string, dataId: string): string {
+  return JSON.stringify({
+    id: `evt-${randomUUID()}`,
+    event,
+    apiVersion: 2,
+    devMode: true,
+    data: { [resource]: { id: dataId } },
+  });
 }
 
 describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)', () => {
@@ -97,18 +105,13 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
       .send({ amount: '300.00' })
       .expect(201);
 
-    const webhookBody = JSON.stringify({
-      id: `evt-${randomUUID()}`,
-      event: 'transparent.completed',
-      data: { id: chargeExternalId },
-    });
-    const timestamp = String(Math.floor(Date.now() / 1000));
     await request(app.getHttpServer())
       .post('/api/webhooks/abacatepay')
       .set('Content-Type', 'application/json')
-      .set('x-abacatepay-signature', signWebhook(webhookBody, timestamp))
-      .set('x-abacatepay-timestamp', timestamp)
-      .send(webhookBody)
+      .set('X-Webhook-Secret', process.env.ABACATEPAY_WEBHOOK_SECRET ?? '')
+      .send(
+        webhookBody('transparent.completed', 'transparent', chargeExternalId),
+      )
       .expect(204);
     expect((await balance().expect(200)).body.balance).toBe('300.00');
 

@@ -27,4 +27,16 @@ export interface TournamentEntryDto {
 
   /** Prêmio creditado na Wallet; `null` se não houver premiação. */
   prizeAmount: MoneyString | null;
+
+  /**
+   * Mesa e assento correntes — o "ticket" que o caixa entrega ao jogador logo
+   * após a inscrição.
+   *
+   * `null` quando a inscrição ainda não tem assento ativo: torneio sem mesas
+   * distribuídas, jogador eliminado (o assento é liberado) ou torneio anterior
+   * ao MVP de mesas. Nullable de propósito — não quebra consumidor existente.
+   */
+  tableNumber: number | null;
+
+  seatNumber: number | null;
 }

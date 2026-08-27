@@ -38,12 +38,6 @@ export const abacatePayConfig = registerAs('abacatePay', () => ({
   apiKey: process.env.ABACATEPAY_API_KEY,
   baseUrl: process.env.ABACATEPAY_BASE_URL ?? 'https://api.abacatepay.com/v2',
   webhookSecret: process.env.ABACATEPAY_WEBHOOK_SECRET,
-  // Janela (em segundos) aceita entre o timestamp assinado do webhook e o
-  // "agora" do servidor. Além dela, o evento é descartado como replay.
-  webhookToleranceSeconds: parseInt(
-    process.env.ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS ?? '300',
-    10,
-  ),
 }));
 
 /**

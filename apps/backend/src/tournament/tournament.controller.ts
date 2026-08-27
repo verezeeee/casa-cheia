@@ -4,15 +4,19 @@ import {
   Get,
   Headers,
   Param,
+  ParseIntPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import type {
   PaginatedResponse,
+  TournamentClockDto,
   TournamentDetailResponse,
   TournamentEntryDto,
   TournamentSummaryDto,
+  TournamentTableMapDto,
 } from '@poker-system/shared';
 import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -24,12 +28,17 @@ import { requireIdempotencyKey } from '../common/http/require-idempotency-key';
 import { CreateTournamentDto } from './dto/create-tournament.dto';
 import { EliminateEntryDto } from './dto/eliminate-entry.dto';
 import { ListTournamentsQueryDto } from './dto/list-tournaments-query.dto';
+import { UpdateBlindLevelDto } from './dto/update-blind-level.dto';
+import { TournamentClockService } from './tournament-clock.service';
 import { TournamentService } from './tournament.service';
 
 @Controller('tournaments')
 @UseGuards(JwtAuthGuard)
 export class TournamentController {
-  constructor(private readonly tournamentService: TournamentService) {}
+  constructor(
+    private readonly tournamentService: TournamentService,
+    private readonly clockService: TournamentClockService,
+  ) {}
 
   @Post()
   @UseGuards(RolesGuard)
@@ -80,6 +89,20 @@ export class TournamentController {
     return this.tournamentService.eliminateEntry(tournamentId, entryId, dto);
   }
 
+  /**
+   * Redraw manual (MT-BE-06). Permitido com o relógio em andamento — quem
+   * decide é o diretor; a resposta é o mapa novo para o staff conferir.
+   */
+  @Post(':id/redraw')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async redraw(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') tournamentId: string,
+  ): Promise<TournamentTableMapDto> {
+    return this.tournamentService.redrawTables(user.id, tournamentId);
+  }
+
   @Post(':id/finish')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
@@ -87,5 +110,64 @@ export class TournamentController {
     @Param('id') tournamentId: string,
   ): Promise<TournamentDetailResponse> {
     return this.tournamentService.finishTournament(tournamentId);
+  }
+
+  // --- Relógio de blinds (MT-BE-07) — todas ADMIN, todas devolvem o estado
+  // já atualizado para o staff não precisar de um GET logo em seguida.
+
+  @Post(':id/clock/start')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async startClock(
+    @Param('id') tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.clockService.start(tournamentId);
+  }
+
+  @Post(':id/clock/pause')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async pauseClock(
+    @Param('id') tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.clockService.pause(tournamentId);
+  }
+
+  @Post(':id/clock/resume')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async resumeClock(
+    @Param('id') tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.clockService.resume(tournamentId);
+  }
+
+  @Post(':id/clock/next')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async nextLevel(
+    @Param('id') tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.clockService.next(tournamentId);
+  }
+
+  @Post(':id/clock/previous')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async previousLevel(
+    @Param('id') tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.clockService.previous(tournamentId);
+  }
+
+  @Patch(':id/blind-levels/:levelNumber')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  async updateBlindLevel(
+    @Param('id') tournamentId: string,
+    @Param('levelNumber', ParseIntPipe) levelNumber: number,
+    @Body() dto: UpdateBlindLevelDto,
+  ): Promise<TournamentClockDto> {
+    return this.clockService.updateLevel(tournamentId, levelNumber, dto);
   }
 }

@@ -45,8 +45,15 @@ const TOURNAMENT = {
       chipStack: 10_000,
       finalPosition: null,
       prizeAmount: null,
+      tableNumber: null,
+      seatNumber: null,
     },
   ],
+};
+
+const TOURNAMENT_SEATED = {
+  ...TOURNAMENT,
+  entries: [{ ...TOURNAMENT.entries[0], tableNumber: 3, seatNumber: 7 }],
 };
 
 describe('TournamentDetail', () => {
@@ -89,6 +96,40 @@ describe('TournamentDetail', () => {
     expect(screen.queryByText('Inscrever-se')).not.toBeInTheDocument();
   });
 
+  it('destaca mesa e assento do jogador e repete na linha da listagem', async () => {
+    mockedUseSession.mockReturnValue({
+      user: { id: 'other', email: 'other@x.dev', name: 'Outro', role: UserRole.PLAYER },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT_SEATED);
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+
+    await waitFor(() => expect(screen.getByText('Mesa 3 · Assento 7')).toBeInTheDocument());
+    expect(screen.queryByText('Você está inscrito neste torneio.')).not.toBeInTheDocument();
+    expect(screen.getByText('10000 fichas · Mesa 3 · Assento 7')).toBeInTheDocument();
+  });
+
+  it('omite o destaque quando tableNumber/seatNumber são null', async () => {
+    mockedUseSession.mockReturnValue({
+      user: { id: 'other', email: 'other@x.dev', name: 'Outro', role: UserRole.PLAYER },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Você está inscrito neste torneio.')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Mesa/)).not.toBeInTheDocument();
+    expect(screen.getByText('10000 fichas')).toBeInTheDocument();
+  });
+
   it('ADMIN pode eliminar uma inscrição e encerrar o torneio', async () => {
     mockedUseSession.mockReturnValue({
       user: { id: 'admin', email: 'admin@x.dev', name: 'Admin', role: UserRole.ADMIN },
@@ -116,6 +157,30 @@ describe('TournamentDetail', () => {
 
     fireEvent.click(screen.getByText('Encerrar torneio'));
     await waitFor(() => expect(tournamentApi.finishTournament).toHaveBeenCalledWith('trn-1'));
+  });
+
+  it('linka mesas, relógio e TV — a TV em nova aba', async () => {
+    mockedUseSession.mockReturnValue({
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu', role: UserRole.PLAYER },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Ver mesas')).toBeInTheDocument());
+
+    expect(screen.getByText('Ver mesas')).toHaveAttribute('href', '/tournaments/trn-1/tables');
+    expect(screen.getByText('Controlar relógio')).toHaveAttribute(
+      'href',
+      '/tournaments/trn-1/clock',
+    );
+
+    const tv = screen.getByText('Tela de TV');
+    expect(tv).toHaveAttribute('href', '/display/tournaments/trn-1');
+    expect(tv).toHaveAttribute('target', '_blank');
+    expect(tv).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
   it('mostra mensagem de erro quando a query falha', async () => {

@@ -18,22 +18,22 @@ describe('AbacatePayWebhookController', () => {
     const { controller } = buildController();
     const req = { rawBody: undefined } as unknown as Request;
 
-    await expect(controller.handle(req, 'sig', '123')).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    await expect(
+      controller.handle(req, 'secret-header', 'secret-query'),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('repassa o corpo bruto e os headers de assinatura/timestamp ao service', async () => {
+  it('repassa o corpo bruto e o secret (header e query) ao service', async () => {
     const { controller, walletService } = buildController();
     const rawBody = Buffer.from('{"id":"evt-1"}');
     const req = { rawBody } as unknown as Request;
 
-    await controller.handle(req, 'sig-abc', '1700000000');
+    await controller.handle(req, 'secret-header', 'secret-query');
 
     expect(walletService.handleWebhook).toHaveBeenCalledWith(
       rawBody,
-      'sig-abc',
-      '1700000000',
+      'secret-header',
+      'secret-query',
     );
   });
 });

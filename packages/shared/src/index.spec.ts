@@ -7,14 +7,19 @@ import {
   TableSessionStatus,
   TableStatus,
   TableType,
+  TournamentClockStatus,
   TournamentEntryStatus,
+  TournamentSeatReason,
   TournamentStatus,
+  TournamentTableStatus,
   UserRole,
   WalletTransactionStatus,
   WalletTransactionType,
 } from './index';
 import type {
   AuthTokensResponse,
+  BlindLevelDto,
+  BlindStructureDto,
   MoneyString,
   PaginatedResponse,
   PixChargeResponse,
@@ -22,8 +27,12 @@ import type {
   SessionUser,
   TableSeatDto,
   TableSummaryDto,
+  TournamentClockDto,
   TournamentEntryDto,
+  TournamentSeatDto,
   TournamentSummaryDto,
+  TournamentTableDto,
+  TournamentTableMapDto,
   WalletBalanceResponse,
   WalletTransactionDto,
 } from './index';
@@ -112,6 +121,20 @@ describe('@poker-system/shared barrel export', () => {
     });
   });
 
+  describe('enums de mesas de torneio (MT-SH-01)', () => {
+    it('exporta TournamentClockStatus', () => {
+      assertEnumLiterals(TournamentClockStatus, ['NOT_STARTED', 'RUNNING', 'PAUSED', 'FINISHED']);
+    });
+
+    it('exporta TournamentTableStatus', () => {
+      assertEnumLiterals(TournamentTableStatus, ['OPEN', 'CLOSED']);
+    });
+
+    it('exporta TournamentSeatReason', () => {
+      assertEnumLiterals(TournamentSeatReason, ['INITIAL', 'BALANCE', 'BREAK', 'MANUAL_REDRAW']);
+    });
+  });
+
   describe('contratos de tipo (validados em tempo de compilação)', () => {
     it('aceita objetos que satisfazem as interfaces exportadas', () => {
       const money: MoneyString = '1250.00';
@@ -195,6 +218,56 @@ describe('@poker-system/shared barrel export', () => {
         chipStack: 25_000,
         finalPosition: null,
         prizeAmount: null,
+        tableNumber: 3,
+        seatNumber: 7,
+      };
+
+      const level: BlindLevelDto = {
+        levelNumber: 1,
+        smallBlind: 100,
+        bigBlind: 200,
+        ante: 0,
+        durationSeconds: 1_200,
+        isBreak: false,
+        breakLabel: null,
+      };
+
+      const structure: BlindStructureDto = {
+        id: 'bls_1',
+        name: 'Turbo 20min',
+        levels: [level],
+      };
+
+      const clock: TournamentClockDto = {
+        clockStatus: TournamentClockStatus.RUNNING,
+        currentLevel: level,
+        nextLevel: null,
+        levelEndsAt: '2026-02-01T21:20:00.000Z',
+        remainingMs: 1_200_000,
+        serverTime: '2026-02-01T21:00:00.000Z',
+      };
+
+      const seat: TournamentSeatDto = {
+        entryId: entry.id,
+        userId: sessionUser.id,
+        userName: sessionUser.name,
+        seatNumber: 7,
+        chipStack: 25_000,
+      };
+
+      const tournamentTable: TournamentTableDto = {
+        id: 'ttb_1',
+        tableNumber: 3,
+        capacity: 9,
+        status: TournamentTableStatus.OPEN,
+        seats: [seat],
+      };
+
+      const tableMap: TournamentTableMapDto = {
+        tournamentId: tournament.id,
+        tables: [tournamentTable],
+        playersRemaining: 1,
+        averageStack: 25_000,
       };
 
       const page: PaginatedResponse<WalletTransactionDto> = {
@@ -210,6 +283,12 @@ describe('@poker-system/shared barrel export', () => {
       assert.equal(emptySeat.currentStack, null);
       assert.equal(tournament.fee, '10.00');
       assert.equal(entry.chipStack, 25_000);
+      assert.equal(entry.tableNumber, 3);
+      assert.equal(entry.seatNumber, 7);
+      assert.equal(structure.levels[0]?.bigBlind, 200);
+      assert.equal(clock.serverTime, '2026-02-01T21:00:00.000Z');
+      assert.equal(tableMap.tables[0]?.seats[0]?.entryId, entry.id);
+      assert.equal(tableMap.playersRemaining, 1);
       assert.equal(page.nextCursor, null);
       assert.equal(page.items.length, 1);
     });
@@ -242,10 +321,24 @@ describe('@poker-system/shared barrel export', () => {
         createdAt: '2026-01-31T12:00:00.000Z',
       } satisfies PixWithdrawalResponse;
 
+      // Blind de torneio é FICHA (number), não dinheiro: o erro aqui é o
+      // inverso dos anteriores — string onde se espera number.
+      const invalidLevel = {
+        levelNumber: 1,
+        // @ts-expect-error blind de torneio é contagem de fichas (number), nunca MoneyString
+        smallBlind: '100.00',
+        bigBlind: 200,
+        ante: 0,
+        durationSeconds: 1_200,
+        isBreak: false,
+        breakLabel: null,
+      } satisfies BlindLevelDto;
+
       // Os objetos só existem para ancorar os @ts-expect-error acima.
       assert.ok(invalidBalance);
       assert.ok(invalidTransaction);
       assert.ok(invalidWithdrawal);
+      assert.ok(invalidLevel);
     });
   });
 });

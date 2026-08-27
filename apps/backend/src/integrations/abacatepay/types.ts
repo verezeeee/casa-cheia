@@ -6,11 +6,21 @@
  * inteiros; a conversão acontece na borda (`amount.util.ts`) para que
  * nenhum valor do domínio passe por IEEE-754 em momento algum.
  *
- * Rotas, payloads e evento de webhook confirmados contra o client oficial
- * (`github.com/AbacatePay/abacatepay-mcp`) — ver `abacatepay.client.ts` e
- * `WalletService.handleWebhook`. O shape exato da resposta de `/pix/send`
- * (além de `id`/`status`) segue sem confirmação por chamada autenticada
- * real; `mapWithdrawal` já é tolerante a nomes de campo alternativos.
+ * Rotas e payloads confirmados contra o client oficial
+ * (`github.com/AbacatePay/abacatepay-mcp`) — ver `abacatepay.client.ts`. O
+ * shape exato da resposta de `/pix/send` (além de `id`/`status`) segue sem
+ * confirmação por chamada autenticada real; `mapWithdrawal` já é tolerante
+ * a nomes de campo alternativos.
+ *
+ * O envelope e a autenticação do webhook (`WalletService.handleWebhook`)
+ * FORAM confirmados contra uma entrega real (23/08/2026, evento
+ * `transparent.completed`, dev mode): `{id, event, apiVersion, devMode,
+ * data: {transparent: {id, ...}, customer, payerInformation}}`, auth via
+ * header `X-Webhook-Secret` (+ fallback na query `?webhookSecret=`) com o
+ * segredo em texto puro — nada de HMAC, nada de timestamp. O shape de
+ * `data.transfer.*` para eventos `transfer.completed`/`transfer.failed`
+ * (reconciliação de saque) segue por inferência (mesmo padrão
+ * `data.<recurso>.id`), não confirmado por uma entrega real.
  */
 
 /** Namespace de configuração `abacatePay` (ver `config/configuration.ts`). */
@@ -18,7 +28,6 @@ export interface AbacatePayConfig {
   apiKey?: string;
   baseUrl?: string;
   webhookSecret?: string;
-  webhookToleranceSeconds?: number;
   /**
    * Campos opcionais: ainda não expostos pelo `registerAs('abacatePay')`.
    * Lidos de forma defensiva pelo client, que cai nos defaults

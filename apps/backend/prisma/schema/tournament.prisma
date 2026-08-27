@@ -4,7 +4,20 @@
 //
 // Enums e datasource vivem em `base.prisma` (fonte única de verdade).
 // Este arquivo declara APENAS os models deste contexto: `Tournament`,
-// `TournamentPrize` e `TournamentEntry`.
+// `TournamentPrize`, `TournamentEntry`, o preset de blinds reutilizável
+// (`BlindStructure` / `BlindLevel`), sua cópia por valor no torneio
+// (`TournamentBlindLevel`) e as mesas do torneio (`TournamentTable` /
+// `TournamentSeat`).
+//
+// MESA DE TORNEIO NÃO É `Table` (MT-DB-04)
+// `TournamentTable`/`TournamentSeat` não têm NENHUMA relação com
+// `Table`/`TableSession` de table.prisma, e isso é deliberado: aquele
+// vocabulário é de cash game — stack em `Decimal(14,2)`, buy-in/cash-out
+// cruzando a fronteira da Wallet, rake por pote. Mesa de torneio movimenta
+// FICHAS (`Int`), nunca toca a Wallet depois da inscrição e tem um ciclo de
+// vida próprio (quebra, rebalanceamento, redraw). Reusar `Table` arrastaria
+// `Decimal` e wallet para dentro de fichas de torneio — exatamente o
+// acoplamento que a decisão 5 de base.prisma existe para impedir.
 //
 // RELAÇÕES CRUZADAS ENTRE CONTEXTOS (T-DB-06)
 // `createdById`/`TournamentEntry.userId` (→ `User`) e `buyInTransactionId` /
@@ -85,6 +98,56 @@ model Tournament {
   /// a diferença (overlay) é coberta pela casa. Nulo em torneios sem garantia.
   guaranteedPrize Decimal? @map("guaranteed_prize") @db.Decimal(14, 2)
 
+  /// Preset de blinds que ORIGINOU a grade deste torneio (MT-DB-03). É só a
+  /// procedência: os níveis efetivamente usados foram COPIADOS para
+  /// `TournamentBlindLevel` na criação. `SetNull` porque apagar um preset não
+  /// pode quebrar um torneio histórico — ele perde a referência de origem, mas
+  /// mantém seus próprios níveis intactos. Nulo em torneios sem estrutura
+  /// (retrocompatível: torneios anteriores ao MVP de mesas).
+  blindStructureId String?         @map("blind_structure_id")
+  blindStructure   BlindStructure? @relation(fields: [blindStructureId], references: [id], onDelete: SetNull)
+
+  /// RELÓGIO DE BLINDS (MT-DB-03) — invariante reforçada por `CHECK`
+  /// (`tournaments_clock_state_coherent`):
+  ///   RUNNING ⇒ `levelEndsAt` NOT NULL e `clockRemainingMs` NULL;
+  ///   PAUSED  ⇒ `clockRemainingMs` NOT NULL (e `levelEndsAt` zerado pela
+  ///             aplicação, que não tem mais serventia enquanto pausado);
+  ///   NOT_STARTED / FINISHED ⇒ sem exigência.
+  /// Sem `clockRemainingMs` o `PAUSED` não fecha: o resto do nível se perderia
+  /// e o relógio "continuaria correndo" ao retomar.
+  clockStatus TournamentClockStatus @default(NOT_STARTED) @map("clock_status")
+
+  /// Nível corrente (1-based), casando com `TournamentBlindLevel.levelNumber`.
+  /// Nulo enquanto `NOT_STARTED`.
+  currentLevelNumber Int? @map("current_level_number")
+
+  /// Instante em que o nível corrente termina, no relógio do SERVIDOR. É a
+  /// fonte única da contagem regressiva: o cliente corrige a deriva do próprio
+  /// relógio pelo `serverTime` devolvido junto (ver `TournamentClockDto`).
+  levelEndsAt DateTime? @map("level_ends_at")
+
+  /// Milissegundos restantes do nível corrente, gravados no `pause` e
+  /// consumidos no `resume` (`levelEndsAt = now + clockRemainingMs`).
+  clockRemainingMs Int? @map("clock_remaining_ms")
+
+  /// Capacidade PADRÃO das mesas abertas por este torneio (MT-BE-03). Cada
+  /// `TournamentTable` guarda a sua própria `capacity` (uma final table de 8
+  /// pode conviver com mesas de 9); esta coluna é só o valor usado ao ABRIR
+  /// uma mesa nova e ao sortear o redraw. Mesmo intervalo do CHECK de
+  /// `tournament_tables.capacity`, reforçado por
+  /// `tournaments_table_capacity_valid`.
+  tableCapacity Int @default(9) @map("table_capacity")
+
+  /// REENTRY (MT-DB-06 / decisão MT-000 rota (a)). `allowReentry = false`
+  /// mantém o comportamento freezeout anterior. `maxReentries` nulo = ilimitado;
+  /// `reentryUntilLevel` nulo = sem corte por nível. A validação de ambos é da
+  /// aplicação (depende de contagem de linhas e do relógio, fora do alcance de
+  /// um `CHECK`); o banco só garante que exista no máximo UMA entry ativa por
+  /// (torneio, usuário) — ver `tournament_entries_active_user_unique`.
+  allowReentry      Boolean @default(false) @map("allow_reentry")
+  maxReentries      Int?    @map("max_reentries")
+  reentryUntilLevel Int?    @map("reentry_until_level")
+
   /// Administrador que criou o torneio.
   createdById String @map("created_by_id")
   createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Restrict)
@@ -105,8 +168,10 @@ model Tournament {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  prizes  TournamentPrize[]
-  entries TournamentEntry[]
+  prizes      TournamentPrize[]
+  entries     TournamentEntry[]
+  blindLevels TournamentBlindLevel[]
+  tables      TournamentTable[]
 
   /// Consulta quente do lobby: torneios abertos/em andamento ordenados por
   /// horário de início.
@@ -208,13 +273,250 @@ model TournamentEntry {
   /// Carimbo da eliminação. Nulo enquanto o jogador segue vivo no torneio.
   eliminatedAt DateTime? @map("eliminated_at")
 
-  /// Um jogador se inscreve UMA única vez por torneio. Inscrição duplicada é
-  /// impossível por construção (a corrida entre dois cliques simultâneos morre
-  /// aqui, não na aplicação).
-  @@unique([tournamentId, userId])
+  /// Histórico de assentos desta inscrição (append-only, ver `TournamentSeat`).
+  seats TournamentSeat[]
+
+  /// UNICIDADE DE INSCRIÇÃO ATIVA — ÍNDICE ÚNICO PARCIAL (SQL PURO, MT-DB-06)
+  /// Com reentry no escopo do MVP (decisão MT-000, rota (a)), o mesmo jogador
+  /// PODE ter várias inscrições no mesmo torneio ao longo do tempo — o que não
+  /// pode é ter duas VIVAS ao mesmo tempo. Um `@@unique([tournamentId, userId])`
+  /// estaria errado exatamente como estaria em `TableSession`: incluiria as
+  /// entries já `ELIMINATED`/`REFUNDED` e impediria a reentrada legítima. Por
+  /// isso a regra é um índice parcial criado na migration:
+  ///   `CREATE UNIQUE INDEX tournament_entries_active_user_unique
+  ///      ON tournament_entries (tournament_id, user_id)
+  ///      WHERE status IN ('REGISTERED','PLAYING');`
+  /// A corrida entre dois cliques simultâneos continua morrendo no banco, não
+  /// na aplicação — só que agora sobre o conjunto certo de linhas.
+  ///
   /// Consulta quente: "meus torneios" — inscrições de um jogador por situação.
   @@index([userId, status])
   /// Consulta quente: field do torneio (quem ainda está vivo, quem foi pago).
   @@index([tournamentId, status])
   @@map("tournament_entries")
+}
+
+/// Preset REUTILIZÁVEL de estrutura de blinds (MT-DB-02). É catálogo, não
+/// torneio: o diretor monta "Turbo 20min", "Deepstack" uma vez e reaproveita em
+/// quantos torneios quiser.
+///
+/// Ao criar um torneio, os níveis são COPIADOS POR VALOR para
+/// `TournamentBlindLevel`. O preset nunca é lido em tempo de jogo — editar
+/// "Turbo 20min" amanhã não altera o torneio de ontem nem o que está correndo
+/// agora.
+model BlindStructure {
+  id String @id @default(uuid())
+
+  name String
+
+  /// Admin que criou o preset (trilha de auditoria; `Restrict` como toda
+  /// relação para `User`, ver identity.prisma).
+  createdById String @map("created_by_id")
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  levels      BlindLevel[]
+  tournaments Tournament[]
+
+  /// Listagem administrativa por criador.
+  @@index([createdById])
+  @@map("blind_structures")
+}
+
+/// Um nível da estrutura de blinds do PRESET.
+///
+/// TIPO DOS BLINDS: `Int`, NÃO `Decimal(14,2)` — contraste deliberado com
+/// `Table.smallBlind` (table.prisma), que é `Decimal` porque cash game é
+/// dinheiro real. Blind de torneio é contagem de FICHAS, exatamente como
+/// `TournamentEntry.chipStack`: sem casas decimais, sem lastro monetário. O
+/// contraste de tipos torna impossível somar acidentalmente blind de torneio
+/// com reais.
+///
+/// Um nível pode ser um INTERVALO (`isBreak = true`): nesse caso os blinds são
+/// irrelevantes para o jogo e `breakLabel` ("Intervalo · 15 min", "Jantar") é o
+/// que a TV exibe. A exigência de `breakLabel` quando `isBreak` é validada na
+/// aplicação — regra de apresentação, não de integridade.
+model BlindLevel {
+  id String @id @default(uuid())
+
+  /// `Cascade`: o nível é CONFIGURAÇÃO do preset, sem valor de auditoria
+  /// próprio — mesmo raciocínio de `TournamentPrize`.
+  blindStructureId String         @map("blind_structure_id")
+  blindStructure   BlindStructure @relation(fields: [blindStructureId], references: [id], onDelete: Cascade)
+
+  /// Ordem do nível, 1-based e sem buracos. A sequencialidade é regra sobre o
+  /// CONJUNTO de linhas (validada na aplicação); o banco garante apenas que o
+  /// mesmo número não se repita no mesmo preset.
+  levelNumber Int @map("level_number")
+
+  smallBlind Int @map("small_blind")
+  bigBlind   Int @map("big_blind")
+
+  /// Ante do nível. 0 = sem ante (o caso comum nos primeiros níveis).
+  ante Int @default(0)
+
+  durationSeconds Int @map("duration_seconds")
+
+  isBreak    Boolean @default(false) @map("is_break")
+  breakLabel String? @map("break_label")
+
+  /// Um número de nível não pode ser definido duas vezes no mesmo preset.
+  @@unique([blindStructureId, levelNumber])
+  @@map("blind_levels")
+}
+
+/// CÓPIA POR VALOR da estrutura de blinds dentro de um torneio (MT-DB-03).
+///
+/// Estes são os níveis que o relógio realmente consome. Foram copiados de
+/// `BlindLevel` no momento da criação do torneio e, a partir daí, vivem por
+/// conta própria: EDITAR O PRESET DEPOIS **NÃO** ALTERA ESTE TORNEIO. É a mesma
+/// razão pela qual uma nota fiscal guarda o preço praticado e não um ponteiro
+/// para a tabela de preços — o histórico tem que continuar verdadeiro depois
+/// que a configuração muda.
+///
+/// O diretor também pode editar um nível DESTE torneio em pleno jogo
+/// (MT-BE-07) sem contaminar o preset nem os outros torneios.
+///
+/// Campos idênticos aos de `BlindLevel` — a duplicação é o ponto, não um
+/// descuido de normalização.
+model TournamentBlindLevel {
+  id String @id @default(uuid())
+
+  /// `Cascade`: a grade de blinds é configuração do torneio (mesmo raciocínio
+  /// de `TournamentPrize`). Na prática o torneio nunca é deletado — ver o
+  /// `Restrict` de `TournamentEntry`.
+  tournamentId String     @map("tournament_id")
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  levelNumber Int @map("level_number")
+
+  /// FICHAS, não dinheiro — ver a nota de tipo em `BlindLevel`.
+  smallBlind Int @map("small_blind")
+  bigBlind   Int @map("big_blind")
+  ante       Int @default(0)
+
+  durationSeconds Int @map("duration_seconds")
+
+  isBreak    Boolean @default(false) @map("is_break")
+  breakLabel String? @map("break_label")
+
+  @@unique([tournamentId, levelNumber])
+  @@map("tournament_blind_levels")
+}
+
+/// Mesa física de um torneio.
+///
+/// `Restrict` para `Tournament`: a mesa é trilha operacional auditável (quem
+/// sentou onde, quem foi movido de onde para onde), mesmo raciocínio do
+/// `Restrict` de `TournamentEntry`. Encerrar um torneio é `status = CANCELLED`,
+/// nunca DELETE.
+///
+/// `capacity` é por MESA, não por torneio: uma final table de 8 pode conviver
+/// com mesas de 9 durante a transição. O intervalo válido é o mesmo de
+/// `Table.maxSeats` e é reforçado por `CHECK (capacity BETWEEN 2 AND 10)`
+/// (MT-DB-05) — o teto também limita `TournamentSeat.seatNumber`.
+///
+/// Fechar (`CLOSED`) é definitivo: o rebalanceamento quebra a mesa, move todo
+/// mundo e nunca a reabre. Uma mesa `CLOSED` com assento `active` apontando
+/// para ela é violação de invariante (verificada em MT-QA-01).
+model TournamentTable {
+  id String @id @default(uuid())
+
+  tournamentId String     @map("tournament_id")
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Restrict)
+
+  /// Número exibido ao jogador ("Mesa 3"), 1-based e estável durante todo o
+  /// torneio — é o que está impresso no ticket dele.
+  tableNumber Int @map("table_number")
+
+  capacity Int
+
+  status TournamentTableStatus @default(OPEN)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seats TournamentSeat[]
+
+  /// Assentos cuja ORIGEM foi esta mesa (lado inverso de `fromTable`).
+  seatsMovedFrom TournamentSeat[] @relation("TournamentSeatFromTable")
+
+  /// Duas mesas não podem exibir o mesmo número no mesmo torneio. É também a
+  /// constraint em que colide a abertura concorrente de mesa em
+  /// `registerEntry` — colisão aqui é RETRY, não erro de negócio.
+  @@unique([tournamentId, tableNumber])
+  /// Consulta quente: mapa de mesas abertas do torneio (tela de staff e TV).
+  @@index([tournamentId, status])
+  @@map("tournament_tables")
+}
+
+/// Ocupação de um assento de torneio por uma inscrição — LEDGER APPEND-ONLY,
+/// espelho exato de `StackMovement`/`WalletTransaction`.
+///
+/// POR QUE CADA REALOCAÇÃO É UM `INSERT`, NUNCA UM `UPDATE` DA MESMA LINHA
+/// A pergunta que o clube faz quando o jogador reclama não é "onde ele está?",
+/// é "de onde ele veio, quando e por ordem de quem?". Um `UPDATE` in-place
+/// responde a primeira e destrói a segunda. Mover um jogador é, portanto, DUAS
+/// escritas na mesma transação: desativar a linha corrente (`active = false`,
+/// `releasedAt = now()`) e inserir uma nova com `reason`, `fromTableId` e
+/// `fromSeatNumber` apontando para de onde ele saiu. Linhas históricas nunca
+/// são editadas nem deletadas — a eliminação também é uma DESATIVAÇÃO, jamais
+/// um DELETE.
+///
+/// UNICIDADE — ÍNDICE ÚNICO PARCIAL (SQL PURO, MT-DB-05)
+/// Duas regras valem APENAS entre as linhas `active`:
+///   1. um assento tem no máximo UMA ocupação ativa
+///      (`tournament_seats_active_seat_unique`);
+///   2. uma inscrição tem no máximo UM assento ativo
+///      (`tournament_seats_active_entry_unique`).
+/// Pelo mesmo motivo documentado em `TableSession` (table.prisma), NÃO existe
+/// `@@unique` aqui: um índice total incluiria as linhas históricas e impediria
+/// um jogador de voltar a um assento que já ocupou — algo perfeitamente
+/// legítimo depois de um redraw. Só os `@@index` não-únicos das consultas.
+model TournamentSeat {
+  id String @id @default(uuid())
+
+  tournamentTableId String          @map("tournament_table_id")
+  tournamentTable   TournamentTable @relation(fields: [tournamentTableId], references: [id])
+
+  /// Inscrição sentada — e não `userId`: com reentry, o mesmo usuário pode ter
+  /// mais de uma inscrição no torneio, e o assento pertence à INSCRIÇÃO.
+  tournamentEntryId String          @map("tournament_entry_id")
+  tournamentEntry   TournamentEntry @relation(fields: [tournamentEntryId], references: [id])
+
+  /// Assento na mesa, no intervalo `[1, TournamentTable.capacity]`. O piso é
+  /// reforçado por `CHECK (seat_number >= 1)`; o teto depende de outra linha e
+  /// fica com a aplicação.
+  seatNumber Int @map("seat_number")
+
+  /// `true` = ocupação corrente; `false` = linha histórica. É a coluna que
+  /// torna os índices únicos parciais possíveis.
+  active Boolean @default(true)
+
+  reason TournamentSeatReason
+
+  /// ORIGEM da movimentação (critério de aceite do PRD §5.2: "de onde para
+  /// onde"). Nulos quando `reason = INITIAL` — não havia de onde vir.
+  fromTableId    String?          @map("from_table_id")
+  fromTable      TournamentTable? @relation("TournamentSeatFromTable", fields: [fromTableId], references: [id])
+  fromSeatNumber Int?             @map("from_seat_number")
+
+  /// Ator humano que ordenou a movimentação. `null` quando o movimento foi
+  /// automático (rebalanceamento / quebra de mesa), preenchido no
+  /// `MANUAL_REDRAW` — mesmo padrão de `StackMovement.createdById`.
+  movedById String? @map("moved_by_id")
+  movedBy   User?   @relation(fields: [movedById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  /// Carimbo da desativação. Nulo enquanto `active`.
+  releasedAt DateTime? @map("released_at")
+
+  /// Consulta mais quente: quem está sentado agora nesta mesa.
+  @@index([tournamentTableId, active])
+  /// Trilha cronológica de assentos de uma inscrição ("por onde ele passou").
+  @@index([tournamentEntryId, createdAt])
+  @@map("tournament_seats")
 }

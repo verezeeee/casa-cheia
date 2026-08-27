@@ -1,7 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
-import { createHmac, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
@@ -16,12 +16,23 @@ const fakeAbacatePayClient = {
   requestPixWithdrawal: jest.fn(),
 };
 
-function signWebhook(body: string, timestamp: string): string {
-  const secret = process.env.ABACATEPAY_WEBHOOK_SECRET ?? '';
-  return createHmac('sha256', secret)
-    .update(`${timestamp}.${body}`)
-    .digest('hex');
+/**
+ * Envelope confirmado contra uma entrega real do AbacatePay (23/08/2026,
+ * `transparent.completed`, dev mode) — ver docblock de
+ * `WalletService.handleWebhook`. `resource` é o primeiro segmento de
+ * `event` ("transparent" de "transparent.completed").
+ */
+function webhookBody(event: string, resource: string, dataId: string): string {
+  return JSON.stringify({
+    id: `evt-${randomUUID()}`,
+    event,
+    apiVersion: 2,
+    devMode: true,
+    data: { [resource]: { id: dataId } },
+  });
 }
+
+const WEBHOOK_SECRET = process.env.ABACATEPAY_WEBHOOK_SECRET ?? '';
 
 describe('Wallet + webhook AbacatePay (e2e)', () => {
   let app: INestApplication<App>;
@@ -72,6 +83,20 @@ describe('Wallet + webhook AbacatePay (e2e)', () => {
       .get('/api/wallet/balance')
       .set('Authorization', `Bearer ${accessToken}`);
 
+  /** Usuário novo com wallet zerada — usado pelos testes que não podem depender do saldo acumulado pelos outros `it`s deste arquivo. */
+  async function registerFreshUser(): Promise<string> {
+    const email = `${randomUUID()}@wallet-e2e.test`;
+    await request(app.getHttpServer())
+      .post('/api/auth/register')
+      .send({ email, password: 'senha-forte-123', name: 'Wallet E2E' })
+      .expect(201);
+    const loginRes = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ email, password: 'senha-forte-123' })
+      .expect(200);
+    return loginRes.body.accessToken as string;
+  }
+
   it('sem token, /wallet/balance responde 401', async () => {
     await request(app.getHttpServer()).get('/api/wallet/balance').expect(401);
   });
@@ -116,19 +141,17 @@ describe('Wallet + webhook AbacatePay (e2e)', () => {
     const beforeWebhook = await authed().expect(200);
     expect(beforeWebhook.body.balance).toBe('0.00');
 
-    const webhookBody = JSON.stringify({
-      id: `evt-${randomUUID()}`,
-      event: 'transparent.completed',
-      data: { id: chargeExternalId },
-    });
-    const timestamp = String(Math.floor(Date.now() / 1000));
+    const depositWebhook = webhookBody(
+      'transparent.completed',
+      'transparent',
+      chargeExternalId,
+    );
 
     await request(app.getHttpServer())
       .post('/api/webhooks/abacatepay')
       .set('Content-Type', 'application/json')
-      .set('x-abacatepay-signature', signWebhook(webhookBody, timestamp))
-      .set('x-abacatepay-timestamp', timestamp)
-      .send(webhookBody)
+      .set('X-Webhook-Secret', WEBHOOK_SECRET)
+      .send(depositWebhook)
       .expect(204);
 
     const afterWebhook = await authed().expect(200);
@@ -138,9 +161,8 @@ describe('Wallet + webhook AbacatePay (e2e)', () => {
     await request(app.getHttpServer())
       .post('/api/webhooks/abacatepay')
       .set('Content-Type', 'application/json')
-      .set('x-abacatepay-signature', signWebhook(webhookBody, timestamp))
-      .set('x-abacatepay-timestamp', timestamp)
-      .send(webhookBody)
+      .set('X-Webhook-Secret', WEBHOOK_SECRET)
+      .send(depositWebhook)
       .expect(204);
     const afterReplay = await authed().expect(200);
     expect(afterReplay.body).toEqual({ balance: '100.00', version: 1 });
@@ -157,8 +179,9 @@ describe('Wallet + webhook AbacatePay (e2e)', () => {
     });
 
     // Saque debita o saldo.
+    const withdrawalExternalId = `wdr-${randomUUID()}`;
     fakeAbacatePayClient.requestPixWithdrawal.mockResolvedValue({
-      externalId: `wdr-${randomUUID()}`,
+      externalId: withdrawalExternalId,
       status: 'PENDING',
       rawStatus: 'PENDING',
       amount: '30.00',
@@ -178,21 +201,92 @@ describe('Wallet + webhook AbacatePay (e2e)', () => {
 
     const afterWithdrawal = await authed().expect(200);
     expect(afterWithdrawal.body).toEqual({ balance: '70.00', version: 2 });
+
+    // Webhook de conclusão do saque: só atualiza status, saldo já foi
+    // debitado no pedido.
+    await request(app.getHttpServer())
+      .post('/api/webhooks/abacatepay')
+      .set('Content-Type', 'application/json')
+      .set('X-Webhook-Secret', WEBHOOK_SECRET)
+      .send(webhookBody('transfer.completed', 'transfer', withdrawalExternalId))
+      .expect(204);
+    const afterTransferCompleted = await authed().expect(200);
+    expect(afterTransferCompleted.body).toEqual({
+      balance: '70.00',
+      version: 2,
+    });
   });
 
-  it('webhook com assinatura inválida é rejeitado (401) e não altera saldo', async () => {
-    const body = JSON.stringify({
-      id: 'evt-x',
-      event: 'transparent.completed',
-      data: { id: 'chg-x' },
+  it('transfer.failed estorna o valor reservado do saque de volta pro saldo', async () => {
+    const token = await registerFreshUser();
+    const authedFresh = () =>
+      request(app.getHttpServer())
+        .get('/api/wallet/balance')
+        .set('Authorization', `Bearer ${token}`);
+
+    const chargeExternalId = `chg-${randomUUID()}`;
+    fakeAbacatePayClient.createPixCharge.mockResolvedValue({
+      externalId: chargeExternalId,
+      status: 'PENDING',
+      rawStatus: 'PENDING',
+      amount: '50.00',
+      brCode: '000201...copia-e-cola...',
+      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+      createdAt: new Date().toISOString(),
     });
-    const timestamp = String(Math.floor(Date.now() / 1000));
+    await request(app.getHttpServer())
+      .post('/api/wallet/deposits')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ amount: '50.00' })
+      .expect(201);
+    const depositWebhook = webhookBody(
+      'transparent.completed',
+      'transparent',
+      chargeExternalId,
+    );
+    await request(app.getHttpServer())
+      .post('/api/webhooks/abacatepay')
+      .set('Content-Type', 'application/json')
+      .set('X-Webhook-Secret', WEBHOOK_SECRET)
+      .send(depositWebhook)
+      .expect(204);
+
+    const withdrawalExternalId = `wdr-${randomUUID()}`;
+    fakeAbacatePayClient.requestPixWithdrawal.mockResolvedValue({
+      externalId: withdrawalExternalId,
+      status: 'PENDING',
+      rawStatus: 'PENDING',
+      amount: '20.00',
+      createdAt: new Date().toISOString(),
+    });
+    await request(app.getHttpServer())
+      .post('/api/wallet/withdrawals')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ amount: '20.00', pixKey: 'jogador@pix.dev', pixKeyType: 'EMAIL' })
+      .expect(201);
+    const afterRequest = await authedFresh().expect(200);
+    expect(afterRequest.body.balance).toBe('30.00'); // 50 - 20 reservado
 
     await request(app.getHttpServer())
       .post('/api/webhooks/abacatepay')
       .set('Content-Type', 'application/json')
-      .set('x-abacatepay-signature', 'assinatura-forjada')
-      .set('x-abacatepay-timestamp', timestamp)
+      .set('X-Webhook-Secret', WEBHOOK_SECRET)
+      .send(webhookBody('transfer.failed', 'transfer', withdrawalExternalId))
+      .expect(204);
+
+    const afterFailure = await authedFresh().expect(200);
+    expect(afterFailure.body.balance).toBe('50.00'); // estornado
+  });
+
+  it('webhook com secret inválido é rejeitado (401) e não altera saldo', async () => {
+    const body = webhookBody('transparent.completed', 'transparent', 'chg-x');
+
+    await request(app.getHttpServer())
+      .post('/api/webhooks/abacatepay')
+      .set('Content-Type', 'application/json')
+      .set('X-Webhook-Secret', 'secret-forjado')
       .send(body)
       .expect(401);
   });

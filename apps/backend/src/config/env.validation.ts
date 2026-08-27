@@ -67,23 +67,14 @@ export const envValidationSchema = Joi.object({
   ABACATEPAY_BASE_URL: Joi.string()
     .uri()
     .default('https://api.abacatepay.com/v2'),
+  // Comparado direto (constant-time) contra o header `X-Webhook-Secret` (ou
+  // a query string `webhookSecret`) que o AbacatePay manda em todo webhook —
+  // ver `WalletService.verifyWebhookSecret`. Não é um segredo de HMAC: o
+  // provedor manda o valor em texto puro, então esta é toda a verificação.
   ABACATEPAY_WEBHOOK_SECRET: Joi.string().required().messages({
     'any.required':
-      'ABACATEPAY_WEBHOOK_SECRET é obrigatória para validar a assinatura dos webhooks PIX.',
+      'ABACATEPAY_WEBHOOK_SECRET é obrigatória para validar a origem dos webhooks PIX.',
   }),
-  // Janela anti-replay do webhook: um evento com timestamp mais antigo que
-  // esta tolerância é rejeitado mesmo com assinatura válida.
-  ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS: Joi.number()
-    .integer()
-    .min(1)
-    .max(3600)
-    .default(300)
-    .messages({
-      'number.base':
-        'ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS deve ser um número inteiro de segundos.',
-      'number.max':
-        'ABACATEPAY_WEBHOOK_TOLERANCE_SECONDS não deve exceder 3600s (1h) — janelas largas enfraquecem a proteção anti-replay.',
-    }),
 
   // ---------------------------------------------------------------------------
   // Sessão / cookies / CORS
