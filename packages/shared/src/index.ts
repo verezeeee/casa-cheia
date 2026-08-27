@@ -1,4 +1,3 @@
-export * from './enums/user-role.enum';
 export * from './enums/wallet-transaction-type.enum';
 export * from './enums/table-type.enum';
 export * from './interfaces/api-error-response.interface';
@@ -46,3 +45,12 @@ export * from './interfaces/tournament-clock.dto';
 export * from './interfaces/tournament-seat.dto';
 export * from './interfaces/tournament-table.dto';
 export * from './interfaces/tournament-table-map.dto';
+
+// --- CL / Multi-tenant "Clube" --------------------------------------------
+// Enums espelham 1:1 (mesmos literais, mesma ordem) os enums de `base.prisma`.
+// `ClubeRole` SUBSTITUI o antigo `UserRole`, removido nesta onda: papel é
+// propriedade do vínculo usuário↔clube, não do usuário (ver ADR-0001).
+export * from './enums/clube-status.enum';
+export * from './enums/clube-role.enum';
+export * from './enums/clube-membership-status.enum';
+export * from './enums/clube-onboarding-status.enum';

@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  ClubeMembershipStatus,
+  ClubeOnboardingStatus,
+  ClubeRole,
+  ClubeStatus,
   PixChargeStatus,
   PixWithdrawalStatus,
   TableSessionStatus,
@@ -12,7 +16,6 @@ import {
   TournamentSeatReason,
   TournamentStatus,
   TournamentTableStatus,
-  UserRole,
   WalletTransactionStatus,
   WalletTransactionType,
 } from './index';
@@ -58,10 +61,6 @@ function assertEnumLiterals(enumObject: Record<string, string>, expectedKeys: st
 
 describe('@poker-system/shared barrel export', () => {
   describe('enums pré-existentes (não podem regredir)', () => {
-    it('exporta UserRole', () => {
-      assertEnumLiterals(UserRole, ['PLAYER', 'ADMIN']);
-    });
-
     it('exporta TableType', () => {
       assertEnumLiterals(TableType, ['CASH_GAME', 'TOURNAMENT']);
     });
@@ -135,6 +134,33 @@ describe('@poker-system/shared barrel export', () => {
     });
   });
 
+  describe('enums do multi-tenant Clube (CL-DB-01)', () => {
+    it('exporta ClubeStatus', () => {
+      assertEnumLiterals(ClubeStatus, ['ACTIVE', 'SUSPENDED', 'CANCELLED']);
+    });
+
+    it('exporta ClubeRole', () => {
+      assertEnumLiterals(ClubeRole, ['ADMIN', 'CASHIER', 'TOURNAMENT_DIRECTOR', 'PLAYER']);
+    });
+
+    it('exporta ClubeMembershipStatus', () => {
+      assertEnumLiterals(ClubeMembershipStatus, ['ACTIVE', 'REVOKED']);
+    });
+
+    it('exporta ClubeOnboardingStatus', () => {
+      assertEnumLiterals(ClubeOnboardingStatus, ['PENDING', 'IN_REVIEW', 'APPROVED', 'REJECTED']);
+    });
+
+    // `UserRole` foi REMOVIDO nesta onda (papel virou propriedade do vínculo
+    // usuário↔clube). Se alguém o reintroduzir, o barrel volta a ter duas
+    // fontes de verdade para papel — este teste falha antes disso acontecer.
+    it('não exporta mais UserRole', async () => {
+      const barrel: Record<string, unknown> = await import('./index');
+
+      assert.equal(barrel.UserRole, undefined);
+    });
+  });
+
   describe('contratos de tipo (validados em tempo de compilação)', () => {
     it('aceita objetos que satisfazem as interfaces exportadas', () => {
       const money: MoneyString = '1250.00';
@@ -145,7 +171,7 @@ describe('@poker-system/shared barrel export', () => {
         id: 'usr_1',
         email: 'player@poker.dev',
         name: 'Player One',
-        role: UserRole.PLAYER,
+        role: ClubeRole.PLAYER,
       };
 
       const balance: WalletBalanceResponse = { balance: money, version: 7 };

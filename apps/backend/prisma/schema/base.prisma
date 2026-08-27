@@ -86,10 +86,46 @@ datasource db {
 // migration própria (`ALTER TYPE ... ADD VALUE`).
 // ============================================================================
 
-/// Perfil de acesso do usuário.
-enum UserRole {
-  PLAYER
+/// Estado operacional do clube (tenant).
+///
+/// `SUSPENDED` e `CANCELLED` são bloqueio, não delete: o dado do clube
+/// permanece (trilha financeira) e apenas para de aceitar operação.
+enum ClubeStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+/// Papel de um usuário DENTRO de um clube (`ClubeMembership.role`).
+///
+/// Substitui o antigo `UserRole`, que era atributo do usuário e presumia um
+/// único clube. A mesma pessoa pode ser ADMIN de um clube e PLAYER de outro —
+/// papel é propriedade da ARESTA usuário↔clube, não do usuário.
+///
+/// Não existe papel de staff de plataforma (ADR-0003): o onboarding de clube é
+/// curadoria manual, feita fora do produto.
+enum ClubeRole {
   ADMIN
+  CASHIER
+  TOURNAMENT_DIRECTOR
+  PLAYER
+}
+
+/// Situação do vínculo usuário↔clube. `REVOKED` é o desligamento, preferido a
+/// DELETE para não apagar a explicação de por que aquele usuário aparece na
+/// trilha de auditoria do clube.
+enum ClubeMembershipStatus {
+  ACTIVE
+  REVOKED
+}
+
+/// Ciclo de vida do onboarding da conta de recebimento do clube no gateway
+/// (ADR-0002). Só `APPROVED` habilita o clube a receber via split.
+enum ClubeOnboardingStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
 }
 
 /// Modalidade da mesa.

@@ -39,8 +39,6 @@ model User {
 
   phone String?
 
-  role UserRole @default(PLAYER)
-
   /// Soft-disable: usuário inativo não autentica e não opera financeiramente.
   /// Preferido a DELETE, que destruiria a trilha de auditoria do ledger.
   isActive Boolean @default(true)
@@ -54,8 +52,17 @@ model User {
 
   refreshTokens RefreshToken[]
 
-  /// Carteira virtual do jogador (1:1 — ver `Wallet.userId @unique`).
-  wallet Wallet?
+  /// Vínculos com clubes, cada um com seu próprio papel. Substitui o antigo
+  /// campo `role`: o mesmo usuário pode ser ADMIN de um clube e PLAYER de
+  /// outro, e um enum na linha do usuário não expressava isso (ver
+  /// club.prisma).
+  memberships ClubeMembership[]
+
+  /// Carteiras virtuais do jogador — UMA POR CLUBE (`@@unique([userId,
+  /// clubeId])` em wallet.prisma). Saldo não atravessa clube: quem joga em dois
+  /// clubes tem duas carteiras independentes, e um depósito no clube A jamais
+  /// financia um buy-in no clube B.
+  wallets Wallet[]
 
   /// Cobranças e saques PIX solicitados pelo usuário.
   pixCharges     PixCharge[]

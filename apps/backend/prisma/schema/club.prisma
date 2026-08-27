@@ -1,0 +1,138 @@
+// ============================================================================
+// Bounded context: CLUBE (tenant raiz do modelo multi-tenant)
+// ============================================================================
+//
+// Enums e datasource vivem em `base.prisma` (fonte única de verdade).
+// Este arquivo declara `Clube`, `ClubeMembership` e `ClubePaymentAccount`.
+//
+// ----------------------------------------------------------------------------
+// O CLUBE É A RAIZ DE TODO ESCOPO DE DADOS (ADR-0001)
+// ----------------------------------------------------------------------------
+// Não existe dado de negócio "da plataforma": mesa, torneio, carteira, sessão e
+// inscrição pertencem SEMPRE a exatamente um clube. O `clube_id` NOT NULL
+// nessas cinco tabelas é o discriminador de tenant sobre o qual a Row Level
+// Security será construída (CL-DB-02, role `poker_app` NOSUPERUSER/NOBYPASSRLS
+// já provisionado em docker/postgres/init/01-app-role.sql).
+//
+// Nenhum staff de plataforma existe no modelo de dados (ADR-0003): o
+// onboarding de clube é curadoria manual, feita fora do produto. Por isso
+// `ClubeRole` não tem um papel "superadmin" — quem opera o clube é membro dele.
+//
+// ----------------------------------------------------------------------------
+// PAPEL NÃO É MAIS ATRIBUTO DO USUÁRIO
+// ----------------------------------------------------------------------------
+// O antigo `User.role` (enum global `UserRole`) foi REMOVIDO. Ele presumia um
+// único clube: a mesma pessoa pode ser `ADMIN` do clube A, `CASHIER` do clube B
+// e `PLAYER` do clube C ao mesmo tempo, e um enum na linha do usuário não tem
+// como expressar isso. O papel passa a viver na ARESTA usuário↔clube
+// (`ClubeMembership.role`), que é onde ele sempre pertenceu.
+//
+// ============================================================================
+
+/// Clube — o tenant. Raiz de escopo de todo dado de negócio do sistema.
+///
+/// Criado por curadoria manual (ADR-0003): não há auto-cadastro, e por isso
+/// não há aqui nenhum campo de fluxo de aprovação de clube — o que passa por
+/// aprovação é a CONTA DE RECEBIMENTO (ver `ClubePaymentAccount`), que depende
+/// do gateway e não de nós.
+model Clube {
+  id String @id @default(uuid())
+
+  name String
+
+  /// CNPJ/CPF do clube (somente dígitos). Unique: é a chave natural que impede
+  /// o mesmo estabelecimento de existir duas vezes — e a âncora de
+  /// reconciliação com o cadastro do gateway.
+  document String @unique
+
+  /// `SUSPENDED` e `CANCELLED` são bloqueio operacional, NÃO delete: as mesas,
+  /// torneios e carteiras do clube continuam existindo (trilha financeira), só
+  /// param de aceitar operação.
+  status ClubeStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  memberships    ClubeMembership[]
+  paymentAccount ClubePaymentAccount?
+
+  /// Dado de negócio escopado por este clube. Só as RAÍZES de cada agregado
+  /// aparecem aqui — ver a nota de herança de escopo em cada arquivo.
+  tables            Table[]
+  tournaments       Tournament[]
+  wallets           Wallet[]
+  tableSessions     TableSession[]
+  tournamentEntries TournamentEntry[]
+
+  @@map("clubes")
+}
+
+/// Vínculo de um usuário com um clube, e o PAPEL que ele exerce ali.
+///
+/// A mesma pessoa pode ser membro de vários clubes com papéis distintos — é
+/// justamente o que o antigo `User.role` não conseguia representar. A tupla
+/// `(clubeId, userId)` é única: um usuário tem no máximo UM vínculo por clube,
+/// e mudar de papel é `UPDATE` do vínculo, não uma segunda linha.
+///
+/// `REVOKED` é o desligamento: preferido a DELETE pelo mesmo motivo do
+/// `isActive` de `User` — apagar o vínculo apagaria a explicação de por que
+/// aquele usuário aparece na trilha de auditoria financeira do clube.
+model ClubeMembership {
+  id String @id @default(uuid())
+
+  clubeId String @map("clube_id")
+  clube   Clube  @relation(fields: [clubeId], references: [id], onDelete: Restrict)
+
+  /// `Restrict` como toda relação para `User` (regra T-DB-06, ver
+  /// identity.prisma): usuário nunca é deletado fisicamente.
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  role ClubeRole @default(PLAYER)
+
+  status ClubeMembershipStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  /// Um usuário tem no máximo um vínculo por clube. Também é o índice da
+  /// consulta mais quente do sistema: "qual o papel deste usuário neste clube?",
+  /// executada em toda requisição autenticada.
+  @@unique([clubeId, userId])
+  /// Consulta do seletor de clube: "de quais clubes eu sou membro?".
+  @@index([userId])
+  @@map("clube_memberships")
+}
+
+/// Conta de recebimento do clube no gateway de pagamento (ADR-0002: Asaas).
+///
+/// 1:1 com o clube (`clubeId @unique`): o split de PIX precisa de um destino
+/// único e inequívoco por tenant. Sem esta linha `APPROVED`, o clube não pode
+/// receber — é o que separa "clube cadastrado" de "clube operante".
+///
+/// `provider` é `String` e não enum de propósito: trocar ou adicionar gateway
+/// não deve exigir `ALTER TYPE` em produção, e o valor não é consumido em
+/// nenhuma regra de negócio expressa no banco.
+model ClubePaymentAccount {
+  id String @id @default(uuid())
+
+  clubeId String @unique @map("clube_id")
+  clube   Clube  @relation(fields: [clubeId], references: [id], onDelete: Restrict)
+
+  /// Identificador do gateway (ex.: "asaas").
+  provider String
+
+  /// Id da subconta no gateway — destino do split.
+  externalAccountId String @map("external_account_id")
+
+  onboardingStatus ClubeOnboardingStatus @default(PENDING) @map("onboarding_status")
+
+  /// Resposta bruta do gateway no onboarding, preservada na íntegra para
+  /// auditoria e reprocessamento em caso de divergência de contrato (mesmo
+  /// padrão de `PixCharge.rawPayload`).
+  rawOnboardingPayload Json? @map("raw_onboarding_payload")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("clube_payment_accounts")
+}
