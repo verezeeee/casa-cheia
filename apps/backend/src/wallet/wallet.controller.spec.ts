@@ -1,14 +1,14 @@
-import { BadRequestException } from '@nestjs/common';
-import { PixChargeStatus, PixWithdrawalStatus } from '@poker-system/shared';
-import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
-import { WalletController } from './wallet.controller';
+import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import type { WalletService } from './wallet.service';
+import { WalletController } from './wallet.controller';
 
-const USER: AuthenticatedUser = {
-  id: 'user-1',
-  email: 'a@b.dev',
-};
-
+/**
+ * TODO(CL-BE-07): controller inoperante até a rota de clube existir — ver
+ * docblock em `wallet.controller.ts`. Estes testes só travam o
+ * comportamento atual (501 explícito / idempotency-key ainda validada antes
+ * do 501); a cobertura de comportamento por (usuário, clube) está em
+ * `wallet.service.spec.ts`.
+ */
 function buildController() {
   const walletService: jest.Mocked<
     Pick<
@@ -28,104 +28,56 @@ function buildController() {
 }
 
 describe('WalletController', () => {
-  it('getBalance delega ao service com o id do usuário autenticado', async () => {
+  it('getBalance: 501 (rota de clube pendente — CL-BE-07)', () => {
     const { controller, walletService } = buildController();
-    walletService.getBalance.mockResolvedValue({
-      balance: '10.00',
-      version: 1,
-    });
-
-    await expect(controller.getBalance(USER)).resolves.toEqual({
-      balance: '10.00',
-      version: 1,
-    });
-    expect(walletService.getBalance).toHaveBeenCalledWith(USER.id);
+    expect(() => controller.getBalance()).toThrow(NotImplementedException);
+    expect(walletService.getBalance).not.toHaveBeenCalled();
   });
 
-  it('getTransactions repassa cursor e limit da query', async () => {
+  it('getTransactions: 501 (rota de clube pendente — CL-BE-07)', () => {
     const { controller, walletService } = buildController();
-    walletService.getTransactions.mockResolvedValue({
-      items: [],
-      nextCursor: null,
-    });
-
-    await controller.getTransactions(USER, { cursor: 'abc', limit: 5 });
-    expect(walletService.getTransactions).toHaveBeenCalledWith(
-      USER.id,
-      'abc',
-      5,
-    );
+    expect(() => controller.getTransactions()).toThrow(NotImplementedException);
+    expect(walletService.getTransactions).not.toHaveBeenCalled();
   });
 
   describe('createDeposit', () => {
-    it('exige o header Idempotency-Key', async () => {
+    it('exige o header Idempotency-Key mesmo com a rota inoperante', () => {
       const { controller } = buildController();
-      await expect(
-        controller.createDeposit(USER, { amount: '50.00' }, undefined),
-      ).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it('rejeita header vazio/só espaços', async () => {
-      const { controller } = buildController();
-      await expect(
-        controller.createDeposit(USER, { amount: '50.00' }, '   '),
-      ).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it('delega ao service quando o header está presente', async () => {
-      const { controller, walletService } = buildController();
-      walletService.createDeposit.mockResolvedValue({
-        id: 'chg-1',
-        amount: '50.00',
-        status: PixChargeStatus.PENDING,
-        qrCodePayload: '000201',
-        qrCodeImageUrl: null,
-        expiresAt: new Date().toISOString(),
-      });
-
-      await controller.createDeposit(USER, { amount: '50.00' }, 'idem-1');
-      expect(walletService.createDeposit).toHaveBeenCalledWith(
-        USER.id,
-        { amount: '50.00' },
-        'idem-1',
+      expect(() => controller.createDeposit(undefined)).toThrow(
+        BadRequestException,
       );
+    });
+
+    it('rejeita header vazio/só espaços', () => {
+      const { controller } = buildController();
+      expect(() => controller.createDeposit('   ')).toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('com header presente, ainda é 501 (rota de clube pendente — CL-BE-07)', () => {
+      const { controller, walletService } = buildController();
+      expect(() => controller.createDeposit('idem-1')).toThrow(
+        NotImplementedException,
+      );
+      expect(walletService.createDeposit).not.toHaveBeenCalled();
     });
   });
 
   describe('requestWithdrawal', () => {
-    it('exige o header Idempotency-Key', async () => {
+    it('exige o header Idempotency-Key mesmo com a rota inoperante', () => {
       const { controller } = buildController();
-      await expect(
-        controller.requestWithdrawal(
-          USER,
-          { amount: '30.00', pixKey: 'a@b.com', pixKeyType: 'EMAIL' },
-          undefined,
-        ),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(() => controller.requestWithdrawal(undefined)).toThrow(
+        BadRequestException,
+      );
     });
 
-    it('delega ao service quando o header está presente', async () => {
+    it('com header presente, ainda é 501 (rota de clube pendente — CL-BE-07)', () => {
       const { controller, walletService } = buildController();
-      walletService.requestWithdrawal.mockResolvedValue({
-        id: 'wdr-1',
-        amount: '30.00',
-        status: PixWithdrawalStatus.PROCESSING,
-        pixKeyMasked: '***.com',
-        failureReason: null,
-        createdAt: new Date().toISOString(),
-      });
-
-      const dto = {
-        amount: '30.00',
-        pixKey: 'a@b.com',
-        pixKeyType: 'EMAIL' as const,
-      };
-      await controller.requestWithdrawal(USER, dto, 'idem-1');
-      expect(walletService.requestWithdrawal).toHaveBeenCalledWith(
-        USER.id,
-        dto,
-        'idem-1',
+      expect(() => controller.requestWithdrawal('idem-1')).toThrow(
+        NotImplementedException,
       );
+      expect(walletService.requestWithdrawal).not.toHaveBeenCalled();
     });
   });
 });

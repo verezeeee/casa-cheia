@@ -54,17 +54,21 @@ export class WalletService {
     private readonly abacatePayClient: AbacatePayClient,
   ) {}
 
-  async getBalance(userId: string): Promise<WalletBalanceResponse> {
-    const wallet = await this.findWalletOrThrow(userId);
+  async getBalance(
+    userId: string,
+    clubeId: string,
+  ): Promise<WalletBalanceResponse> {
+    const wallet = await this.findWalletOrThrow(userId, clubeId);
     return toWalletBalanceResponse(wallet);
   }
 
   async getTransactions(
     userId: string,
+    clubeId: string,
     cursor: string | undefined,
     limit: number | undefined,
   ): Promise<PaginatedResponse<WalletTransactionDto>> {
-    const wallet = await this.findWalletOrThrow(userId);
+    const wallet = await this.findWalletOrThrow(userId, clubeId);
     const pageSize = limit ?? DEFAULT_PAGE_SIZE;
     const after = cursor ? decodeCursor(cursor) : null;
 
@@ -106,6 +110,7 @@ export class WalletService {
    */
   async createDeposit(
     userId: string,
+    clubeId: string,
     dto: CreateDepositDto,
     idempotencyKey: string,
   ): Promise<PixChargeResponse> {
@@ -123,7 +128,7 @@ export class WalletService {
       );
     }
 
-    await this.findWalletOrThrow(userId);
+    await this.findWalletOrThrow(userId, clubeId);
 
     let result: Awaited<ReturnType<AbacatePayClient['createPixCharge']>>;
     try {
@@ -178,6 +183,7 @@ export class WalletService {
    */
   async requestWithdrawal(
     userId: string,
+    clubeId: string,
     dto: RequestWithdrawalDto,
     idempotencyKey: string,
   ): Promise<PixWithdrawalResponse> {
@@ -191,7 +197,7 @@ export class WalletService {
     }
 
     const ledgerKey = `withdrawal:${idempotencyKey}`;
-    const wallet = await this.findWalletOrThrow(userId);
+    const wallet = await this.findWalletOrThrow(userId, clubeId);
 
     const existing = await this.prisma.walletTransaction.findUnique({
       where: { idempotencyKey: ledgerKey },
@@ -382,7 +388,14 @@ export class WalletService {
     // por algum motivo escapasse da dedução acima ainda não duplicaria o crédito.
     if (charge.status === 'PAID') return;
 
-    const wallet = await this.prisma.wallet.findUniqueOrThrow({
+    // TODO(CL-BE-07): PixCharge não carrega `clubeId` (webhook ainda não
+    // resolve o clube — ver docblock de `handleWebhook`), então não dá pra
+    // usar a chave composta `userId_clubeId` aqui. `findFirst` escolhe
+    // arbitrariamente entre as wallets do usuário se ele tiver mais de uma
+    // (uma por clube) — ok hoje (MVP de clube único), incorreto assim que um
+    // usuário puder ter carteira em mais de um clube. CL-BE-07 resolve o
+    // clube a partir do payload/contexto do webhook.
+    const wallet = await this.prisma.wallet.findFirstOrThrow({
       where: { userId: charge.userId },
     });
 
@@ -446,7 +459,9 @@ export class WalletService {
     }
     if (withdrawal.status !== 'PROCESSING') return;
 
-    const wallet = await this.prisma.wallet.findUniqueOrThrow({
+    // TODO(CL-BE-07): mesma ressalva de `creditDeposit` — PixWithdrawal não
+    // carrega `clubeId`, `findFirst` é arbitrário entre clubes do usuário.
+    const wallet = await this.prisma.wallet.findFirstOrThrow({
       where: { userId: withdrawal.userId },
     });
 
@@ -481,6 +496,14 @@ export class WalletService {
    * duplicar o lock/CHECK/cálculo de saldo. Sempre requer um `tx` já aberto:
    * nunca abre transação própria, para poder compor com a escrita do
    * chamador (ex.: `TableSession` + `StackMovement` do buy-in) atomicamente.
+   *
+   * ESCOPO DE CLUBE (CL-BE-04): recebe `walletId`, não `userId` — o chamador
+   * já resolveu a wallet certa via `(userId, clubeId)` antes de chegar aqui,
+   * então este método não precisa saber de clube. O `SELECT ... FOR UPDATE`
+   * abaixo é cru (sem filtro de tenant), mas quando RLS entrar em produção
+   * (CL-DB-03, em paralelo) o Postgres vai filtrar essa leitura por clube
+   * sozinho, pela sessão/role da conexão — defesa em profundidade "de graça",
+   * sem precisar tocar este código de novo.
    */
   async applyLedgerEntry(
     tx: Prisma.TransactionClient,
@@ -559,10 +582,17 @@ export class WalletService {
     }
   }
 
-  private async findWalletOrThrow(userId: string): Promise<Wallet> {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+  private async findWalletOrThrow(
+    userId: string,
+    clubeId: string,
+  ): Promise<Wallet> {
+    const wallet = await this.prisma.wallet.findUnique({
+      where: { userId_clubeId: { userId, clubeId } },
+    });
     if (!wallet) {
-      throw new NotFoundException('Carteira não encontrada para este usuário.');
+      throw new NotFoundException(
+        'Carteira não encontrada para este usuário neste clube.',
+      );
     }
     return wallet;
   }

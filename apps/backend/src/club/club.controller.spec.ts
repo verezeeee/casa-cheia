@@ -2,9 +2,9 @@ import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
 import { ClubController } from './club.controller';
 import type { ClubService } from './club.service';
 
-// Só `id` é usado — `role` global está saindo do token (CL-BE-03), papel vive
-// no vínculo com o clube. Por isso o cast em vez do literal completo.
-const USER = { id: 'user-1', email: 'a@b.dev' } as AuthenticatedUser;
+// `AuthenticatedUser` não tem mais `role` (CL-BE-03) — papel vive no vínculo
+// com o clube, não no token. `id`/`email` já cobrem o shape por completo.
+const USER: AuthenticatedUser = { id: 'user-1', email: 'a@b.dev' };
 
 function buildController() {
   const clubService: jest.Mocked<

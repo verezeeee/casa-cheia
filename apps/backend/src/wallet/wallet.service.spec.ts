@@ -18,6 +18,7 @@ import { WalletService } from './wallet.service';
 const WALLET: Wallet = {
   id: 'wallet-1',
   userId: 'user-1',
+  clubeId: 'clube-1',
   balance: new Prisma.Decimal('100.00'),
   version: 3,
   blockedAt: null,
@@ -46,7 +47,11 @@ function buildPrisma() {
 
   return {
     tx,
-    wallet: { findUnique: jest.fn(), findUniqueOrThrow: jest.fn() },
+    wallet: {
+      findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
+      findFirstOrThrow: jest.fn(),
+    },
     walletTransaction: { findMany: jest.fn(), findUnique: jest.fn() },
     pixCharge: { create: jest.fn(), findUnique: jest.fn() },
     pixWithdrawal: {
@@ -102,7 +107,9 @@ describe('WalletService', () => {
       const { service, prisma } = buildService();
       prisma.wallet.findUnique.mockResolvedValue(WALLET);
 
-      await expect(service.getBalance(WALLET.userId)).resolves.toEqual({
+      await expect(
+        service.getBalance(WALLET.userId, WALLET.clubeId),
+      ).resolves.toEqual({
         balance: '100.00',
         version: 3,
       });
@@ -112,9 +119,55 @@ describe('WalletService', () => {
       const { service, prisma } = buildService();
       prisma.wallet.findUnique.mockResolvedValue(null);
 
-      await expect(service.getBalance('sem-wallet')).rejects.toBeInstanceOf(
-        NotFoundException,
+      await expect(
+        service.getBalance('sem-wallet', WALLET.clubeId),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('mesmo usuário, dois clubes diferentes: saldos independentes', async () => {
+      const { service, prisma } = buildService();
+      const walletClubeA = WALLET;
+      const walletClubeB: Wallet = {
+        ...WALLET,
+        id: 'wallet-2',
+        clubeId: 'clube-2',
+        balance: new Prisma.Decimal('9.00'),
+        version: 0,
+      };
+
+      prisma.wallet.findUnique.mockImplementation(
+        ({ where }: { where: { userId_clubeId: { clubeId: string } } }) =>
+          Promise.resolve(
+            where.userId_clubeId.clubeId === walletClubeA.clubeId
+              ? walletClubeA
+              : walletClubeB,
+          ),
       );
+
+      await expect(
+        service.getBalance(WALLET.userId, walletClubeA.clubeId),
+      ).resolves.toEqual({ balance: '100.00', version: 3 });
+      await expect(
+        service.getBalance(WALLET.userId, walletClubeB.clubeId),
+      ).resolves.toEqual({ balance: '9.00', version: 0 });
+
+      // Operar num clube (débito via ledger) não pode tocar o saldo do outro.
+      mockLockedWallet(prisma, walletClubeA.balance.toString());
+      await service.applyLedgerEntry(prisma.tx as never, walletClubeA.id, {
+        type: 'ADJUSTMENT',
+        amount: new Prisma.Decimal('-20.00'),
+        idempotencyKey: 'adj-clube-a',
+      });
+
+      expect(prisma.tx.wallet.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: walletClubeA.id } }),
+      );
+      expect(prisma.tx.wallet.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: walletClubeB.id } }),
+      );
+      await expect(
+        service.getBalance(WALLET.userId, walletClubeB.clubeId),
+      ).resolves.toEqual({ balance: '9.00', version: 0 });
     });
   });
 
@@ -140,7 +193,12 @@ describe('WalletService', () => {
       }));
       prisma.walletTransaction.findMany.mockResolvedValue(rows.slice(0, 2)); // limit=2, sem +1 -> sem próxima página
 
-      const page = await service.getTransactions(WALLET.userId, undefined, 2);
+      const page = await service.getTransactions(
+        WALLET.userId,
+        WALLET.clubeId,
+        undefined,
+        2,
+      );
       expect(page.items).toHaveLength(2);
       expect(page.nextCursor).toBeNull();
     });
@@ -152,7 +210,12 @@ describe('WalletService', () => {
       prisma.wallet.findUnique.mockResolvedValue(WALLET);
 
       await expect(
-        service.createDeposit(WALLET.userId, { amount: '5.00' }, 'idem-1'),
+        service.createDeposit(
+          WALLET.userId,
+          WALLET.clubeId,
+          { amount: '5.00' },
+          'idem-1',
+        ),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -161,7 +224,12 @@ describe('WalletService', () => {
       prisma.wallet.findUnique.mockResolvedValue(WALLET);
 
       await expect(
-        service.createDeposit(WALLET.userId, { amount: '99999.00' }, 'idem-1'),
+        service.createDeposit(
+          WALLET.userId,
+          WALLET.clubeId,
+          { amount: '99999.00' },
+          'idem-1',
+        ),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -195,6 +263,7 @@ describe('WalletService', () => {
 
       const result = await service.createDeposit(
         WALLET.userId,
+        WALLET.clubeId,
         { amount: '50.00' },
         'idem-1',
       );
@@ -216,7 +285,12 @@ describe('WalletService', () => {
       );
 
       await expect(
-        service.createDeposit(WALLET.userId, { amount: '50.00' }, 'idem-1'),
+        service.createDeposit(
+          WALLET.userId,
+          WALLET.clubeId,
+          { amount: '50.00' },
+          'idem-1',
+        ),
       ).rejects.toBeInstanceOf(ServiceUnavailableException);
       expect(prisma.pixCharge.create).not.toHaveBeenCalled();
     });
@@ -230,6 +304,7 @@ describe('WalletService', () => {
       await expect(
         service.requestWithdrawal(
           WALLET.userId,
+          WALLET.clubeId,
           { amount: '5.00', pixKey: 'a@b.com', pixKeyType: 'EMAIL' },
           'idem-1',
         ),
@@ -245,6 +320,7 @@ describe('WalletService', () => {
       await expect(
         service.requestWithdrawal(
           WALLET.userId,
+          WALLET.clubeId,
           { amount: '50.00', pixKey: 'a@b.com', pixKeyType: 'EMAIL' },
           'idem-1',
         ),
@@ -273,6 +349,7 @@ describe('WalletService', () => {
 
       const result = await service.requestWithdrawal(
         WALLET.userId,
+        WALLET.clubeId,
         { amount: '20.00', pixKey: 'a@b.com', pixKeyType: 'EMAIL' },
         'idem-1',
       );
@@ -313,6 +390,7 @@ describe('WalletService', () => {
 
       const result = await service.requestWithdrawal(
         WALLET.userId,
+        WALLET.clubeId,
         { amount: '20.00', pixKey: 'a@b.com', pixKeyType: 'EMAIL' },
         'idem-1',
       );
@@ -359,6 +437,7 @@ describe('WalletService', () => {
 
       const result = await service.requestWithdrawal(
         WALLET.userId,
+        WALLET.clubeId,
         { amount: '20.00', pixKey: 'a@b.com', pixKeyType: 'EMAIL' },
         'idem-1',
       );
@@ -383,6 +462,7 @@ describe('WalletService', () => {
       await expect(
         service.requestWithdrawal(
           WALLET.userId,
+          WALLET.clubeId,
           { amount: '20.00', pixKey: 'a@b.com', pixKeyType: 'EMAIL' },
           'idem-1',
         ),
@@ -482,7 +562,7 @@ describe('WalletService', () => {
         status: 'PENDING',
         amount: new Prisma.Decimal('50.00'),
       });
-      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.wallet.findFirstOrThrow.mockResolvedValue(WALLET);
       mockLockedWallet(prisma, '100.00');
 
       await service.handleWebhook(Buffer.from(body), SECRET, undefined);
@@ -527,7 +607,7 @@ describe('WalletService', () => {
 
       await service.handleWebhook(Buffer.from(body), SECRET, undefined);
 
-      expect(prisma.wallet.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(prisma.wallet.findFirstOrThrow).not.toHaveBeenCalled();
     });
 
     it('evento sem handler conhecido só marca o WebhookEvent como processado (no-op)', async () => {
@@ -619,7 +699,7 @@ describe('WalletService', () => {
         status: 'PROCESSING',
         amount: new Prisma.Decimal('30.00'),
       });
-      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.wallet.findFirstOrThrow.mockResolvedValue(WALLET);
       mockLockedWallet(prisma, '70.00');
 
       await service.handleWebhook(Buffer.from(body), SECRET, undefined);
