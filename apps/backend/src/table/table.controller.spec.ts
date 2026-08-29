@@ -12,6 +12,7 @@ const ADMIN: AuthenticatedUser = {
   id: 'admin-1',
   email: 'admin@b.dev',
 };
+const CLUBE_ID = 'clube-1';
 
 const SEAT = {
   seatNumber: 1,
@@ -47,7 +48,7 @@ function buildController() {
 }
 
 describe('TableController', () => {
-  it('createTable delega ao service com o id do admin', async () => {
+  it('createTable delega ao service com o id do admin e o clube da rota', async () => {
     const { controller, tableService } = buildController();
     tableService.createTable.mockResolvedValue({
       id: 'table-1',
@@ -71,24 +72,30 @@ describe('TableController', () => {
       maxBuyIn: '200.00',
       maxSeats: 6,
     } as never;
-    await controller.createTable(ADMIN, dto);
-    expect(tableService.createTable).toHaveBeenCalledWith(ADMIN.id, dto);
+    await controller.createTable(ADMIN, CLUBE_ID, dto);
+    expect(tableService.createTable).toHaveBeenCalledWith(
+      ADMIN.id,
+      CLUBE_ID,
+      dto,
+    );
   });
 
-  it('listTables repassa cursor e limit', async () => {
+  it('listTables repassa clubeId, cursor e limit', async () => {
     const { controller, tableService } = buildController();
     tableService.listTables.mockResolvedValue({ items: [], nextCursor: null });
 
-    await controller.listTables({ cursor: 'abc', limit: 5 });
-    expect(tableService.listTables).toHaveBeenCalledWith('abc', 5);
+    await controller.listTables(CLUBE_ID, { cursor: 'abc', limit: 5 });
+    expect(tableService.listTables).toHaveBeenCalledWith(CLUBE_ID, 'abc', 5);
   });
 
-  it('getSeats delega ao service', async () => {
+  it('getSeats delega ao service com o clube da rota', async () => {
     const { controller, tableService } = buildController();
     tableService.getSeats.mockResolvedValue([SEAT]);
 
-    await expect(controller.getSeats('table-1')).resolves.toEqual([SEAT]);
-    expect(tableService.getSeats).toHaveBeenCalledWith('table-1');
+    await expect(controller.getSeats(CLUBE_ID, 'table-1')).resolves.toEqual([
+      SEAT,
+    ]);
+    expect(tableService.getSeats).toHaveBeenCalledWith(CLUBE_ID, 'table-1');
   });
 
   describe('sitAtTable', () => {
@@ -97,6 +104,7 @@ describe('TableController', () => {
       await expect(
         controller.sitAtTable(
           PLAYER,
+          CLUBE_ID,
           'table-1',
           { seatNumber: 1, buyInAmount: '50.00' },
           undefined,
@@ -104,14 +112,15 @@ describe('TableController', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('delega ao service com o id do jogador', async () => {
+    it('delega ao service com o id do jogador e o clube da rota', async () => {
       const { controller, tableService } = buildController();
       tableService.sitAtTable.mockResolvedValue(SEAT);
 
       const dto = { seatNumber: 1, buyInAmount: '50.00' };
-      await controller.sitAtTable(PLAYER, 'table-1', dto, 'idem-1');
+      await controller.sitAtTable(PLAYER, CLUBE_ID, 'table-1', dto, 'idem-1');
       expect(tableService.sitAtTable).toHaveBeenCalledWith(
         PLAYER.id,
+        CLUBE_ID,
         'table-1',
         dto,
         'idem-1',
@@ -123,7 +132,7 @@ describe('TableController', () => {
     it('exige Idempotency-Key', async () => {
       const { controller } = buildController();
       await expect(
-        controller.cashOut(PLAYER, 'table-1', 'session-1', undefined),
+        controller.cashOut(PLAYER, CLUBE_ID, 'table-1', 'session-1', undefined),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -136,9 +145,16 @@ describe('TableController', () => {
         currentStack: null,
       });
 
-      await controller.cashOut(PLAYER, 'table-1', 'session-1', 'idem-2');
+      await controller.cashOut(
+        PLAYER,
+        CLUBE_ID,
+        'table-1',
+        'session-1',
+        'idem-2',
+      );
       expect(tableService.cashOut).toHaveBeenCalledWith(
         PLAYER.id,
+        CLUBE_ID,
         'table-1',
         'session-1',
         'idem-2',
@@ -146,14 +162,21 @@ describe('TableController', () => {
     });
   });
 
-  it('recordMovement delega ao service com o id do admin', async () => {
+  it('recordMovement delega ao service com o id do admin e o clube da rota', async () => {
     const { controller, tableService } = buildController();
     tableService.recordMovement.mockResolvedValue(SEAT);
 
     const dto = { amount: '20.00', reason: 'HAND_RESULT' } as never;
-    await controller.recordMovement(ADMIN, 'table-1', 'session-1', dto);
+    await controller.recordMovement(
+      ADMIN,
+      CLUBE_ID,
+      'table-1',
+      'session-1',
+      dto,
+    );
     expect(tableService.recordMovement).toHaveBeenCalledWith(
       ADMIN.id,
+      CLUBE_ID,
       'table-1',
       'session-1',
       dto,
