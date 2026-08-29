@@ -160,6 +160,7 @@ export class WalletService {
     const charge = await this.prisma.pixCharge.create({
       data: {
         userId,
+        clubeId,
         externalId: result.externalId,
         amount,
         status: 'PENDING',
@@ -220,6 +221,7 @@ export class WalletService {
       return tx.pixWithdrawal.create({
         data: {
           userId,
+          clubeId,
           amount,
           pixKey: dto.pixKey,
           pixKeyType: dto.pixKeyType,
@@ -301,6 +303,14 @@ export class WalletService {
    * enum, mas cobre `createPayout` — saldo para chave PIX da PRÓPRIA loja,
    * fluxo que este service não expõe). Ajustar `webhookProcessors()` e
    * `parseWebhookEvent` se uma entrega real divergir.
+   *
+   * RESOLUÇÃO DE CLUBE (CL-BE-07): este endpoint continua PÚBLICO e SEM
+   * `:clubeId` na rota — o payload do AbacatePay não carrega o clube, e não
+   * há como exigir isso do gateway. O que mudou é que `creditDeposit` e
+   * `failWithdrawal` não precisam mais adivinhar a wallet certa a partir de
+   * só `userId`: `PixCharge`/`PixWithdrawal` agora guardam `clubeId` desde a
+   * criação (`createDeposit`/`requestWithdrawal`), então o clube é lido do
+   * próprio registro pelo `externalId` do webhook, não do request HTTP.
    */
   async handleWebhook(
     rawBody: Buffer,
@@ -388,16 +398,10 @@ export class WalletService {
     // por algum motivo escapasse da dedução acima ainda não duplicaria o crédito.
     if (charge.status === 'PAID') return;
 
-    // TODO(CL-BE-07): PixCharge não carrega `clubeId` (webhook ainda não
-    // resolve o clube — ver docblock de `handleWebhook`), então não dá pra
-    // usar a chave composta `userId_clubeId` aqui. `findFirst` escolhe
-    // arbitrariamente entre as wallets do usuário se ele tiver mais de uma
-    // (uma por clube) — ok hoje (MVP de clube único), incorreto assim que um
-    // usuário puder ter carteira em mais de um clube. CL-BE-07 resolve o
-    // clube a partir do payload/contexto do webhook.
-    const wallet = await this.prisma.wallet.findFirstOrThrow({
-      where: { userId: charge.userId },
-    });
+    // `PixCharge.clubeId` (CL-BE-07) resolve a wallet certa pela chave
+    // composta — sem ambiguidade mesmo que o jogador tenha carteira em mais
+    // de um clube.
+    const wallet = await this.findWalletOrThrow(charge.userId, charge.clubeId);
 
     await this.prisma.$transaction(async (tx) => {
       await this.applyLedgerEntry(tx, wallet.id, {
@@ -459,11 +463,11 @@ export class WalletService {
     }
     if (withdrawal.status !== 'PROCESSING') return;
 
-    // TODO(CL-BE-07): mesma ressalva de `creditDeposit` — PixWithdrawal não
-    // carrega `clubeId`, `findFirst` é arbitrário entre clubes do usuário.
-    const wallet = await this.prisma.wallet.findFirstOrThrow({
-      where: { userId: withdrawal.userId },
-    });
+    // `PixWithdrawal.clubeId` (CL-BE-07) — mesma resolução de `creditDeposit`.
+    const wallet = await this.findWalletOrThrow(
+      withdrawal.userId,
+      withdrawal.clubeId,
+    );
 
     await this.prisma.$transaction(async (tx) => {
       await this.applyLedgerEntry(tx, wallet.id, {

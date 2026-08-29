@@ -64,6 +64,12 @@ model Clube {
   tableSessions     TableSession[]
   tournamentEntries TournamentEntry[]
 
+  /// Exceção à regra "só a raiz do agregado carrega `clube_id`" — ver a nota
+  /// em wallet.prisma (CL-BE-07): `PixCharge`/`PixWithdrawal` nascem antes de
+  /// ter um pai escopado (wallet) para derivar o clube por JOIN.
+  pixCharges     PixCharge[]
+  pixWithdrawals PixWithdrawal[]
+
   @@map("clubes")
 }
 

@@ -50,7 +50,6 @@ function buildPrisma() {
     wallet: {
       findUnique: jest.fn(),
       findUniqueOrThrow: jest.fn(),
-      findFirstOrThrow: jest.fn(),
     },
     walletTransaction: { findMany: jest.fn(), findUnique: jest.fn() },
     pixCharge: { create: jest.fn(), findUnique: jest.fn() },
@@ -248,6 +247,7 @@ describe('WalletService', () => {
       const created: PixCharge = {
         id: 'charge-1',
         userId: WALLET.userId,
+        clubeId: WALLET.clubeId,
         externalId: 'ext-1',
         amount: new Prisma.Decimal('50.00'),
         status: 'PENDING',
@@ -559,14 +559,20 @@ describe('WalletService', () => {
       prisma.pixCharge.findUnique.mockResolvedValue({
         id: 'charge-1',
         userId: WALLET.userId,
+        clubeId: WALLET.clubeId,
         status: 'PENDING',
         amount: new Prisma.Decimal('50.00'),
       });
-      prisma.wallet.findFirstOrThrow.mockResolvedValue(WALLET);
+      prisma.wallet.findUnique.mockResolvedValue(WALLET);
       mockLockedWallet(prisma, '100.00');
 
       await service.handleWebhook(Buffer.from(body), SECRET, undefined);
 
+      expect(prisma.wallet.findUnique).toHaveBeenCalledWith({
+        where: {
+          userId_clubeId: { userId: WALLET.userId, clubeId: WALLET.clubeId },
+        },
+      });
       expect(prisma.tx.walletTransaction.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -589,6 +595,46 @@ describe('WalletService', () => {
       );
     });
 
+    it('resolve a wallet do clube certo mesmo com o usuário tendo carteira em outro clube (sem ambiguidade)', async () => {
+      const { service, prisma } = buildService();
+      const outraCarteiraDoMesmoUsuario: Wallet = {
+        ...WALLET,
+        id: 'wallet-outro-clube',
+        clubeId: 'clube-outro',
+      };
+      const body = webhookBody(
+        'evt-2b',
+        'transparent.completed',
+        'transparent',
+        'chg-1',
+      );
+      prisma.webhookEvent.create.mockResolvedValue({ id: 'we-1b' });
+      prisma.pixCharge.findUnique.mockResolvedValue({
+        id: 'charge-1',
+        userId: WALLET.userId,
+        clubeId: WALLET.clubeId,
+        status: 'PENDING',
+        amount: new Prisma.Decimal('50.00'),
+      });
+      prisma.wallet.findUnique.mockImplementation(
+        ({ where }: { where: { userId_clubeId: { clubeId: string } } }) =>
+          Promise.resolve(
+            where.userId_clubeId.clubeId === WALLET.clubeId
+              ? WALLET
+              : outraCarteiraDoMesmoUsuario,
+          ),
+      );
+      mockLockedWallet(prisma, '100.00');
+
+      await service.handleWebhook(Buffer.from(body), SECRET, undefined);
+
+      // Nunca a carteira do outro clube: creditou exatamente a de `charge.clubeId`.
+      expect(prisma.tx.$queryRaw).toHaveBeenCalled();
+      expect(prisma.tx.wallet.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: WALLET.id } }),
+      );
+    });
+
     it('cobrança já paga não gera segundo crédito (defesa redundante)', async () => {
       const { service, prisma } = buildService();
       const body = webhookBody(
@@ -601,13 +647,14 @@ describe('WalletService', () => {
       prisma.pixCharge.findUnique.mockResolvedValue({
         id: 'charge-1',
         userId: WALLET.userId,
+        clubeId: WALLET.clubeId,
         status: 'PAID',
         amount: new Prisma.Decimal('50.00'),
       });
 
       await service.handleWebhook(Buffer.from(body), SECRET, undefined);
 
-      expect(prisma.wallet.findFirstOrThrow).not.toHaveBeenCalled();
+      expect(prisma.wallet.findUnique).not.toHaveBeenCalled();
     });
 
     it('evento sem handler conhecido só marca o WebhookEvent como processado (no-op)', async () => {
@@ -645,6 +692,7 @@ describe('WalletService', () => {
       prisma.pixWithdrawal.findUnique.mockResolvedValue({
         id: 'wd-1',
         userId: WALLET.userId,
+        clubeId: WALLET.clubeId,
         externalId: 'wd-ext-1',
         status: 'PROCESSING',
         amount: new Prisma.Decimal('30.00'),
@@ -673,6 +721,7 @@ describe('WalletService', () => {
       prisma.pixWithdrawal.findUnique.mockResolvedValue({
         id: 'wd-1',
         userId: WALLET.userId,
+        clubeId: WALLET.clubeId,
         externalId: 'wd-ext-1',
         status: 'COMPLETED',
         amount: new Prisma.Decimal('30.00'),
@@ -695,15 +744,21 @@ describe('WalletService', () => {
       prisma.pixWithdrawal.findUnique.mockResolvedValue({
         id: 'wd-2',
         userId: WALLET.userId,
+        clubeId: WALLET.clubeId,
         externalId: 'wd-ext-2',
         status: 'PROCESSING',
         amount: new Prisma.Decimal('30.00'),
       });
-      prisma.wallet.findFirstOrThrow.mockResolvedValue(WALLET);
+      prisma.wallet.findUnique.mockResolvedValue(WALLET);
       mockLockedWallet(prisma, '70.00');
 
       await service.handleWebhook(Buffer.from(body), SECRET, undefined);
 
+      expect(prisma.wallet.findUnique).toHaveBeenCalledWith({
+        where: {
+          userId_clubeId: { userId: WALLET.userId, clubeId: WALLET.clubeId },
+        },
+      });
       expect(prisma.tx.walletTransaction.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -718,6 +773,45 @@ describe('WalletService', () => {
           where: { id: 'wd-2' },
           data: expect.objectContaining({ status: 'FAILED' }),
         }),
+      );
+    });
+
+    it('estorno do saque resolve a wallet do clube certo mesmo com carteira em outro clube', async () => {
+      const { service, prisma } = buildService();
+      const outraCarteiraDoMesmoUsuario: Wallet = {
+        ...WALLET,
+        id: 'wallet-outro-clube',
+        clubeId: 'clube-outro',
+      };
+      const body = webhookBody(
+        'evt-7b',
+        'transfer.failed',
+        'transfer',
+        'wd-ext-3',
+      );
+      prisma.webhookEvent.create.mockResolvedValue({ id: 'we-7b' });
+      prisma.pixWithdrawal.findUnique.mockResolvedValue({
+        id: 'wd-3',
+        userId: WALLET.userId,
+        clubeId: WALLET.clubeId,
+        externalId: 'wd-ext-3',
+        status: 'PROCESSING',
+        amount: new Prisma.Decimal('30.00'),
+      });
+      prisma.wallet.findUnique.mockImplementation(
+        ({ where }: { where: { userId_clubeId: { clubeId: string } } }) =>
+          Promise.resolve(
+            where.userId_clubeId.clubeId === WALLET.clubeId
+              ? WALLET
+              : outraCarteiraDoMesmoUsuario,
+          ),
+      );
+      mockLockedWallet(prisma, '70.00');
+
+      await service.handleWebhook(Buffer.from(body), SECRET, undefined);
+
+      expect(prisma.tx.wallet.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: WALLET.id } }),
       );
     });
   });
