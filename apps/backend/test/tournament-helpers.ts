@@ -1,6 +1,6 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PrismaClient } from '@prisma/client';
+import { ClubeRole, PrismaClient } from '@prisma/client';
 import cookieParser from 'cookie-parser';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
@@ -17,6 +17,46 @@ import { AbacatePayClient } from './../src/integrations/abacatepay';
 
 /** Cliente direto ao Postgres: monta estado e confere invariantes sem passar pela API. */
 export const prismaDirect = new PrismaClient();
+
+/**
+ * Clube (tenant) único da suíte inteira — CL-BE-06 moveu as rotas de torneio
+ * para `/clubes/:clubeId/torneios`. Cada arquivo `*.e2e-spec.ts` chama
+ * `createTestClube()` UMA VEZ no próprio `beforeAll` (isolado por processo de
+ * teste, já que cada suíte roda seu próprio módulo Nest); `registerAndLogin`
+ * e `creditWallet` usam esse clube implicitamente, o que evita precisar
+ * passar `clubeId` em toda chamada — "MVP de clube único" nas fixtures,
+ * mesmo raciocínio já aplicado alhures no backend (ver `wallet.service.ts`).
+ */
+let currentClubeId: string | undefined;
+
+function requireClubeId(): string {
+  if (!currentClubeId) {
+    throw new Error(
+      'createTestClube() precisa rodar (num beforeAll) antes de registerAndLogin/creditWallet.',
+    );
+  }
+  return currentClubeId;
+}
+
+/** Cria o clube (tenant ACTIVE) usado pelo resto das fixtures da suíte. */
+export async function createTestClube(
+  name = 'Clube de Teste (torneios)',
+): Promise<string> {
+  const clube = await prismaDirect.clube.create({
+    data: {
+      name,
+      document: randomUUID().replace(/-/g, '').slice(0, 14),
+      status: 'ACTIVE',
+    },
+  });
+  currentClubeId = clube.id;
+  return clube.id;
+}
+
+/** Id do clube criado por `createTestClube()`, para montar caminhos `/api/clubes/:clubeId/...` nos specs. */
+export function getTestClubeId(): string {
+  return requireClubeId();
+}
 
 /** O mesmo boot do `main.ts` (prefixo, cookies, ValidationPipe), com o gateway PIX mockado. */
 export async function bootstrapTestApp(): Promise<INestApplication<App>> {
@@ -50,18 +90,33 @@ export async function registerAndLogin(
   app: INestApplication<App>,
   opts: { admin?: boolean } = {},
 ): Promise<{ accessToken: string; userId: string }> {
+  const clubeId = requireClubeId();
   const email = `${randomUUID()}@tournament-e2e.test`;
   const registerRes = await request(app.getHttpServer())
     .post('/api/auth/register')
     .send({ email, password: 'senha-forte-123', name: 'Jogador Torneio' })
     .expect(201);
+  const userId = registerRes.body.id as string;
 
-  if (opts.admin) {
-    await prismaDirect.user.update({
-      where: { id: registerRes.body.id },
-      data: { role: 'ADMIN' },
-    });
-  }
+  // Vínculo com o clube da suíte (CL-BE-06: as rotas de torneio exigem
+  // `ClubeMembershipGuard`, que 404 sem uma `ClubeMembership` ACTIVE). Papel
+  // ADMIN ou PLAYER conforme `opts.admin` — substitui o antigo
+  // `user.update({ role: 'ADMIN' })`, que não compila mais: papel agora é
+  // POR CLUBE, não atributo do usuário.
+  await prismaDirect.clubeMembership.create({
+    data: {
+      clubeId,
+      userId,
+      role: opts.admin ? ClubeRole.ADMIN : ClubeRole.PLAYER,
+      status: 'ACTIVE',
+    },
+  });
+
+  // Carteira do (usuário, clube) — nada cria isso automaticamente ainda (ver
+  // TODO em `auth.service.ts`/`club.service.ts`: nascer no ingresso ao clube
+  // é escopo de CL-BE-04/07, não desta fixture). Sem ela, `registerEntry`
+  // (que faz `wallet.findUniqueOrThrow`) e `creditWallet` abaixo 404/quebram.
+  await prismaDirect.wallet.create({ data: { userId, clubeId } });
 
   const loginRes = await request(app.getHttpServer())
     .post('/api/auth/login')
@@ -70,7 +125,7 @@ export async function registerAndLogin(
 
   return {
     accessToken: loginRes.body.accessToken as string,
-    userId: registerRes.body.id as string,
+    userId,
   };
 }
 
@@ -78,8 +133,9 @@ export async function creditWallet(
   userId: string,
   amount: string,
 ): Promise<void> {
+  const clubeId = requireClubeId();
   const wallet = await prismaDirect.wallet.findUniqueOrThrow({
-    where: { userId },
+    where: { userId_clubeId: { userId, clubeId } },
   });
   await prismaDirect.$transaction([
     prismaDirect.walletTransaction.create({

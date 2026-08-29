@@ -101,6 +101,7 @@ export class TournamentService {
    */
   async createTournament(
     adminId: string,
+    clubeId: string,
     dto: CreateTournamentDto,
   ): Promise<TournamentSummaryDto> {
     const sum = dto.prizes.reduce(
@@ -124,6 +125,7 @@ export class TournamentService {
 
     const tournament = await this.prisma.tournament.create({
       data: {
+        clubeId,
         name: dto.name,
         buyIn: dto.buyIn,
         fee: dto.fee,
@@ -153,6 +155,7 @@ export class TournamentService {
   }
 
   async listTournaments(
+    clubeId: string,
     cursor: string | undefined,
     limit: number | undefined,
   ): Promise<PaginatedResponse<TournamentSummaryDto>> {
@@ -160,14 +163,17 @@ export class TournamentService {
     const after = cursor ? decodeCursor(cursor) : null;
 
     const rows = await this.prisma.tournament.findMany({
-      where: after
-        ? {
-            OR: [
-              { createdAt: { lt: after.createdAt } },
-              { createdAt: after.createdAt, id: { lt: after.id } },
-            ],
-          }
-        : {},
+      where: {
+        clubeId,
+        ...(after
+          ? {
+              OR: [
+                { createdAt: { lt: after.createdAt } },
+                { createdAt: after.createdAt, id: { lt: after.id } },
+              ],
+            }
+          : {}),
+      },
       include: { _count: { select: { entries: true } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: pageSize + 1,
@@ -183,9 +189,12 @@ export class TournamentService {
     };
   }
 
-  async getTournament(id: string): Promise<TournamentDetailResponse> {
+  async getTournament(
+    clubeId: string,
+    id: string,
+  ): Promise<TournamentDetailResponse> {
     const tournament = await this.prisma.tournament.findUnique({
-      where: { id },
+      where: { id, clubeId },
       include: { _count: { select: { entries: true } } },
     });
     if (!tournament) throw new NotFoundException('Torneio não encontrado.');
@@ -249,21 +258,22 @@ export class TournamentService {
    */
   async registerEntry(
     userId: string,
+    clubeId: string,
     tournamentId: string,
     idempotencyKey: string,
   ): Promise<TournamentEntryDto> {
     const ledgerKey = `tournament-buyin:${idempotencyKey}`;
 
-    const replay = await findReplay(this.prisma, ledgerKey);
+    const replay = await findReplay(this.prisma, clubeId, ledgerKey);
     if (replay) return toTournamentEntryDto(replay);
 
     const wallet = await this.prisma.wallet.findUniqueOrThrow({
-      where: { userId },
+      where: { userId_clubeId: { userId, clubeId } },
     });
 
     try {
-      const entry = await this.prisma.$transaction(async (tx) => {
-        await lockTournament(tx, tournamentId);
+      const entry = await this.prisma.withClube(clubeId, async (tx) => {
+        await lockTournament(tx, clubeId, tournamentId);
 
         // Idempotência CONFERIDA DE NOVO, agora sob o lock. A checagem de fora
         // é só o caminho rápido: num duplo-clique as duas cópias passam por
@@ -272,7 +282,7 @@ export class TournamentService {
         // (ou 409 "já inscrito"), dizendo ao caixa que falhou uma inscrição
         // que existe e está paga. Sob o lock, ou a gêmea já commitou e é
         // encontrada aqui, ou ela ainda nem começou.
-        const twin = await findReplay(tx, ledgerKey);
+        const twin = await findReplay(tx, clubeId, ledgerKey);
         if (twin) return twin;
 
         const tournament = await tx.tournament.findUniqueOrThrow({
@@ -297,6 +307,13 @@ export class TournamentService {
 
         const created = await tx.tournamentEntry.create({
           data: {
+            // `clubeId` explícito aqui só para o TYPESCRIPT: o `tx` tipado é
+            // o `Prisma.TransactionClient` padrão (a extension de
+            // `withClube` é invisível para o compilador), então o
+            // `TournamentEntryUncheckedCreateInput` exige a coluna mesmo a
+            // injeção automática cobrindo o runtime — ver o JSDoc de
+            // `clubeScopeExtension` sobre o chokepoint sempre vencer.
+            clubeId,
             tournamentId,
             userId,
             status: 'REGISTERED',
@@ -365,12 +382,13 @@ export class TournamentService {
    * o 400 já é resposta suficiente para o caixa.
    */
   async eliminateEntry(
+    clubeId: string,
     tournamentId: string,
     entryId: string,
     dto: EliminateEntryDto,
   ): Promise<TournamentEntryDto> {
-    const eliminated = await this.prisma.$transaction(async (tx) => {
-      await lockTournament(tx, tournamentId);
+    const eliminated = await this.prisma.withClube(clubeId, async (tx) => {
+      await lockTournament(tx, clubeId, tournamentId);
 
       const entry = await tx.tournamentEntry.findUnique({
         where: { id: entryId },
@@ -432,10 +450,11 @@ export class TournamentService {
    */
   async redrawTables(
     adminId: string,
+    clubeId: string,
     tournamentId: string,
   ): Promise<TournamentTableMapDto> {
-    return this.prisma.$transaction(async (tx) => {
-      await lockTournament(tx, tournamentId);
+    return this.prisma.withClube(clubeId, async (tx) => {
+      await lockTournament(tx, clubeId, tournamentId);
 
       const tournament = await tx.tournament.findUniqueOrThrow({
         where: { id: tournamentId },
@@ -677,10 +696,11 @@ export class TournamentService {
    * `eliminateEntry` — este MVP não infere colocações intermediárias sozinho.
    */
   async finishTournament(
+    clubeId: string,
     tournamentId: string,
   ): Promise<TournamentDetailResponse> {
     const tournament = await this.prisma.tournament.findUnique({
-      where: { id: tournamentId },
+      where: { id: tournamentId, clubeId },
     });
     if (!tournament) throw new NotFoundException('Torneio não encontrado.');
     if (
@@ -695,7 +715,7 @@ export class TournamentService {
       orderBy: { position: 'asc' },
     });
     const entries = await this.prisma.tournamentEntry.findMany({
-      where: { tournamentId },
+      where: { tournamentId, clubeId },
     });
 
     const remaining = entries.filter(
@@ -742,17 +762,17 @@ export class TournamentService {
     const winnerNeedsPositionOnly =
       winnerId !== null && !payouts.some((p) => p.entryId === winnerId);
 
-    await this.prisma.$transaction(async (tx) => {
+    await this.prisma.withClube(clubeId, async (tx) => {
       // Mesma ORDEM DE LOCKS de `registerEntry` (torneio → wallet). Sem isto,
       // um encerramento concorrente com uma inscrição de última hora fecharia
       // um ciclo torneio↔wallet e o Postgres abortaria uma das duas por
       // deadlock. Serializa também dois `finish` simultâneos.
-      await lockTournament(tx, tournamentId);
+      await lockTournament(tx, clubeId, tournamentId);
 
       for (const payout of payouts) {
         const entry = byPosition.get(payout.position)!;
         const wallet = await tx.wallet.findUniqueOrThrow({
-          where: { userId: entry.userId },
+          where: { userId_clubeId: { userId: entry.userId, clubeId } },
         });
 
         const walletTxn = await this.walletService.applyLedgerEntry(
@@ -792,7 +812,7 @@ export class TournamentService {
       });
     });
 
-    return this.getTournament(tournamentId);
+    return this.getTournament(clubeId, tournamentId);
   }
 }
 
@@ -808,6 +828,7 @@ export class TournamentService {
  */
 async function findReplay(
   client: Prisma.TransactionClient,
+  clubeId: string,
   ledgerKey: string,
 ): Promise<Prisma.TournamentEntryGetPayload<{
   include: typeof ENTRY_INCLUDE;
@@ -817,8 +838,12 @@ async function findReplay(
   });
   if (!existingTxn?.tournamentEntryId) return null;
 
+  // `clubeId` explícito no `where` (e não só a injeção automática de
+  // `withClube`): o caminho rápido acima roda com `this.prisma` PLANO, fora
+  // de qualquer transação escopada, e sem isto um `idempotencyKey` colidindo
+  // por acaso entre clubes devolveria a entry de outro tenant.
   return client.tournamentEntry.findUnique({
-    where: { id: existingTxn.tournamentEntryId },
+    where: { id: existingTxn.tournamentEntryId, clubeId },
     include: ENTRY_INCLUDE,
   });
 }
@@ -841,10 +866,19 @@ function isUniqueConstraintError(error: unknown): boolean {
  */
 async function lockTournament(
   tx: Prisma.TransactionClient,
+  clubeId: string,
   tournamentId: string,
 ): Promise<void> {
+  // `$queryRaw` NÃO passa pela extension de `withClube` (só métodos
+  // tipados passam — ver docblock de `PrismaService.withClube`), então o
+  // filtro de `clube_id` vai aqui à mão: sem ele, o lock pegaria (e o
+  // `rows.length` confirmaria a existência de) um torneio de OUTRO clube
+  // pelo id — um IDOR que o RLS de produção cobriria, mas que esta camada
+  // não deve depender dele para recusar.
   const rows = await tx.$queryRaw<Array<{ id: string }>>`
-    SELECT id FROM tournaments WHERE id = ${tournamentId} FOR UPDATE
+    SELECT id FROM tournaments
+    WHERE id = ${tournamentId} AND clube_id = ${clubeId}
+    FOR UPDATE
   `;
   if (rows.length === 0) throw new NotFoundException('Torneio não encontrado.');
 }

@@ -17,22 +17,27 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
+import { ClubeMembershipGuard } from '../club/guards/clube-membership.guard';
 import { BlindStructureService } from './blind-structure.service';
 import { CreateBlindStructureDto } from './dto/create-blind-structure.dto';
 
 /**
- * Controller PRÓPRIO, e não rotas sob `tournaments/`: `@Get(':id')` do
- * `TournamentController` é catch-all e capturaria `GET /tournaments/blind-
- * structures` como "torneio de id `blind-structures`".
+ * Controller PRÓPRIO, e não rotas sob `torneios/`: `@Get(':id')` do
+ * `TournamentController` é catch-all e capturaria `GET /clubes/:clubeId/
+ * torneios/blind-structures` como "torneio de id `blind-structures`".
  *
  * Leitura é liberada a qualquer usuário autenticado (o jogador vê a estrutura
  * do torneio em que vai jogar); mutação é ADMIN.
+ *
+ * CL-BE-06: rota sob `/clubes/:clubeId/blind-structures`, com
+ * `ClubeMembershipGuard` para autorizar QUEM PODE mexer no catálogo do
+ * clube — mas `BlindStructureService` continua SEM `clubeId` (decisão
+ * CL-DB-01: `BlindStructure` é catálogo global, não tem coluna de tenant).
+ * A autorização é só de rota; o dado por trás dela ainda não é particionado
+ * por clube.
  */
-// TODO(CL-BE-05/06/07): rota ainda é `/blind-structures`, sem `:clubeId`. Ver
-// a nota equivalente em `table/table.controller.ts`: handlers com `@Roles(...)`
-// respondem 500 até a rota migrar para `/clubes/:clubeId/blind-structures`.
-@Controller('blind-structures')
-@UseGuards(JwtAuthGuard)
+@Controller('clubes/:clubeId/blind-structures')
+@UseGuards(JwtAuthGuard, ClubeMembershipGuard)
 export class BlindStructureController {
   constructor(private readonly blindStructureService: BlindStructureService) {}
 

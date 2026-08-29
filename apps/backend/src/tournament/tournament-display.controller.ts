@@ -28,6 +28,24 @@ const DISPLAY_POLLING_THROTTLE = { default: { ttl: 60_000, limit: 2000 } };
  * FRONTEIRA DE CONFIANÇA: nada aqui pode expor `userId`, e-mail, documento ou
  * saldo — só nome, mesa, assento e fichas. Quem monta o payload é
  * `toPublicTournamentTableMapDto`, por lista de permissão.
+ *
+ * NÃO MIGRADO para `/clubes/:clubeId/...` (CL-BE-06): esta rota não tem
+ * sessão de usuário, então não há `user.id` para o `ClubeMembershipGuard`
+ * confirmar contra um `:clubeId` — a TV do salão não tem como provar que
+ * "pertence" a clube nenhum.
+ *
+ * RISCO FUTURO (documentado, não resolvido aqui): hoje a aplicação inteira
+ * fala com o Postgres pela `DATABASE_URL` do owner `poker`, que BYPASSA RLS
+ * — é por isso que esta rota funciona sem clube algum no contexto. No dia em
+ * que a conexão migrar para `DATABASE_URL_APP` (role `poker_app`, sujeito às
+ * políticas de CL-DB-03 — troca ainda não feita, fora do escopo desta
+ * tarefa), toda query aqui vai devolver ZERO linhas: RLS filtra por
+ * `app.current_clube_id`, e nada nesta rota chama `withClube` para setá-lo.
+ * A correção nesse dia é resolver o `clubeId` a partir do `tournamentId` (um
+ * `SELECT clube_id FROM tournaments WHERE id = ...` antes de tudo) e então
+ * chamar `PrismaService.withClube(clubeId, ...)` para o resto da leitura —
+ * SEM exigir membership, porque esta rota continua pública. Não implementado
+ * agora porque não há RLS em produção ainda para quebrar.
  */
 @Controller('display/tournaments')
 export class TournamentDisplayController {

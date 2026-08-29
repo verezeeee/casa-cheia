@@ -9,6 +9,8 @@ import type { TournamentClockService } from './tournament-clock.service';
 import { TournamentController } from './tournament.controller';
 import type { TournamentService } from './tournament.service';
 
+const CLUBE_ID = 'clube-1';
+
 const PLAYER: AuthenticatedUser = {
   id: 'user-1',
   email: 'a@b.dev',
@@ -93,9 +95,10 @@ describe('TournamentController', () => {
     });
 
     const dto = { name: 'Sunday Major', prizes: [] } as never;
-    await controller.createTournament(ADMIN, dto);
+    await controller.createTournament(ADMIN, CLUBE_ID, dto);
     expect(tournamentService.createTournament).toHaveBeenCalledWith(
       ADMIN.id,
+      CLUBE_ID,
       dto,
     );
   });
@@ -107,8 +110,12 @@ describe('TournamentController', () => {
       nextCursor: null,
     });
 
-    await controller.listTournaments({ cursor: 'abc', limit: 5 });
-    expect(tournamentService.listTournaments).toHaveBeenCalledWith('abc', 5);
+    await controller.listTournaments(CLUBE_ID, { cursor: 'abc', limit: 5 });
+    expect(tournamentService.listTournaments).toHaveBeenCalledWith(
+      CLUBE_ID,
+      'abc',
+      5,
+    );
   });
 
   it('getTournament delega ao service', async () => {
@@ -126,15 +133,18 @@ describe('TournamentController', () => {
       entries: [],
     });
 
-    await controller.getTournament('trn-1');
-    expect(tournamentService.getTournament).toHaveBeenCalledWith('trn-1');
+    await controller.getTournament(CLUBE_ID, 'trn-1');
+    expect(tournamentService.getTournament).toHaveBeenCalledWith(
+      CLUBE_ID,
+      'trn-1',
+    );
   });
 
   describe('register', () => {
     it('exige Idempotency-Key', async () => {
       const { controller } = buildController();
       await expect(
-        controller.register(PLAYER, 'trn-1', undefined),
+        controller.register(PLAYER, CLUBE_ID, 'trn-1', undefined),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -142,9 +152,10 @@ describe('TournamentController', () => {
       const { controller, tournamentService } = buildController();
       tournamentService.registerEntry.mockResolvedValue(ENTRY);
 
-      await controller.register(PLAYER, 'trn-1', 'idem-1');
+      await controller.register(PLAYER, CLUBE_ID, 'trn-1', 'idem-1');
       expect(tournamentService.registerEntry).toHaveBeenCalledWith(
         PLAYER.id,
+        CLUBE_ID,
         'trn-1',
         'idem-1',
       );
@@ -159,8 +170,9 @@ describe('TournamentController', () => {
     });
 
     const dto = { finalPosition: 4 };
-    await controller.eliminate('trn-1', 'entry-1', dto);
+    await controller.eliminate(CLUBE_ID, 'trn-1', 'entry-1', dto);
     expect(tournamentService.eliminateEntry).toHaveBeenCalledWith(
+      CLUBE_ID,
       'trn-1',
       'entry-1',
       dto,
@@ -182,8 +194,11 @@ describe('TournamentController', () => {
       entries: [],
     });
 
-    await controller.finish('trn-1');
-    expect(tournamentService.finishTournament).toHaveBeenCalledWith('trn-1');
+    await controller.finish(CLUBE_ID, 'trn-1');
+    expect(tournamentService.finishTournament).toHaveBeenCalledWith(
+      CLUBE_ID,
+      'trn-1',
+    );
   });
 
   describe('relógio', () => {
@@ -196,9 +211,9 @@ describe('TournamentController', () => {
     ] as const)('%s delega ao clock service', async (route, method) => {
       const { controller, clockService } = buildController();
 
-      const result = await controller[route]('trn-1');
+      const result = await controller[route](CLUBE_ID, 'trn-1');
 
-      expect(clockService[method]).toHaveBeenCalledWith('trn-1');
+      expect(clockService[method]).toHaveBeenCalledWith(CLUBE_ID, 'trn-1');
       expect(result).toBe(CLOCK);
     });
 
@@ -206,9 +221,14 @@ describe('TournamentController', () => {
       const { controller, clockService } = buildController();
       const dto = { durationSeconds: 900 };
 
-      await controller.updateBlindLevel('trn-1', 3, dto);
+      await controller.updateBlindLevel(CLUBE_ID, 'trn-1', 3, dto);
 
-      expect(clockService.updateLevel).toHaveBeenCalledWith('trn-1', 3, dto);
+      expect(clockService.updateLevel).toHaveBeenCalledWith(
+        CLUBE_ID,
+        'trn-1',
+        3,
+        dto,
+      );
     });
   });
 });
