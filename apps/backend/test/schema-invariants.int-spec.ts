@@ -2,12 +2,18 @@ import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
 /**
- * Testes de integração das invariantes de banco introduzidas na migration
- * `init_schema_integration` (T-DB-06): `CHECK` constraints e índices únicos
+ * Testes de integração das invariantes de banco da migration
+ * `20260826000000_init_multi_tenant`: `CHECK` constraints e índices únicos
  * parciais que o Prisma Schema Language não expressa nativamente (ver os
  * comentários de `wallets`, `tables` e `table_sessions` nos arquivos
  * `.prisma`). Um erro de sintaxe no SQL escrito à mão só apareceria em
  * produção sem este arquivo.
+ *
+ * Esta suíte é a REDE DO SQUASH (CL-DB-01): as três migrations originais
+ * (T-DB-06 / MT-DB-05 / MT-DB-06) foram consolidadas numa só, e todo o SQL
+ * cru teve que ser transcrito à mão. Uma invariante que se perdesse na
+ * consolidação não apareceria em `prisma migrate diff` — o Prisma não conhece
+ * `CHECK` nem `UNIQUE ... WHERE`. Ela aparece aqui.
  *
  * Roda contra Postgres real (`DATABASE_URL_TEST`, ver test/setup-env.ts).
  * Usa `PrismaClient` diretamente (sem bootstrap do Nest): o que está sob
@@ -15,6 +21,27 @@ import { randomUUID } from 'node:crypto';
  */
 describe('Invariantes de schema (Postgres real)', () => {
   const prisma = new PrismaClient();
+
+  /**
+   * Clube (tenant) das fixtures, criado uma vez para toda a suíte.
+   *
+   * Desde CL-DB-01 não existe dado de negócio fora de um clube: `tables`,
+   * `tournaments`, `wallets`, `table_sessions` e `tournament_entries` têm
+   * `clube_id` NOT NULL. Um único clube basta aqui — o que está sob teste são
+   * as invariantes de INTEGRIDADE (CHECKs e índices parciais), não o
+   * isolamento entre tenants, que é objeto da suíte de RLS (CL-TEST-01).
+   */
+  let clubeId: string;
+
+  beforeAll(async () => {
+    const clube = await prisma.clube.create({
+      data: {
+        name: 'Clube de teste',
+        document: randomUUID().replaceAll('-', '').slice(0, 14),
+      },
+    });
+    clubeId = clube.id;
+  });
 
   /** Cria um User válido (dependência de FK para os demais testes). */
   const createUser = () =>
@@ -33,7 +60,9 @@ describe('Invariantes de schema (Postgres real)', () => {
   describe('CHECK (wallets.balance >= 0)', () => {
     it('rejeita saldo negativo mesmo escrito fora da camada de aplicação', async () => {
       const user = await createUser();
-      const wallet = await prisma.wallet.create({ data: { userId: user.id } });
+      const wallet = await prisma.wallet.create({
+        data: { userId: user.id, clubeId },
+      });
 
       await expect(
         prisma.$executeRaw`UPDATE wallets SET balance = -1 WHERE id = ${wallet.id}`,
@@ -57,6 +86,7 @@ describe('Invariantes de schema (Postgres real)', () => {
             maxSeats: 6,
             status: 'OPEN',
             createdById: admin.id,
+            clubeId,
           },
         }),
       ).rejects.toThrow(/constraint|check/i);
@@ -77,6 +107,7 @@ describe('Invariantes de schema (Postgres real)', () => {
             maxSeats: 11,
             status: 'OPEN',
             createdById: admin.id,
+            clubeId,
           },
         }),
       ).rejects.toThrow(/constraint|check/i);
@@ -96,6 +127,7 @@ describe('Invariantes de schema (Postgres real)', () => {
           maxSeats: 6,
           status: 'OPEN',
           createdById,
+          clubeId,
         },
       });
 
@@ -108,6 +140,7 @@ describe('Invariantes de schema (Postgres real)', () => {
       await prisma.tableSession.create({
         data: {
           tableId: table.id,
+          clubeId,
           userId: playerA.id,
           seatNumber: 1,
           status: 'ACTIVE',
@@ -119,6 +152,7 @@ describe('Invariantes de schema (Postgres real)', () => {
         prisma.tableSession.create({
           data: {
             tableId: table.id,
+            clubeId,
             userId: playerB.id,
             seatNumber: 1,
             status: 'ACTIVE',
@@ -137,6 +171,7 @@ describe('Invariantes de schema (Postgres real)', () => {
       const first = await prisma.tableSession.create({
         data: {
           tableId: table.id,
+          clubeId,
           userId: playerA.id,
           seatNumber: 2,
           status: 'ACTIVE',
@@ -152,6 +187,7 @@ describe('Invariantes de schema (Postgres real)', () => {
         prisma.tableSession.create({
           data: {
             tableId: table.id,
+            clubeId,
             userId: playerB.id,
             seatNumber: 2,
             status: 'ACTIVE',
@@ -169,6 +205,7 @@ describe('Invariantes de schema (Postgres real)', () => {
       await prisma.tableSession.create({
         data: {
           tableId: table.id,
+          clubeId,
           userId: player.id,
           seatNumber: 3,
           status: 'ACTIVE',
@@ -180,6 +217,7 @@ describe('Invariantes de schema (Postgres real)', () => {
         prisma.tableSession.create({
           data: {
             tableId: table.id,
+            clubeId,
             userId: player.id,
             seatNumber: 4,
             status: 'ACTIVE',
@@ -194,7 +232,7 @@ describe('Invariantes de schema (Postgres real)', () => {
     it('resolve User -> Wallet -> WalletTransaction via `include`', async () => {
       const user = await createUser();
       const wallet = await prisma.wallet.create({
-        data: { userId: user.id, balance: 100 },
+        data: { userId: user.id, clubeId, balance: 100 },
       });
       await prisma.walletTransaction.create({
         data: {
@@ -207,20 +245,54 @@ describe('Invariantes de schema (Postgres real)', () => {
         },
       });
 
+      // `wallets` (plural) desde CL-DB-01: a carteira deixou de ser 1:1 com o
+      // usuário e passou a ser uma POR CLUBE (`@@unique([userId, clubeId])`).
       const found = await prisma.user.findUniqueOrThrow({
         where: { id: user.id },
-        include: { wallet: { include: { transactions: true } } },
+        include: { wallets: { include: { transactions: true } } },
       });
 
-      expect(found.wallet?.transactions).toHaveLength(1);
-      expect(found.wallet?.transactions[0].amount.toNumber()).toBe(100);
+      expect(found.wallets).toHaveLength(1);
+      expect(found.wallets[0].transactions).toHaveLength(1);
+      expect(found.wallets[0].transactions[0].amount.toNumber()).toBe(100);
+    });
+
+    it('mantém carteiras independentes do mesmo usuário em clubes distintos', async () => {
+      const user = await createUser();
+      const outroClube = await prisma.clube.create({
+        data: {
+          name: 'Outro clube',
+          document: randomUUID().replaceAll('-', '').slice(0, 14),
+        },
+      });
+
+      await prisma.wallet.create({ data: { userId: user.id, clubeId } });
+
+      // O antigo `userId @unique` recusaria esta segunda carteira. Saldo não
+      // atravessa clube: cada tenant tem sua própria conta de recebimento no
+      // gateway (ADR-0002), então o dinheiro está literalmente em outro lugar.
+      await expect(
+        prisma.wallet.create({
+          data: { userId: user.id, clubeId: outroClube.id },
+        }),
+      ).resolves.toMatchObject({ clubeId: outroClube.id });
+    });
+
+    it('recusa duas carteiras do mesmo usuário no mesmo clube', async () => {
+      const user = await createUser();
+
+      await prisma.wallet.create({ data: { userId: user.id, clubeId } });
+
+      await expect(
+        prisma.wallet.create({ data: { userId: user.id, clubeId } }),
+      ).rejects.toThrow(/unique constraint/i);
     });
   });
 
   /**
-   * MT-QA-02 — invariantes escritas à mão nas migrations
-   * `20260822120000_tournament_tables_and_blinds` (MT-DB-05/06) e
-   * `20260822140000_tournament_table_capacity`.
+   * MT-QA-02 — invariantes escritas à mão de MT-DB-05/06, hoje consolidadas
+   * (junto com as de T-DB-06) na migration única
+   * `20260826000000_init_multi_tenant`.
    *
    * Os INSERT/UPDATE sob teste são `$executeRaw`: o alvo é o banco, não o
    * service. Só as fixtures (`User`, `Tournament`) usam o client tipado, para
@@ -247,6 +319,7 @@ describe('Invariantes de schema (Postgres real)', () => {
           maxPlayers: 100,
           startsAt: new Date(),
           createdById,
+          clubeId,
         },
       });
 
@@ -266,8 +339,8 @@ describe('Invariantes de schema (Postgres real)', () => {
       status: string,
     ) =>
       prisma.$executeRaw`
-        INSERT INTO tournament_entries (id, tournament_id, user_id, status, chip_stack)
-        VALUES (${randomUUID()}, ${tournamentId}, ${userId}, ${status}::"TournamentEntryStatus", 20000)`;
+        INSERT INTO tournament_entries (id, tournament_id, clube_id, user_id, status, chip_stack)
+        VALUES (${randomUUID()}, ${tournamentId}, ${clubeId}, ${userId}, ${status}::"TournamentEntryStatus", 20000)`;
 
     const insertSeat = (
       tournamentTableId: string,

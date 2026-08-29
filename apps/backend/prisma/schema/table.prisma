@@ -24,6 +24,20 @@
 // `WalletTransaction`) agora são `@relation` completas. Toda relação
 // apontando para `User` é `onDelete: Restrict` (ver nota em identity.prisma).
 //
+// ----------------------------------------------------------------------------
+// ESCOPO DE CLUBE (CL-DB-01) — SÓ A RAIZ DO AGREGADO CARREGA `clube_id`
+// ----------------------------------------------------------------------------
+// `Table` e `TableSession` têm `clubeId`. `StackMovement` NÃO tem, e isso é
+// deliberado: ele só existe pendurado numa `TableSession` que já está
+// escopada, então o clube é derivável por JOIN. Duplicar a coluna criaria uma
+// segunda fonte de verdade para o tenant e, com ela, a possibilidade de um
+// movimento apontar para um clube diferente do da sua própria sessão.
+//
+// `TableSession` tem coluna própria mesmo tendo pai escopado (`Table`) porque
+// é ela que o RLS filtra diretamente nas consultas de "minhas sessões" do
+// jogador, sem passar pela mesa — o JOIN obrigatório em toda leitura sairia
+// caro no caminho mais quente do produto.
+//
 // ============================================================================
 
 /// Motivo de um lançamento no ledger de stack.
@@ -58,6 +72,10 @@ enum StackMovementReason {
 model Table {
   id String @id @default(uuid())
 
+  /// Clube dono da mesa (tenant). Ver nota de escopo no topo do arquivo.
+  clubeId String @map("clube_id")
+  clube   Clube  @relation(fields: [clubeId], references: [id], onDelete: Restrict)
+
   name String
 
   type TableType
@@ -91,8 +109,11 @@ model Table {
 
   sessions TableSession[]
 
-  /// Consulta quente do lobby: mesas abertas por modalidade.
-  @@index([status, type])
+  /// Consulta quente do lobby: mesas abertas por modalidade DO CLUBE. O
+  /// `clubeId` vem primeiro porque nenhuma listagem do produto cruza clubes —
+  /// um índice que começasse por `status` varreria as mesas de todos os
+  /// tenants antes de filtrar.
+  @@index([clubeId, status, type])
   /// Listagem administrativa por criador.
   @@index([createdById])
   @@map("tables")
@@ -133,6 +154,11 @@ model Table {
 model TableSession {
   id String @id @default(uuid())
 
+  /// Clube dono da sessão (tenant). Redundante com `table.clubeId` por opção
+  /// de desempenho — ver nota de escopo no topo do arquivo.
+  clubeId String @map("clube_id")
+  clube   Clube  @relation(fields: [clubeId], references: [id], onDelete: Restrict)
+
   tableId String @map("table_id")
   table   Table  @relation(fields: [tableId], references: [id])
 
@@ -168,6 +194,8 @@ model TableSession {
   @@index([tableId, status])
   /// Histórico de sessões do jogador e checagem de sessão ativa.
   @@index([userId, status])
+  /// Escopo do tenant (RLS e relatórios do clube).
+  @@index([clubeId])
   @@map("table_sessions")
 }
 

@@ -19,6 +19,17 @@
 // Prisma/Postgres (NO ACTION), suficiente: nenhum fluxo do domínio deleta
 // fisicamente sessão de mesa ou inscrição de torneio, apenas muda `status`.
 //
+// ESCOPO DE CLUBE (CL-DB-01) — SÓ A RAIZ DO AGREGADO CARREGA `clube_id`
+// `Wallet` tem `clubeId` porque é a RAIZ deste agregado. `WalletTransaction`,
+// `PixCharge`, `PixWithdrawal` e `StackMovement` NÃO têm, e isso é deliberado:
+// cada um deles só existe pendurado num pai que já está escopado (a wallet, ou
+// a sessão/inscrição), então o clube é derivável por JOIN. Duplicar a coluna
+// criaria uma segunda fonte de verdade para o tenant e, com ela, a
+// possibilidade de um lançamento apontar para um clube diferente do da sua
+// própria carteira — uma inconsistência que o banco não teria como recusar.
+// (`WebhookEvent` também não tem: é log de infraestrutura do PSP, anterior à
+// resolução de qual clube o evento diz respeito.)
+//
 // `WalletTransaction` ↔ `TournamentEntry` tem TRÊS caminhos de relação
 // distintos (`WalletTransaction.tournamentEntryId`,
 // `TournamentEntry.buyInTransactionId`, `TournamentEntry.payoutTransactionId`)
@@ -27,15 +38,29 @@
 // caminho entre os dois mesmos models.
 // ============================================================================
 
-/// Carteira virtual do jogador (1:1 com `User`).
+/// Carteira virtual do jogador DENTRO DE UM CLUBE (1:1 com o par
+/// `(User, Clube)`).
 ///
 /// Contém APENAS fundos livres: stack em mesa e buy-in de torneio em curso
 /// vivem em `TableSession` / `TournamentEntry`, nunca aqui (D-05).
+///
+/// SALDO NÃO ATRAVESSA CLUBE
+/// Antes da multi-tenancy a carteira era 1:1 com `User`. Agora é UMA POR
+/// CLUBE: quem joga em dois clubes tem dois saldos independentes, e um
+/// depósito feito no clube A jamais financia um buy-in no clube B. Isso não é
+/// preferência de produto — cada clube tem sua própria conta de recebimento no
+/// gateway (`ClubePaymentAccount`, ADR-0002), então o dinheiro do clube A
+/// literalmente está em outra conta bancária. Uma carteira global sacaria de
+/// uma conta o que foi depositado em outra.
 model Wallet {
   id String @id @default(uuid())
 
-  /// `@unique` materializa a cardinalidade 1:1 — um jogador, uma carteira.
-  userId String @unique
+  /// Clube dono da carteira. Ver `@@unique([userId, clubeId])` abaixo: o
+  /// antigo `userId @unique` (1:1 com o usuário) foi substituído por ele.
+  clubeId String @map("clube_id")
+  clube   Clube  @relation(fields: [clubeId], references: [id], onDelete: Restrict)
+
+  userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   /// Saldo materializado, mantido para leitura O(1).
@@ -66,6 +91,12 @@ model Wallet {
 
   transactions WalletTransaction[]
 
+  /// Um jogador, uma carteira POR CLUBE. Substitui o antigo `userId @unique`.
+  @@unique([userId, clubeId])
+  /// Escopo do tenant (a `@@unique` acima começa por `userId` e não serve de
+  /// índice para filtro só por clube — usado pelo RLS e pelos relatórios do
+  /// clube).
+  @@index([clubeId])
   @@map("wallets")
 }
 

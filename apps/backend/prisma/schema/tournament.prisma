@@ -26,6 +26,24 @@
 // dois models (ver comentário no topo de wallet.prisma). Relação para `User`
 // é sempre `onDelete: Restrict` (nota em identity.prisma).
 //
+// ESCOPO DE CLUBE (CL-DB-01) — SÓ A RAIZ DO AGREGADO CARREGA `clube_id`
+// `Tournament` e `TournamentEntry` têm `clubeId`. `TournamentPrize`,
+// `TournamentTable`, `TournamentSeat`, `BlindLevel` e `TournamentBlindLevel`
+// NÃO têm, e isso é deliberado: cada um só existe pendurado num pai que já
+// está escopado (o torneio, a mesa do torneio, a inscrição), então o clube é
+// derivável por JOIN. Duplicar a coluna criaria uma segunda fonte de verdade
+// para o tenant e, com ela, a possibilidade de um assento apontar para um
+// clube diferente do do seu próprio torneio — inconsistência que o banco não
+// teria como recusar.
+//
+// `TournamentEntry` tem coluna própria mesmo tendo pai escopado porque é ela
+// que o RLS filtra diretamente em "meus torneios" do jogador, sem passar pelo
+// torneio — mesmo raciocínio de `TableSession` (table.prisma).
+//
+// `BlindStructure` é o caso limite: é CATÁLOGO reutilizável, não instância de
+// jogo, e ficou FORA do escopo de clube nesta task (não ganhou `clubeId`),
+// como especificado. Presets seguem globais por ora.
+//
 // SEPARAÇÃO DE FUNDOS (decisão 5 de base.prisma)
 // Ao se inscrever, o jogador tem `buyIn + fee` DEBITADOS da Wallet e recebe
 // `chipStack` de FICHAS DE TORNEIO. Fichas de torneio não são dinheiro: não têm
@@ -56,6 +74,10 @@
 /// regras de mudança de estado.
 model Tournament {
   id String @id @default(uuid())
+
+  /// Clube dono do torneio (tenant). Ver nota de escopo no topo do arquivo.
+  clubeId String @map("clube_id")
+  clube   Clube  @relation(fields: [clubeId], references: [id], onDelete: Restrict)
 
   name String
 
@@ -173,9 +195,10 @@ model Tournament {
   blindLevels TournamentBlindLevel[]
   tables      TournamentTable[]
 
-  /// Consulta quente do lobby: torneios abertos/em andamento ordenados por
-  /// horário de início.
-  @@index([status, startsAt])
+  /// Consulta quente do lobby: torneios abertos/em andamento DO CLUBE,
+  /// ordenados por horário de início. `clubeId` primeiro pelo mesmo motivo do
+  /// índice de `Table` — nenhuma listagem do produto cruza clubes.
+  @@index([clubeId, status, startsAt])
   /// Listagem de torneios por administrador criador (backoffice).
   @@index([createdById])
   @@map("tournaments")
@@ -215,6 +238,11 @@ model TournamentPrize {
 /// dinheiro (débito do buy-in e crédito do prêmio).
 model TournamentEntry {
   id String @id @default(uuid())
+
+  /// Clube dono da inscrição (tenant). Redundante com `tournament.clubeId` por
+  /// opção de desempenho — ver nota de escopo no topo do arquivo.
+  clubeId String @map("clube_id")
+  clube   Clube  @relation(fields: [clubeId], references: [id], onDelete: Restrict)
 
   /// `Restrict` (e NÃO `Cascade`): a inscrição é trilha financeira — aponta os
   /// lançamentos de buy-in e de payout na wallet. Deletar um torneio não pode
@@ -293,6 +321,8 @@ model TournamentEntry {
   @@index([userId, status])
   /// Consulta quente: field do torneio (quem ainda está vivo, quem foi pago).
   @@index([tournamentId, status])
+  /// Escopo do tenant (RLS e relatórios do clube).
+  @@index([clubeId])
   @@map("tournament_entries")
 }
 
