@@ -6,6 +6,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { ClubModule } from './club/club.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import {
   abacatePayConfig,
@@ -62,6 +63,7 @@ import { WalletModule } from './wallet/wallet.module';
     PrismaModule,
     HealthModule,
     AuthModule,
+    ClubModule,
     WalletModule,
     TableModule,
     TournamentModule,
