@@ -44,7 +44,6 @@ const decode = (token: string): Record<string, unknown> =>
 const ACCESS_PAYLOAD: AccessTokenPayload = {
   sub: '11111111-1111-4111-8111-111111111111',
   email: 'jogador@poker.test',
-  role: 'PLAYER',
 };
 
 const REFRESH_PAYLOAD: RefreshTokenPayload = {
@@ -129,11 +128,26 @@ describe('TokenService', () => {
       expect(payload).toMatchObject({
         sub: ACCESS_PAYLOAD.sub,
         email: ACCESS_PAYLOAD.email,
-        role: ACCESS_PAYLOAD.role,
       });
       expect(typeof payload.jti).toBe('string');
       // Access token não carrega família de rotação.
       expect(payload.familyId).toBeUndefined();
+      // Nem papel: papel é do vínculo com o clube, e o token não conhece clube.
+      expect(decode(token).role).toBeUndefined();
+    });
+
+    it('não aceita mais um token legado que só tinha `role` como papel', () => {
+      const service = buildService();
+      // Token assinado por uma versão anterior: claims da aplicação presentes,
+      // mas SEM `jti`. Continua sendo rejeitado pelo shape, não pela assinatura.
+      const legacy = new JwtService().sign(
+        { sub: ACCESS_PAYLOAD.sub, email: ACCESS_PAYLOAD.email, role: 'ADMIN' },
+        { secret: ACCESS_SECRET, expiresIn: '15m' },
+      );
+
+      expect(() => service.verifyAccessToken(legacy)).toThrow(
+        JsonWebTokenError,
+      );
     });
 
     it('respeita o `expiresIn` configurado (exp - iat)', () => {

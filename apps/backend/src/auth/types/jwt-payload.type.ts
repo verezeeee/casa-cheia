@@ -11,19 +11,16 @@
 /**
  * Claims da aplicação presentes em access e refresh tokens.
  *
- * `role` é `string` (e não o enum `UserRole` do Prisma) DE PROPÓSITO: este é
- * um tipo de transporte. Acoplá-lo ao client gerado do Prisma faria com que
- * uma renomeação de enum no schema virasse um erro de compilação em código de
- * borda, e ainda assim o valor vindo do token continuaria sendo um `string`
- * arbitrário em runtime. A conversão/validação para `UserRole` é
- * responsabilidade de quem consome (guards/serviços de autorização).
+ * SEM CLAIM `role` (CL-BE-03): papel deixou de ser atributo global da pessoa e
+ * passou a viver no vínculo usuário↔clube (`ClubeMembership.role`). Um token
+ * não conhece clube — carregar um papel aqui só produziria autorização
+ * desatualizada e escopada ao clube errado. O papel é resolvido por requisição,
+ * a partir do `:clubeId` da rota (ver `ClubeMembershipGuard`).
  */
 export interface JwtPayload {
   /** `sub` (subject): id do usuário dono do token. */
   sub: string;
   email: string;
-  /** Papel do usuário. Ver nota acima sobre o uso de `string`. */
-  role: string;
   /**
    * `jti` (JWT ID): identificador único do token (UUID v4), novo a cada
    * emissão. É a chave que permite revogação/rastreio individual de um token

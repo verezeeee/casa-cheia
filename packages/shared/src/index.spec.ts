@@ -167,11 +167,11 @@ describe('@poker-system/shared barrel export', () => {
 
       const tokens: AuthTokensResponse = { accessToken: 'jwt', expiresIn: 900 };
 
+      // Sem `role`: papel é do vínculo usuário↔clube, não do usuário (CL-BE-03).
       const sessionUser: SessionUser = {
         id: 'usr_1',
         email: 'player@poker.dev',
         name: 'Player One',
-        role: ClubeRole.PLAYER,
       };
 
       const balance: WalletBalanceResponse = { balance: money, version: 7 };

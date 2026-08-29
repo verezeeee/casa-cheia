@@ -1,5 +1,5 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
-import { Prisma, UserRole, type RefreshToken, type User } from '@prisma/client';
+import { Prisma, type RefreshToken, type User } from '@prisma/client';
 import type { HashService } from '../common/crypto/hash.service';
 import type { PasswordHasherService } from '../common/crypto/password-hasher.service';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -15,7 +15,6 @@ const USER: User = {
   name: 'Jogador',
   document: null,
   phone: null,
-  role: UserRole.PLAYER,
   isActive: true,
   emailVerifiedAt: null,
   createdAt: NOW,
@@ -46,6 +45,7 @@ function buildPrisma() {
   return {
     tx,
     user: {
+      create: jest.fn(),
       findUnique: jest.fn(),
       findUniqueOrThrow: jest.fn(),
     },
@@ -107,9 +107,9 @@ function buildService(overrides?: {
 
 describe('AuthService', () => {
   describe('register', () => {
-    it('cria o usuário e a carteira (balance 0) na mesma transação', async () => {
+    it('cria o usuário SEM carteira (carteira é por clube, criada no ingresso)', async () => {
       const { service, prisma, passwordHasher } = buildService();
-      prisma.tx.user.create.mockResolvedValue(USER);
+      prisma.user.create.mockResolvedValue(USER);
 
       const result = await service.register({
         email: 'Jogador@Poker.test',
@@ -118,25 +118,22 @@ describe('AuthService', () => {
       });
 
       expect(passwordHasher.hash).toHaveBeenCalledWith('senha-forte-123');
-      expect(prisma.tx.user.create).toHaveBeenCalledWith(
+      expect(prisma.user.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ email: 'jogador@poker.test' }),
         }),
       );
-      expect(prisma.tx.wallet.create).toHaveBeenCalledWith({
-        data: { userId: USER.id },
-      });
+      expect(prisma.tx.wallet.create).not.toHaveBeenCalled();
       expect(result).toEqual({
         id: USER.id,
         email: USER.email,
         name: USER.name,
-        role: USER.role,
       });
     });
 
     it('mapeia e-mail duplicado (P2002) para ConflictException', async () => {
       const { service, prisma } = buildService();
-      prisma.tx.user.create.mockRejectedValue(
+      prisma.user.create.mockRejectedValue(
         new Prisma.PrismaClientKnownRequestError('duplicate', {
           code: 'P2002',
           clientVersion: '6.19.3',
@@ -221,7 +218,6 @@ describe('AuthService', () => {
       tokenService.verifyRefreshToken.mockReturnValue({
         sub: USER.id,
         email: USER.email,
-        role: USER.role,
         familyId: REFRESH_ROW.familyId,
         jti: 'jti-x',
         iat: 0,
@@ -246,7 +242,6 @@ describe('AuthService', () => {
       tokenService.verifyRefreshToken.mockReturnValue({
         sub: USER.id,
         email: USER.email,
-        role: USER.role,
         familyId: REFRESH_ROW.familyId,
         jti: 'jti-x',
         iat: 0,
@@ -292,7 +287,6 @@ describe('AuthService', () => {
         id: USER.id,
         email: USER.email,
         name: USER.name,
-        role: USER.role,
       });
     });
   });
