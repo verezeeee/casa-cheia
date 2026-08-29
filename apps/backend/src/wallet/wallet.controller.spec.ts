@@ -7,7 +7,6 @@ import type { WalletService } from './wallet.service';
 const USER: AuthenticatedUser = {
   id: 'user-1',
   email: 'a@b.dev',
-  role: 'PLAYER',
 };
 
 function buildController() {

@@ -114,7 +114,6 @@ export class TokenService {
     const claims: JwtPayload = {
       sub: payload.sub,
       email: payload.email,
-      role: payload.role,
       jti: randomUUID(),
     };
 
@@ -140,7 +139,6 @@ export class TokenService {
     const claims: JwtPayload = {
       sub: payload.sub,
       email: payload.email,
-      role: payload.role,
       familyId: payload.familyId,
       jti,
     };
@@ -207,7 +205,7 @@ export class TokenService {
     payload: Record<string, unknown>,
     scope: TokenScope,
   ): VerifiedJwtPayload {
-    const required = ['sub', 'email', 'role', 'jti'];
+    const required = ['sub', 'email', 'jti'];
     const missing: string[] = required.filter(
       (claim) => typeof payload[claim] !== 'string',
     );

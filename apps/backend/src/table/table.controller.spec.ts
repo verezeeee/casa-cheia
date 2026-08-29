@@ -7,12 +7,10 @@ import type { TableService } from './table.service';
 const PLAYER: AuthenticatedUser = {
   id: 'user-1',
   email: 'a@b.dev',
-  role: 'PLAYER',
 };
 const ADMIN: AuthenticatedUser = {
   id: 'admin-1',
   email: 'admin@b.dev',
-  role: 'ADMIN',
 };
 
 const SEAT = {

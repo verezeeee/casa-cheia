@@ -3,11 +3,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import type {
-  AuthTokensResponse,
-  SessionUser,
-  UserRole,
-} from '@poker-system/shared';
+import type { AuthTokensResponse, SessionUser } from '@poker-system/shared';
 import { Prisma, type RefreshToken, type User } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { HashService } from '../common/crypto/hash.service';
@@ -42,23 +38,28 @@ export class AuthService {
     private readonly tokenService: TokenService,
   ) {}
 
-  /** Cria a conta e a carteira (balance 0) na mesma transação. */
+  /**
+   * Cria a conta.
+   *
+   * NÃO cria mais carteira (CL-BE-03): `Wallet` passou a ser POR CLUBE
+   * (`Wallet.clubeId` NOT NULL, `@@unique([userId, clubeId])`). Uma conta
+   * recém-criada não pertence a clube nenhum, logo não há carteira a criar
+   * aqui — ela nasce no ingresso ao clube.
+   * TODO(CL-BE-04/wallet): criar a carteira ao aceitar/registrar a
+   * `ClubeMembership`, na mesma transação do vínculo.
+   */
   async register(dto: RegisterDto): Promise<SessionUser> {
     const email = normalizeEmail(dto.email);
     const passwordHash = await this.passwordHasher.hash(dto.password);
 
     try {
-      const user = await this.prisma.$transaction(async (tx) => {
-        const created = await tx.user.create({
-          data: {
-            email,
-            passwordHash,
-            name: dto.name,
-            document: dto.document ?? null,
-          },
-        });
-        await tx.wallet.create({ data: { userId: created.id } });
-        return created;
+      const user = await this.prisma.user.create({
+        data: {
+          email,
+          passwordHash,
+          name: dto.name,
+          document: dto.document ?? null,
+        },
       });
 
       return toSessionUser(user);
@@ -154,7 +155,7 @@ export class AuthService {
     });
   }
 
-  /** Leitura fresca do usuário autenticado (o token só garante `id`/`role` no instante da emissão). */
+  /** Leitura fresca do usuário autenticado (o token só garante `id` no instante da emissão). */
   async me(userId: string): Promise<SessionUser> {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
@@ -184,12 +185,10 @@ export class AuthService {
     const access = this.tokenService.signAccessToken({
       sub: user.id,
       email: user.email,
-      role: user.role,
     });
     const refresh = this.tokenService.signRefreshToken({
       sub: user.id,
       email: user.email,
-      role: user.role,
       familyId,
     });
 
@@ -230,9 +229,6 @@ function toSessionUser(user: User): SessionUser {
     id: user.id,
     email: user.email,
     name: user.name,
-    // Mesmos literais em Prisma e @poker-system/shared (ver base.prisma) —
-    // o cast é só para cruzar duas declarações `enum` distintas em TS.
-    role: user.role as unknown as UserRole,
   };
 }
 

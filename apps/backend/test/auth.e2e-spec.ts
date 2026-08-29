@@ -16,6 +16,13 @@ function extractCookie(response: request.Response, name: string): string {
   return cookie.split(';')[0];
 }
 
+/** Decodifica o payload de um JWT sem verificar a assinatura (inspeção de claims). */
+function decodeJwtPayload(token: string): Record<string, unknown> {
+  return JSON.parse(
+    Buffer.from(token.split('.')[1], 'base64url').toString('utf8'),
+  ) as Record<string, unknown>;
+}
+
 describe('Auth (e2e)', () => {
   let app: INestApplication<App>;
   const email = `${randomUUID()}@auth-e2e.test`;
@@ -53,7 +60,6 @@ describe('Auth (e2e)', () => {
       id: expect.any(String),
       email,
       name: 'Jogador E2E',
-      role: 'PLAYER',
     });
     expect(response.headers['set-cookie']).toBeUndefined();
   });
@@ -85,6 +91,10 @@ describe('Auth (e2e)', () => {
     });
     const firstAccessToken = loginRes.body.accessToken as string;
     const firstRefreshCookie = extractCookie(loginRes, 'refresh_token');
+
+    // O access token NÃO carrega papel (CL-BE-03): papel vive no vínculo com o
+    // clube e é resolvido por requisição, a partir do `:clubeId` da rota.
+    expect(decodeJwtPayload(firstAccessToken)).not.toHaveProperty('role');
 
     // 2. /me com o access token
     const meRes = await request(app.getHttpServer())
