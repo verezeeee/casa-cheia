@@ -18,7 +18,7 @@ import type {
   TournamentSummaryDto,
   TournamentTableMapDto,
 } from '@poker-system/shared';
-import { UserRole } from '@prisma/client';
+import { ClubeRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -32,6 +32,9 @@ import { UpdateBlindLevelDto } from './dto/update-blind-level.dto';
 import { TournamentClockService } from './tournament-clock.service';
 import { TournamentService } from './tournament.service';
 
+// TODO(CL-BE-05/06/07): rota ainda é `/tournaments`, sem `:clubeId`. Ver a
+// nota equivalente em `table/table.controller.ts`: handlers com `@Roles(...)`
+// respondem 500 até a rota migrar para `/clubes/:clubeId/tournaments`.
 @Controller('tournaments')
 @UseGuards(JwtAuthGuard)
 export class TournamentController {
@@ -42,7 +45,7 @@ export class TournamentController {
 
   @Post()
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async createTournament(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateTournamentDto,
@@ -80,7 +83,7 @@ export class TournamentController {
 
   @Post(':id/entries/:entryId/eliminate')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async eliminate(
     @Param('id') tournamentId: string,
     @Param('entryId') entryId: string,
@@ -95,7 +98,7 @@ export class TournamentController {
    */
   @Post(':id/redraw')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async redraw(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') tournamentId: string,
@@ -105,7 +108,7 @@ export class TournamentController {
 
   @Post(':id/finish')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async finish(
     @Param('id') tournamentId: string,
   ): Promise<TournamentDetailResponse> {
@@ -117,7 +120,7 @@ export class TournamentController {
 
   @Post(':id/clock/start')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async startClock(
     @Param('id') tournamentId: string,
   ): Promise<TournamentClockDto> {
@@ -126,7 +129,7 @@ export class TournamentController {
 
   @Post(':id/clock/pause')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async pauseClock(
     @Param('id') tournamentId: string,
   ): Promise<TournamentClockDto> {
@@ -135,7 +138,7 @@ export class TournamentController {
 
   @Post(':id/clock/resume')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async resumeClock(
     @Param('id') tournamentId: string,
   ): Promise<TournamentClockDto> {
@@ -144,7 +147,7 @@ export class TournamentController {
 
   @Post(':id/clock/next')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async nextLevel(
     @Param('id') tournamentId: string,
   ): Promise<TournamentClockDto> {
@@ -153,7 +156,7 @@ export class TournamentController {
 
   @Post(':id/clock/previous')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async previousLevel(
     @Param('id') tournamentId: string,
   ): Promise<TournamentClockDto> {
@@ -162,7 +165,7 @@ export class TournamentController {
 
   @Patch(':id/blind-levels/:levelNumber')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async updateBlindLevel(
     @Param('id') tournamentId: string,
     @Param('levelNumber', ParseIntPipe) levelNumber: number,

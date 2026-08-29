@@ -23,6 +23,8 @@ import type {
   AuthTokensResponse,
   BlindLevelDto,
   BlindStructureDto,
+  ClubeMembershipDto,
+  ClubeSummaryDto,
   MoneyString,
   PaginatedResponse,
   PixChargeResponse,
@@ -167,11 +169,11 @@ describe('@poker-system/shared barrel export', () => {
 
       const tokens: AuthTokensResponse = { accessToken: 'jwt', expiresIn: 900 };
 
+      // Sem `role`: papel é do vínculo usuário↔clube, não do usuário (CL-BE-03).
       const sessionUser: SessionUser = {
         id: 'usr_1',
         email: 'player@poker.dev',
         name: 'Player One',
-        role: ClubeRole.PLAYER,
       };
 
       const balance: WalletBalanceResponse = { balance: money, version: 7 };
@@ -296,6 +298,25 @@ describe('@poker-system/shared barrel export', () => {
         averageStack: 25_000,
       };
 
+      // Papel vem do vínculo, não do usuário: o mesmo `sessionUser` é PLAYER
+      // aqui e poderia ser ADMIN em outro item da mesma lista.
+      const clube: ClubeSummaryDto = {
+        id: 'clb_1',
+        name: 'Casa Cheia',
+        status: ClubeStatus.ACTIVE,
+        role: ClubeRole.PLAYER,
+      };
+
+      const membership: ClubeMembershipDto = {
+        id: 'mbs_1',
+        userId: sessionUser.id,
+        name: sessionUser.name,
+        email: sessionUser.email,
+        role: ClubeRole.ADMIN,
+        status: ClubeMembershipStatus.ACTIVE,
+        createdAt: '2026-01-31T12:00:00.000Z',
+      };
+
       const page: PaginatedResponse<WalletTransactionDto> = {
         items: [transaction],
         nextCursor: null,
@@ -315,6 +336,8 @@ describe('@poker-system/shared barrel export', () => {
       assert.equal(clock.serverTime, '2026-02-01T21:00:00.000Z');
       assert.equal(tableMap.tables[0]?.seats[0]?.entryId, entry.id);
       assert.equal(tableMap.playersRemaining, 1);
+      assert.equal(clube.role, ClubeRole.PLAYER);
+      assert.equal(membership.status, ClubeMembershipStatus.ACTIVE);
       assert.equal(page.nextCursor, null);
       assert.equal(page.items.length, 1);
     });

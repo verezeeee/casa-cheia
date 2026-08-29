@@ -54,3 +54,7 @@ export * from './enums/clube-status.enum';
 export * from './enums/clube-role.enum';
 export * from './enums/clube-membership-status.enum';
 export * from './enums/clube-onboarding-status.enum';
+
+// Contratos de leitura de clube e de membros (CL-BE-02).
+export * from './interfaces/clube-summary.dto';
+export * from './interfaces/clube-membership.dto';

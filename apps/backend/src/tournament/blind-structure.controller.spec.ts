@@ -2,22 +2,22 @@ import { ForbiddenException, type ExecutionContext } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
 import type { BlindStructureDto } from '@poker-system/shared';
+import { ClubeRole } from '@prisma/client';
+import type { CurrentClubeContext } from '../club/types/current-clube.type';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { BlindStructureController } from './blind-structure.controller';
 import type { BlindStructureService } from './blind-structure.service';
 
-const PLAYER: AuthenticatedUser = {
-  id: 'user-1',
-  email: 'player@b.dev',
-  role: 'PLAYER',
+const ADMIN: AuthenticatedUser = { id: 'admin-1', email: 'admin@b.dev' };
+
+/** Papel vem do vínculo com o clube (`request.clube`), não do usuário. */
+const AS_PLAYER: CurrentClubeContext = {
+  id: 'clube-1',
+  role: ClubeRole.PLAYER,
 };
-const ADMIN: AuthenticatedUser = {
-  id: 'admin-1',
-  email: 'admin@b.dev',
-  role: 'ADMIN',
-};
+const AS_ADMIN: CurrentClubeContext = { id: 'clube-1', role: ClubeRole.ADMIN };
 
 const STRUCTURE: BlindStructureDto = {
   id: 'bs-1',
@@ -53,15 +53,15 @@ function buildController() {
   return { controller, blindStructureService };
 }
 
-/** Contexto mínimo que o `RolesGuard` consome (handler + classe + request.user). */
+/** Contexto mínimo que o `RolesGuard` consome (handler + classe + request.clube). */
 function contextFor(
   handler: (...args: never[]) => unknown,
-  user: AuthenticatedUser,
+  clube: CurrentClubeContext,
 ): ExecutionContext {
   return {
     getHandler: () => handler,
     getClass: () => BlindStructureController,
-    switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    switchToHttp: () => ({ getRequest: () => ({ user: ADMIN, clube }) }),
   } as unknown as ExecutionContext;
 }
 
@@ -91,10 +91,10 @@ describe('BlindStructureController', () => {
         );
 
         const guard = new RolesGuard(new Reflector());
-        expect(() => guard.canActivate(contextFor(handler, PLAYER))).toThrow(
+        expect(() => guard.canActivate(contextFor(handler, AS_PLAYER))).toThrow(
           ForbiddenException,
         );
-        expect(guard.canActivate(contextFor(handler, ADMIN))).toBe(true);
+        expect(guard.canActivate(contextFor(handler, AS_ADMIN))).toBe(true);
       },
     );
 
@@ -102,7 +102,7 @@ describe('BlindStructureController', () => {
       '%s é liberado a qualquer usuário autenticado',
       (_name, handler) => {
         const guard = new RolesGuard(new Reflector());
-        expect(guard.canActivate(contextFor(handler, PLAYER))).toBe(true);
+        expect(guard.canActivate(contextFor(handler, AS_PLAYER))).toBe(true);
       },
     );
   });

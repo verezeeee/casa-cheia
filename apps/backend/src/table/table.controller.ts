@@ -13,7 +13,7 @@ import type {
   TableSeatDto,
   TableSummaryDto,
 } from '@poker-system/shared';
-import { UserRole } from '@prisma/client';
+import { ClubeRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -26,6 +26,11 @@ import { RecordMovementDto } from './dto/record-movement.dto';
 import { SitAtTableDto } from './dto/sit-at-table.dto';
 import { TableService } from './table.service';
 
+// TODO(CL-BE-05/06/07): rota ainda é `/tables`, sem `:clubeId`. Enquanto ela
+// não migrar para `/clubes/:clubeId/tables` (com `ClubeMembershipGuard` na
+// cadeia), os handlers com `@Roles(...)` respondem 500 — de propósito:
+// `RolesGuard` recusa autorizar sem saber o clube. Fail-closed é preferível a
+// remover o `@Roles`, o que liberaria criação de mesa para qualquer jogador.
 @Controller('tables')
 @UseGuards(JwtAuthGuard)
 export class TableController {
@@ -33,7 +38,7 @@ export class TableController {
 
   @Post()
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async createTable(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateTableDto,
@@ -82,7 +87,7 @@ export class TableController {
 
   @Post(':id/sessions/:sessionId/movements')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async recordMovement(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') tableId: string,
@@ -94,7 +99,7 @@ export class TableController {
 
   @Post(':id/close')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @Roles(ClubeRole.ADMIN)
   async closeTable(@Param('id') tableId: string): Promise<TableSummaryDto> {
     return this.tableService.closeTable(tableId);
   }
