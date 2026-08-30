@@ -8,6 +8,8 @@ import type { PrismaService } from '../prisma/prisma.service';
 import type { WalletService } from '../wallet/wallet.service';
 import { TournamentService } from './tournament.service';
 
+const CLUBE_ID = 'clube-1';
+
 const TOURNAMENT = {
   id: 'trn-1',
   name: 'Sunday Major',
@@ -137,7 +139,14 @@ function buildPrisma() {
     blindStructure: { findUnique: jest.fn() },
     walletTransaction: { findUnique: shared.walletTransactionFindUnique },
     wallet: { findUniqueOrThrow: jest.fn() },
-    $transaction: jest.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
+    // `registerEntry`/`eliminateEntry`/`redrawTables`/`finishTournament` abrem
+    // a transação via `PrismaService.withClube` (CL-BE-06), não mais
+    // `$transaction` puro — o mock aceita e ignora `clubeId`, igual o
+    // `withClube` real ignoraria discordância nenhuma aqui (é o mesmo `tx`
+    // preparado acima).
+    withClube: jest.fn((_clubeId: string, cb: (t: typeof tx) => unknown) =>
+      cb(tx),
+    ),
   };
 }
 
@@ -188,6 +197,7 @@ describe('TournamentService', () => {
       await expect(
         service.createTournament(
           'admin-1',
+          CLUBE_ID,
           validDto([{ position: 1, percentage: '90.00' }]) as never,
         ),
       ).rejects.toBeInstanceOf(BadRequestException);
@@ -200,7 +210,7 @@ describe('TournamentService', () => {
         { position: 1, percentage: '50.00' },
       ]);
       await expect(
-        service.createTournament('admin-1', dto as never),
+        service.createTournament('admin-1', CLUBE_ID, dto as never),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -212,7 +222,7 @@ describe('TournamentService', () => {
         { position: 1, percentage: '70.00' },
         { position: 2, percentage: '30.00' },
       ]);
-      const result = await service.createTournament('admin-1', dto);
+      const result = await service.createTournament('admin-1', CLUBE_ID, dto);
 
       expect(prisma.tournament.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -241,7 +251,7 @@ describe('TournamentService', () => {
       });
       prisma.tournament.create.mockResolvedValue(TOURNAMENT);
 
-      await service.createTournament('admin-1', {
+      await service.createTournament('admin-1', CLUBE_ID, {
         ...validDto([{ position: 1, percentage: '100.00' }]),
         blindStructureId: 'bs-1',
         tableCapacity: 8,
@@ -267,7 +277,7 @@ describe('TournamentService', () => {
       prisma.blindStructure.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.createTournament('admin-1', {
+        service.createTournament('admin-1', CLUBE_ID, {
           ...validDto([{ position: 1, percentage: '100.00' }]),
           blindStructureId: 'inexistente',
         }),
@@ -280,6 +290,7 @@ describe('TournamentService', () => {
 
       await service.createTournament(
         'admin-1',
+        CLUBE_ID,
         validDto([{ position: 1, percentage: '100.00' }]),
       );
 
@@ -293,7 +304,7 @@ describe('TournamentService', () => {
     it('rejeita maxReentries sem allowReentry', async () => {
       const { service } = buildService();
       await expect(
-        service.createTournament('admin-1', {
+        service.createTournament('admin-1', CLUBE_ID, {
           ...validDto([{ position: 1, percentage: '100.00' }]),
           maxReentries: 2,
         }),
@@ -318,7 +329,7 @@ describe('TournamentService', () => {
       });
 
       await expect(
-        service.createTournament('admin-1', {
+        service.createTournament('admin-1', CLUBE_ID, {
           ...validDto([{ position: 1, percentage: '100.00' }]),
           blindStructureId: 'bs-1',
           allowReentry: true,
@@ -332,9 +343,9 @@ describe('TournamentService', () => {
     it('lança 404 quando o torneio não existe', async () => {
       const { service, prisma } = buildService();
       prisma.tournament.findUnique.mockResolvedValue(null);
-      await expect(service.getTournament('inexistente')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await expect(
+        service.getTournament(CLUBE_ID, 'inexistente'),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 
@@ -349,7 +360,7 @@ describe('TournamentService', () => {
       });
 
       await expect(
-        service.registerEntry('user-1', 'trn-1', 'idem-1'),
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -363,7 +374,7 @@ describe('TournamentService', () => {
         .mockResolvedValueOnce(TOURNAMENT.maxPlayers); // vivos no torneio
 
       await expect(
-        service.registerEntry('user-1', 'trn-1', 'idem-1'),
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -378,7 +389,12 @@ describe('TournamentService', () => {
         seats: [{ seatNumber: 4, tournamentTable: { tableNumber: 2 } }],
       });
 
-      const result = await service.registerEntry('user-1', 'trn-1', 'idem-1');
+      const result = await service.registerEntry(
+        'user-1',
+        CLUBE_ID,
+        'trn-1',
+        'idem-1',
+      );
 
       expect(result).toMatchObject({
         id: 'entry-1',
@@ -399,7 +415,7 @@ describe('TournamentService', () => {
       const { service, prisma, walletService } = buildService();
       primeRegister(prisma, walletService);
 
-      await service.registerEntry('user-1', 'trn-1', 'idem-1');
+      await service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1');
 
       expect(walletService.applyLedgerEntry).toHaveBeenCalledWith(
         prisma.tx,
@@ -424,7 +440,7 @@ describe('TournamentService', () => {
       const { service, prisma, walletService } = buildService();
       primeRegister(prisma, walletService);
 
-      await service.registerEntry('user-1', 'trn-1', 'idem-1');
+      await service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1');
 
       expect(prisma.tx.tournamentTable.create).toHaveBeenCalledWith({
         data: { tournamentId: 'trn-1', tableNumber: 1, capacity: 9 },
@@ -437,7 +453,7 @@ describe('TournamentService', () => {
           reason: 'INITIAL',
         },
       });
-      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.withClube).toHaveBeenCalledTimes(1);
     });
 
     // MT-BE-04, lacuna de composição: mesa nova ao lado de mesa cheia nasce
@@ -459,7 +475,7 @@ describe('TournamentService', () => {
           tableRow(2, 4, ['entry-1']),
         ]);
 
-      await service.registerEntry('user-1', 'trn-1', 'idem-1');
+      await service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1');
 
       // 4/1 viola a invariante: um jogador da mesa cheia acompanha o novo.
       expect(prisma.tx.tournamentSeat.updateMany).toHaveBeenCalledWith(
@@ -496,7 +512,7 @@ describe('TournamentService', () => {
         return Promise.resolve([]);
       });
 
-      await service.registerEntry('user-1', 'trn-1', 'idem-1');
+      await service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1');
 
       expect(order[0]).toBe('lock');
       expect(order).toContain('readTables');
@@ -516,7 +532,12 @@ describe('TournamentService', () => {
         seats: [{ seatNumber: 4, tournamentTable: { tableNumber: 2 } }],
       });
 
-      const result = await service.registerEntry('user-1', 'trn-1', 'idem-1');
+      const result = await service.registerEntry(
+        'user-1',
+        CLUBE_ID,
+        'trn-1',
+        'idem-1',
+      );
 
       expect(result).toMatchObject({ id: 'entry-1', tableNumber: 2 });
       expect(prisma.tx.tournamentEntry.create).not.toHaveBeenCalled();
@@ -530,12 +551,12 @@ describe('TournamentService', () => {
       prisma.walletTransaction.findUnique.mockResolvedValue(null);
       prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
       prisma.tournament.findUnique.mockResolvedValue(TOURNAMENT);
-      (prisma.$transaction as jest.Mock).mockRejectedValue(
+      (prisma.withClube as jest.Mock).mockRejectedValue(
         uniqueError('tournament_entries_active_user_unique'),
       );
 
       await expect(
-        service.registerEntry('user-1', 'trn-1', 'idem-1'),
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
       ).rejects.toBeInstanceOf(ConflictException);
     });
   });
@@ -557,7 +578,7 @@ describe('TournamentService', () => {
       eliminatedBefore(prisma, { ...TOURNAMENT, status: 'RUNNING' });
 
       await expect(
-        service.registerEntry('user-1', 'trn-1', 'idem-2'),
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-2'),
       ).rejects.toThrow('Este torneio não permite reentrada.');
     });
 
@@ -573,7 +594,7 @@ describe('TournamentService', () => {
       prisma.tournamentEntry.count.mockResolvedValueOnce(2); // já entrou 2x
 
       await expect(
-        service.registerEntry('user-1', 'trn-1', 'idem-2'),
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-2'),
       ).rejects.toThrow(/Limite de 1 reentrada/);
     });
 
@@ -588,7 +609,7 @@ describe('TournamentService', () => {
       });
 
       await expect(
-        service.registerEntry('user-1', 'trn-1', 'idem-2'),
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-2'),
       ).rejects.toThrow(/Reentradas encerradas/);
     });
 
@@ -610,7 +631,7 @@ describe('TournamentService', () => {
         tableRow(1, 9, ['e1']),
       ]);
 
-      await service.registerEntry('user-1', 'trn-1', 'idem-2');
+      await service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-2');
 
       // Entry NOVA (a antiga nunca é tocada) + assento novo na mesa existente.
       expect(prisma.tx.tournamentEntry.create).toHaveBeenCalled();
@@ -638,7 +659,7 @@ describe('TournamentService', () => {
       const { service, prisma } = buildService();
       prisma.tx.tournamentEntry.findUnique.mockResolvedValue(null);
       await expect(
-        service.eliminateEntry('trn-1', 'entry-1', {}),
+        service.eliminateEntry(CLUBE_ID, 'trn-1', 'entry-1', {}),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
@@ -646,7 +667,7 @@ describe('TournamentService', () => {
       const { service, prisma } = buildService();
       prisma.tx.$queryRaw.mockResolvedValue([]);
       await expect(
-        service.eliminateEntry('trn-1', 'entry-1', {}),
+        service.eliminateEntry(CLUBE_ID, 'trn-1', 'entry-1', {}),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(prisma.tx.tournamentEntry.findUnique).not.toHaveBeenCalled();
     });
@@ -658,7 +679,7 @@ describe('TournamentService', () => {
         status: 'ELIMINATED',
       });
       await expect(
-        service.eliminateEntry('trn-1', 'entry-1', {}),
+        service.eliminateEntry(CLUBE_ID, 'trn-1', 'entry-1', {}),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.tx.tournamentSeat.updateMany).not.toHaveBeenCalled();
     });
@@ -673,9 +694,14 @@ describe('TournamentService', () => {
         finalPosition: 4,
       });
 
-      const result = await service.eliminateEntry('trn-1', 'entry-1', {
-        finalPosition: 4,
-      });
+      const result = await service.eliminateEntry(
+        CLUBE_ID,
+        'trn-1',
+        'entry-1',
+        {
+          finalPosition: 4,
+        },
+      );
 
       expect(prisma.tx.$queryRaw).toHaveBeenCalled(); // lock pessimista
       expect(prisma.tx.tournamentSeat.updateMany).toHaveBeenCalledWith(
@@ -711,7 +737,7 @@ describe('TournamentService', () => {
         tableRow(2, 9, ['d']),
       ]);
 
-      await service.eliminateEntry('trn-1', 'entry-1', {});
+      await service.eliminateEntry(CLUBE_ID, 'trn-1', 'entry-1', {});
 
       expect(prisma.tx.tournamentSeat.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
@@ -732,7 +758,7 @@ describe('TournamentService', () => {
       );
 
       await expect(
-        service.eliminateEntry('trn-1', 'entry-1', {}),
+        service.eliminateEntry(CLUBE_ID, 'trn-1', 'entry-1', {}),
       ).rejects.toThrow('deadlock');
       expect(prisma.tx.tournamentEntry.update).not.toHaveBeenCalled();
     });
@@ -744,7 +770,7 @@ describe('TournamentService', () => {
       const { service, prisma } = buildService();
       prisma.tx.tournamentEntry.findMany.mockResolvedValue([]);
       await expect(
-        service.redrawTables('admin-1', 'trn-1'),
+        service.redrawTables('admin-1', CLUBE_ID, 'trn-1'),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -766,7 +792,7 @@ describe('TournamentService', () => {
         ]);
       prisma.tx.tournamentTable.create.mockResolvedValue({ id: 'table-2' });
 
-      const map = await service.redrawTables('admin-1', 'trn-1');
+      const map = await service.redrawTables('admin-1', CLUBE_ID, 'trn-1');
 
       // Uma mesa nova (3 jogadores / capacidade 2 = 2 mesas).
       expect(prisma.tx.tournamentTable.create).toHaveBeenCalledWith({
@@ -797,9 +823,9 @@ describe('TournamentService', () => {
         ...TOURNAMENT,
         status: 'FINISHED',
       });
-      await expect(service.finishTournament('trn-1')).rejects.toBeInstanceOf(
-        BadRequestException,
-      );
+      await expect(
+        service.finishTournament(CLUBE_ID, 'trn-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('rejeita quando restam múltiplas inscrições ativas e há prêmio de 1º lugar', async () => {
@@ -825,9 +851,9 @@ describe('TournamentService', () => {
         },
       ]);
 
-      await expect(service.finishTournament('trn-1')).rejects.toBeInstanceOf(
-        BadRequestException,
-      );
+      await expect(
+        service.finishTournament(CLUBE_ID, 'trn-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('paga o campeão inferido automaticamente (só 1 sobrou) e finaliza o torneio', async () => {
@@ -869,7 +895,7 @@ describe('TournamentService', () => {
         _count: { entries: 2 },
       });
 
-      await service.finishTournament('trn-1');
+      await service.finishTournament(CLUBE_ID, 'trn-1');
 
       // 2 payouts: campeão (e1, inferido) e vice (e2, finalPosition já setado).
       expect(walletService.applyLedgerEntry).toHaveBeenCalledTimes(2);

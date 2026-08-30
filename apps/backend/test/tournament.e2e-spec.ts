@@ -5,6 +5,7 @@ import type { App } from 'supertest/types';
 // Fixtures compartilhadas com `tournament-tables.e2e-spec.ts` (MT-QA-01).
 import {
   bootstrapTestApp,
+  createTestClube,
   creditWallet,
   expectSeatInvariants,
   prismaDirect,
@@ -13,9 +14,11 @@ import {
 
 describe('Tournaments (e2e)', () => {
   let app: INestApplication<App>;
+  let CLUBE_ID: string;
 
   beforeAll(async () => {
     app = await bootstrapTestApp();
+    CLUBE_ID = await createTestClube();
   });
 
   afterAll(async () => {
@@ -26,7 +29,7 @@ describe('Tournaments (e2e)', () => {
   it('PLAYER não pode criar torneio (403)', async () => {
     const { accessToken } = await registerAndLogin(app);
     await request(app.getHttpServer())
-      .post('/api/tournaments')
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
         name: 'Proibido',
@@ -43,7 +46,7 @@ describe('Tournaments (e2e)', () => {
   it('rejeita grade de premiação que não fecha 100%', async () => {
     const admin = await registerAndLogin(app, { admin: true });
     await request(app.getHttpServer())
-      .post('/api/tournaments')
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({
         name: 'Grade inválida',
@@ -82,14 +85,14 @@ describe('Tournaments (e2e)', () => {
 
     // Não-admin não cria preset.
     await request(app.getHttpServer())
-      .post('/api/blind-structures')
+      .post(`/api/clubes/${CLUBE_ID}/blind-structures`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .send({ name: 'Proibido', levels })
       .expect(403);
 
     // Sequência com buraco (1, 3) é rejeitada pelas validações de conjunto.
     await request(app.getHttpServer())
-      .post('/api/blind-structures')
+      .post(`/api/clubes/${CLUBE_ID}/blind-structures`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({
         name: 'Buraco',
@@ -99,7 +102,7 @@ describe('Tournaments (e2e)', () => {
 
     // Intervalo sem rótulo é rejeitado.
     await request(app.getHttpServer())
-      .post('/api/blind-structures')
+      .post(`/api/clubes/${CLUBE_ID}/blind-structures`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({
         name: 'Break sem label',
@@ -108,7 +111,7 @@ describe('Tournaments (e2e)', () => {
       .expect(400);
 
     const createRes = await request(app.getHttpServer())
-      .post('/api/blind-structures')
+      .post(`/api/clubes/${CLUBE_ID}/blind-structures`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({ name: 'Turbo 20min', levels })
       .expect(201);
@@ -130,7 +133,7 @@ describe('Tournaments (e2e)', () => {
 
     // Leitura é liberada a qualquer usuário autenticado.
     const listRes = await request(app.getHttpServer())
-      .get('/api/blind-structures')
+      .get(`/api/clubes/${CLUBE_ID}/blind-structures`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .expect(200);
     expect((listRes.body as Array<{ id: string }>).map((s) => s.id)).toContain(
@@ -138,13 +141,13 @@ describe('Tournaments (e2e)', () => {
     );
 
     await request(app.getHttpServer())
-      .get(`/api/blind-structures/${structureId}`)
+      .get(`/api/clubes/${CLUBE_ID}/blind-structures/${structureId}`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .expect(200);
 
     // PUT substitui a grade inteira (3 níveis -> 2).
     const putRes = await request(app.getHttpServer())
-      .put(`/api/blind-structures/${structureId}`)
+      .put(`/api/clubes/${CLUBE_ID}/blind-structures/${structureId}`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({ name: 'Turbo 15min', levels: levels.slice(0, 2) })
       .expect(200);
@@ -155,7 +158,7 @@ describe('Tournaments (e2e)', () => {
     // O vínculo é feito direto no banco porque `createTournament` só passa a
     // aceitar `blindStructureId` em MT-BE-03.
     const tournamentRes = await request(app.getHttpServer())
-      .post('/api/tournaments')
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({
         name: 'Torneio com preset',
@@ -173,7 +176,7 @@ describe('Tournaments (e2e)', () => {
     });
 
     await request(app.getHttpServer())
-      .delete(`/api/blind-structures/${structureId}`)
+      .delete(`/api/clubes/${CLUBE_ID}/blind-structures/${structureId}`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(409);
 
@@ -183,17 +186,17 @@ describe('Tournaments (e2e)', () => {
     });
 
     await request(app.getHttpServer())
-      .delete(`/api/blind-structures/${structureId}`)
+      .delete(`/api/clubes/${CLUBE_ID}/blind-structures/${structureId}`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .expect(403);
 
     await request(app.getHttpServer())
-      .delete(`/api/blind-structures/${structureId}`)
+      .delete(`/api/clubes/${CLUBE_ID}/blind-structures/${structureId}`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(204);
 
     await request(app.getHttpServer())
-      .get(`/api/blind-structures/${structureId}`)
+      .get(`/api/clubes/${CLUBE_ID}/blind-structures/${structureId}`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(404);
   });
@@ -215,7 +218,7 @@ describe('Tournaments (e2e)', () => {
     // Capacidade 2 de propósito: com 4 jogadores o torneio já passa por
     // abertura de mesa, quebra e redraw sem precisar de 20 fixtures.
     const createRes = await request(app.getHttpServer())
-      .post('/api/tournaments')
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({
         name: 'Mesas MVP',
@@ -238,7 +241,7 @@ describe('Tournaments (e2e)', () => {
     for (let index = 0; index < players.length; index += 1) {
       const key = randomUUID();
       const res = await request(app.getHttpServer())
-        .post(`/api/tournaments/${tournamentId}/register`)
+        .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
         .set(auth(index))
         .set('Idempotency-Key', key)
         .expect(201);
@@ -262,7 +265,7 @@ describe('Tournaments (e2e)', () => {
     // Replay da MESMA Idempotency-Key devolve o MESMO ticket (armadilha 1).
     const original = await seatOf(entryIds[3]);
     const replay = await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/register`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
       .set(auth(3))
       .set('Idempotency-Key', lastKey[3])
       .expect(201);
@@ -274,7 +277,7 @@ describe('Tournaments (e2e)', () => {
 
     // O detalhe do torneio também carrega mesa/assento (ticket do jogador).
     const detail = await request(app.getHttpServer())
-      .get(`/api/tournaments/${tournamentId}`)
+      .get(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
       .set(auth(0))
       .expect(200);
     expect(
@@ -287,7 +290,9 @@ describe('Tournaments (e2e)', () => {
     // a mesa 2, movendo o sobrevivente para a mesa 1.
     for (const entryId of [entryIds[0], entryIds[2]]) {
       await request(app.getHttpServer())
-        .post(`/api/tournaments/${tournamentId}/entries/${entryId}/eliminate`)
+        .post(
+          `/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/entries/${entryId}/eliminate`,
+        )
         .set('Authorization', `Bearer ${admin.accessToken}`)
         .send({})
         .expect(201);
@@ -311,12 +316,12 @@ describe('Tournaments (e2e)', () => {
 
     // --- Redraw manual: só ADMIN, e devolve o mapa novo.
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/redraw`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/redraw`)
       .set(auth(1))
       .expect(403);
 
     const redrawRes = await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/redraw`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/redraw`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(201);
     expect(redrawRes.body).toMatchObject({
@@ -337,7 +342,7 @@ describe('Tournaments (e2e)', () => {
     // --- Reentrada do jogador eliminado: entry NOVA, assento NOVO, prize
     // pool incrementado; a entry antiga fica intacta.
     const reentryRes = await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/register`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
       .set(auth(0))
       .set('Idempotency-Key', randomUUID())
       .expect(201);
@@ -359,13 +364,13 @@ describe('Tournaments (e2e)', () => {
     // --- Limite de reentradas: a segunda reentrada do mesmo jogador é 400.
     await request(app.getHttpServer())
       .post(
-        `/api/tournaments/${tournamentId}/entries/${reentryRes.body.id}/eliminate`,
+        `/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/entries/${reentryRes.body.id}/eliminate`,
       )
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({})
       .expect(201);
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/register`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
       .set(auth(0))
       .set('Idempotency-Key', randomUUID())
       .expect(400);
@@ -380,7 +385,7 @@ describe('Tournaments (e2e)', () => {
     const asAdmin = { Authorization: `Bearer ${admin.accessToken}` };
 
     const structureRes = await request(app.getHttpServer())
-      .post('/api/blind-structures')
+      .post(`/api/clubes/${CLUBE_ID}/blind-structures`)
       .set(asAdmin)
       .send({
         name: `Display ${randomUUID()}`,
@@ -402,7 +407,7 @@ describe('Tournaments (e2e)', () => {
       .expect(201);
 
     const createRes = await request(app.getHttpServer())
-      .post('/api/tournaments')
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
       .set(asAdmin)
       .send({
         name: 'TV do salão',
@@ -418,7 +423,7 @@ describe('Tournaments (e2e)', () => {
     const tournamentId = createRes.body.id as string;
 
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/register`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .set('Idempotency-Key', randomUUID())
       .expect(201);
@@ -441,7 +446,7 @@ describe('Tournaments (e2e)', () => {
 
     // --- start: o display passa a ver RUNNING no nível 1.
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/clock/start`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/clock/start`)
       .set(asAdmin)
       .expect(201);
 
@@ -466,7 +471,7 @@ describe('Tournaments (e2e)', () => {
 
     // --- pause: `remainingMs` CONGELA entre duas leituras distintas.
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/clock/pause`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/clock/pause`)
       .set(asAdmin)
       .expect(201);
 
@@ -483,11 +488,11 @@ describe('Tournaments (e2e)', () => {
 
     // --- resume + next: nível 2 começa inteiro (15 min).
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/clock/resume`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/clock/resume`)
       .set(asAdmin)
       .expect(201);
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/clock/next`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/clock/next`)
       .set(asAdmin)
       .expect(201);
 
@@ -501,7 +506,7 @@ describe('Tournaments (e2e)', () => {
     // nível anda pelo DELTA (+5 min), e NÃO é recalculado como now + 20 min —
     // recalcular ressuscitaria o tempo já decorrido.
     const patchRes = await request(app.getHttpServer())
-      .patch(`/api/tournaments/${tournamentId}/blind-levels/2`)
+      .patch(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/blind-levels/2`)
       .set(asAdmin)
       .send({ durationSeconds: 1200 })
       .expect(200);
@@ -519,11 +524,11 @@ describe('Tournaments (e2e)', () => {
 
     // --- previous no nível 1 é 400 (formato padrão do HttpExceptionFilter).
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/clock/previous`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/clock/previous`)
       .set(asAdmin)
       .expect(201);
     const back = await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/clock/previous`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/clock/previous`)
       .set(asAdmin)
       .expect(400);
     expect(back.body.message).toBe('O relógio já está no primeiro nível.');
@@ -570,7 +575,7 @@ describe('Tournaments (e2e)', () => {
     );
 
     const createRes = await request(app.getHttpServer())
-      .post('/api/tournaments')
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({
         name: 'Sunday Major',
@@ -593,7 +598,7 @@ describe('Tournaments (e2e)', () => {
 
     // Aparece no lobby.
     const lobbyRes = await request(app.getHttpServer())
-      .get('/api/tournaments')
+      .get(`/api/clubes/${CLUBE_ID}/torneios`)
       .set('Authorization', `Bearer ${playerA.accessToken}`)
       .expect(200);
     expect(
@@ -608,7 +613,7 @@ describe('Tournaments (e2e)', () => {
       ['C', playerC],
     ] as const) {
       const res = await request(app.getHttpServer())
-        .post(`/api/tournaments/${tournamentId}/register`)
+        .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
         .set('Authorization', `Bearer ${player.accessToken}`)
         .set('Idempotency-Key', randomUUID())
         .expect(201);
@@ -630,7 +635,7 @@ describe('Tournaments (e2e)', () => {
 
     // Detalhe mostra as 3 inscrições e a grade.
     const detailRes = await request(app.getHttpServer())
-      .get(`/api/tournaments/${tournamentId}`)
+      .get(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(200);
     expect(detailRes.body.entries).toHaveLength(3);
@@ -641,34 +646,40 @@ describe('Tournaments (e2e)', () => {
 
     // PLAYER não pode eliminar.
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/entries/${entryIds.C}/eliminate`)
+      .post(
+        `/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/entries/${entryIds.C}/eliminate`,
+      )
       .set('Authorization', `Bearer ${playerA.accessToken}`)
       .send({ finalPosition: 3 })
       .expect(403);
 
     // Elimina C em 3º (sem prêmio) e B em 2º — sobra A como campeão.
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/entries/${entryIds.C}/eliminate`)
+      .post(
+        `/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/entries/${entryIds.C}/eliminate`,
+      )
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({ finalPosition: 3 })
       .expect(201);
 
     // Torneio virou RUNNING na primeira eliminação.
     const afterFirstElimination = await request(app.getHttpServer())
-      .get(`/api/tournaments/${tournamentId}`)
+      .get(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(200);
     expect(afterFirstElimination.body.status).toBe('RUNNING');
 
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/entries/${entryIds.B}/eliminate`)
+      .post(
+        `/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/entries/${entryIds.B}/eliminate`,
+      )
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({ finalPosition: 2 })
       .expect(201);
 
     // Encerra: paga 70% de 270 (=189.00) para A, 30% (=81.00) para B.
     const finishRes = await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/finish`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/finish`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(201);
     expect(finishRes.body.status).toBe('FINISHED');
@@ -692,7 +703,7 @@ describe('Tournaments (e2e)', () => {
     expect(finalC.body.balance).toBe('400.00'); // sem prêmio (3º lugar)
 
     const finalDetail = await request(app.getHttpServer())
-      .get(`/api/tournaments/${tournamentId}`)
+      .get(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(200);
     const byId = Object.fromEntries(
@@ -716,7 +727,7 @@ describe('Tournaments (e2e)', () => {
 
     // Reexecutar finish num torneio já FINISHED é rejeitado (não paga de novo).
     await request(app.getHttpServer())
-      .post(`/api/tournaments/${tournamentId}/finish`)
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/finish`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(400);
   });

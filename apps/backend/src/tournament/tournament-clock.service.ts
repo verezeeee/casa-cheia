@@ -58,6 +58,12 @@ export class TournamentClockService {
    * recebem o MESMO `levelEndsAt` — ele está gravado, só `remainingMs` e
    * `serverTime` variam entre as respostas.
    */
+  /**
+   * SEM `clubeId`: é a leitura consumida pela rota PÚBLICA de display (TV do
+   * salão, `TournamentDisplayController`), que não tem sessão de usuário nem
+   * `:clubeId` na rota — ver o TODO de risco no topo daquele controller sobre
+   * o dia em que a conexão da aplicação migrar para o role sujeito a RLS.
+   */
   async read(tournamentId: string): Promise<TournamentClockDto> {
     const tournament = await this.prisma.tournament.findUnique({
       where: { id: tournamentId },
@@ -69,8 +75,11 @@ export class TournamentClockService {
   }
 
   /** `NOT_STARTED → RUNNING`, no primeiro nível da grade. */
-  async start(tournamentId: string): Promise<TournamentClockDto> {
-    return this.mutate(tournamentId, (clock, levels, now) => {
+  async start(
+    clubeId: string,
+    tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.mutate(clubeId, tournamentId, (clock, levels, now) => {
       if (clock.clockStatus !== 'NOT_STARTED') {
         throw new BadRequestException(
           `Só é possível iniciar um relógio que ainda não começou (estado atual: ${clock.clockStatus}).`,
@@ -96,8 +105,11 @@ export class TournamentClockService {
   }
 
   /** `RUNNING → PAUSED`, congelando o que sobrava do nível. */
-  async pause(tournamentId: string): Promise<TournamentClockDto> {
-    return this.mutate(tournamentId, (clock, levels, now) => {
+  async pause(
+    clubeId: string,
+    tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.mutate(clubeId, tournamentId, (clock, levels, now) => {
       if (clock.clockStatus !== 'RUNNING') {
         throw new BadRequestException(
           `Só é possível pausar um relógio em andamento (estado atual: ${clock.clockStatus}).`,
@@ -121,8 +133,11 @@ export class TournamentClockService {
   }
 
   /** `PAUSED → RUNNING`, devolvendo exatamente o tempo congelado. */
-  async resume(tournamentId: string): Promise<TournamentClockDto> {
-    return this.mutate(tournamentId, (clock, levels, now) => {
+  async resume(
+    clubeId: string,
+    tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.mutate(clubeId, tournamentId, (clock, levels, now) => {
       if (clock.clockStatus !== 'PAUSED') {
         throw new BadRequestException(
           `Só é possível retomar um relógio pausado (estado atual: ${clock.clockStatus}).`,
@@ -142,15 +157,21 @@ export class TournamentClockService {
   }
 
   /** Avança um nível; no último, encerra o relógio (`FINISHED`). */
-  async next(tournamentId: string): Promise<TournamentClockDto> {
-    return this.mutate(tournamentId, (clock, levels, now) =>
+  async next(
+    clubeId: string,
+    tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.mutate(clubeId, tournamentId, (clock, levels, now) =>
       step(clock, levels, now, 1),
     );
   }
 
   /** Volta um nível; recusa abaixo do primeiro. */
-  async previous(tournamentId: string): Promise<TournamentClockDto> {
-    return this.mutate(tournamentId, (clock, levels, now) =>
+  async previous(
+    clubeId: string,
+    tournamentId: string,
+  ): Promise<TournamentClockDto> {
+    return this.mutate(clubeId, tournamentId, (clock, levels, now) =>
       step(clock, levels, now, -1),
     );
   }
@@ -169,11 +190,12 @@ export class TournamentClockService {
    * torneio encerrado o faria "voltar a andar".
    */
   async updateLevel(
+    clubeId: string,
     tournamentId: string,
     levelNumber: number,
     dto: UpdateBlindLevelDto,
   ): Promise<TournamentClockDto> {
-    return this.mutate(tournamentId, (clock, levels) => {
+    return this.mutate(clubeId, tournamentId, (clock, levels) => {
       const level = levels.find((item) => item.levelNumber === levelNumber);
       if (!level) {
         throw new NotFoundException(
@@ -242,6 +264,7 @@ export class TournamentClockService {
    * errado.
    */
   private async mutate(
+    clubeId: string,
     tournamentId: string,
     plan: (
       clock: TournamentClockView,
@@ -251,7 +274,7 @@ export class TournamentClockService {
   ): Promise<TournamentClockDto> {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       const tournament = await this.prisma.tournament.findUnique({
-        where: { id: tournamentId },
+        where: { id: tournamentId, clubeId },
         include: { blindLevels: { orderBy: { levelNumber: 'asc' } } },
       });
       if (!tournament) throw new NotFoundException('Torneio não encontrado.');
@@ -264,7 +287,7 @@ export class TournamentClockService {
       );
 
       try {
-        await this.prisma.$transaction(async (tx) => {
+        await this.prisma.withClube(clubeId, async (tx) => {
           if (levelWrite) {
             await tx.tournamentBlindLevel.update({
               where: { id: levelWrite.id },

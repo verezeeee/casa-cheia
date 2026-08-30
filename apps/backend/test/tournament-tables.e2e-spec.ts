@@ -4,11 +4,15 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import {
   bootstrapTestApp,
+  createTestClube,
   creditWallet,
   expectSeatInvariants,
   prismaDirect,
   registerAndLogin,
 } from './tournament-helpers';
+
+/** Clube da suíte, preenchido em `beforeAll` antes de qualquer fixture. */
+let CLUBE_ID: string;
 
 /**
  * MT-QA-01 — concorrência e TRANSACIONALIDADE do balanceamento de mesas.
@@ -48,7 +52,7 @@ async function createTournament(
   overrides: Record<string, unknown>,
 ): Promise<string> {
   const res = await request(app.getHttpServer())
-    .post('/api/tournaments')
+    .post(`/api/clubes/${CLUBE_ID}/torneios`)
     .set(auth(adminToken))
     .send({
       name: `MT-QA-01 ${randomUUID()}`,
@@ -71,7 +75,7 @@ const registerEntry = (
   idempotencyKey: string = randomUUID(),
 ) =>
   request(app.getHttpServer())
-    .post(`/api/tournaments/${tournamentId}/register`)
+    .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
     .set(auth(token))
     .set('Idempotency-Key', idempotencyKey);
 
@@ -82,7 +86,9 @@ const eliminateEntry = (
   adminToken: string,
 ) =>
   request(app.getHttpServer())
-    .post(`/api/tournaments/${tournamentId}/entries/${entryId}/eliminate`)
+    .post(
+      `/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/entries/${entryId}/eliminate`,
+    )
     .set(auth(adminToken))
     .send({});
 
@@ -109,6 +115,7 @@ describe('Mesas de torneio — concorrência (MT-QA-01)', () => {
 
   beforeAll(async () => {
     app = await bootstrapTestApp();
+    CLUBE_ID = await createTestClube('Clube MT-QA-01');
     admin = await registerAndLogin(app, { admin: true });
   }, 60_000);
 

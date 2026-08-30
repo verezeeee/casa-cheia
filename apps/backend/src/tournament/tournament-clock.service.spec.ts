@@ -8,6 +8,7 @@ import { TournamentClockService } from './tournament-clock.service';
 
 const NOW = new Date('2026-02-01T21:00:00.000Z');
 const MINUTE = 60_000;
+const CLUBE_ID = 'clube-1';
 
 const LEVELS = [
   {
@@ -73,7 +74,9 @@ function buildService(row: ReturnType<typeof tournamentRow> | null) {
   const prisma = {
     tx,
     tournament: { findUnique: jest.fn().mockResolvedValue(row) },
-    $transaction: jest.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
+    withClube: jest.fn((_clubeId: string, cb: (t: typeof tx) => unknown) =>
+      cb(tx),
+    ),
   };
   const service = new TournamentClockService(
     prisma as unknown as PrismaService,
@@ -101,7 +104,7 @@ describe('TournamentClockService', () => {
 
   it('lança 404 quando o torneio não existe', async () => {
     const { service } = buildService(null);
-    await expect(service.start('trn-1')).rejects.toBeInstanceOf(
+    await expect(service.start(CLUBE_ID, 'trn-1')).rejects.toBeInstanceOf(
       NotFoundException,
     );
   });
@@ -159,7 +162,7 @@ describe('TournamentClockService', () => {
     it('NOT_STARTED → RUNNING no nível 1, terminando em now + duração', async () => {
       const { service, tx } = buildService(tournamentRow({}));
 
-      const dto = await service.start('trn-1');
+      const dto = await service.start(CLUBE_ID, 'trn-1');
 
       const { where, data } = writtenClock(tx);
       expect(where).toEqual({ id: 'trn-1', version: 7 });
@@ -185,7 +188,7 @@ describe('TournamentClockService', () => {
         const { service, tx } = buildService(
           tournamentRow({ clockStatus, currentLevelNumber: 1 }),
         );
-        await expect(service.start('trn-1')).rejects.toBeInstanceOf(
+        await expect(service.start(CLUBE_ID, 'trn-1')).rejects.toBeInstanceOf(
           BadRequestException,
         );
         expect(tx.tournament.updateMany).not.toHaveBeenCalled();
@@ -194,7 +197,7 @@ describe('TournamentClockService', () => {
 
     it('recusa start em torneio sem grade de blinds', async () => {
       const { service } = buildService(tournamentRow({}, []));
-      await expect(service.start('trn-1')).rejects.toThrow(
+      await expect(service.start(CLUBE_ID, 'trn-1')).rejects.toThrow(
         /sem estrutura de blinds/,
       );
     });
@@ -211,7 +214,7 @@ describe('TournamentClockService', () => {
       );
 
       jest.advanceTimersByTime(5 * MINUTE);
-      const dto = await service.pause('trn-1');
+      const dto = await service.pause(CLUBE_ID, 'trn-1');
 
       const { data } = writtenClock(tx);
       expect(data.clockStatus).toBe('PAUSED');
@@ -231,7 +234,7 @@ describe('TournamentClockService', () => {
       );
 
       jest.advanceTimersByTime(35 * MINUTE);
-      await service.pause('trn-1');
+      await service.pause(CLUBE_ID, 'trn-1');
 
       expect(writtenClock(tx).data.clockRemainingMs).toBe(0);
     });
@@ -243,7 +246,7 @@ describe('TournamentClockService', () => {
         tournamentRow({ clockStatus: 'RUNNING', currentLevelNumber: 1 }),
       );
 
-      const dto = await service.pause('trn-1');
+      const dto = await service.pause(CLUBE_ID, 'trn-1');
 
       expect(writtenClock(tx).data.clockRemainingMs).toBe(0);
       expect(dto.remainingMs).toBe(0);
@@ -259,7 +262,7 @@ describe('TournamentClockService', () => {
             clockRemainingMs: clockStatus === 'PAUSED' ? 1000 : null,
           }),
         );
-        await expect(service.pause('trn-1')).rejects.toBeInstanceOf(
+        await expect(service.pause(CLUBE_ID, 'trn-1')).rejects.toBeInstanceOf(
           BadRequestException,
         );
       },
@@ -278,7 +281,7 @@ describe('TournamentClockService', () => {
 
       // Uma hora parado não consome nada do nível.
       jest.advanceTimersByTime(60 * MINUTE);
-      const dto = await service.resume('trn-1');
+      const dto = await service.resume(CLUBE_ID, 'trn-1');
 
       const resumedAt = new Date(NOW.getTime() + 60 * MINUTE);
       const { data } = writtenClock(tx);
@@ -301,7 +304,7 @@ describe('TournamentClockService', () => {
             levelEndsAt: clockStatus === 'RUNNING' ? NOW : null,
           }),
         );
-        await expect(service.resume('trn-1')).rejects.toBeInstanceOf(
+        await expect(service.resume(CLUBE_ID, 'trn-1')).rejects.toBeInstanceOf(
           BadRequestException,
         );
       },
@@ -319,7 +322,7 @@ describe('TournamentClockService', () => {
       );
 
       jest.advanceTimersByTime(3 * MINUTE);
-      const dto = await service.next('trn-1');
+      const dto = await service.next(CLUBE_ID, 'trn-1');
 
       const { data } = writtenClock(tx);
       expect(data.clockStatus).toBe('RUNNING');
@@ -341,7 +344,7 @@ describe('TournamentClockService', () => {
         }),
       );
 
-      const dto = await service.next('trn-1');
+      const dto = await service.next(CLUBE_ID, 'trn-1');
 
       const { data } = writtenClock(tx);
       expect(data.clockStatus).toBe('PAUSED');
@@ -361,7 +364,7 @@ describe('TournamentClockService', () => {
         }),
       );
 
-      const dto = await service.next('trn-1');
+      const dto = await service.next(CLUBE_ID, 'trn-1');
 
       const { data } = writtenClock(tx);
       expect(data.clockStatus).toBe('FINISHED');
@@ -382,7 +385,7 @@ describe('TournamentClockService', () => {
         }),
       );
 
-      await service.previous('trn-1');
+      await service.previous(CLUBE_ID, 'trn-1');
 
       const { data } = writtenClock(tx);
       expect(data.currentLevelNumber).toBe(1);
@@ -397,7 +400,7 @@ describe('TournamentClockService', () => {
           levelEndsAt: NOW,
         }),
       );
-      await expect(service.previous('trn-1')).rejects.toThrow(
+      await expect(service.previous(CLUBE_ID, 'trn-1')).rejects.toThrow(
         /já está no primeiro nível/,
       );
     });
@@ -408,12 +411,12 @@ describe('TournamentClockService', () => {
         const { service } = buildService(
           tournamentRow({ clockStatus, currentLevelNumber: 2 }),
         );
-        await expect(service.next('trn-1')).rejects.toBeInstanceOf(
+        await expect(service.next(CLUBE_ID, 'trn-1')).rejects.toBeInstanceOf(
           BadRequestException,
         );
-        await expect(service.previous('trn-1')).rejects.toBeInstanceOf(
-          BadRequestException,
-        );
+        await expect(
+          service.previous(CLUBE_ID, 'trn-1'),
+        ).rejects.toBeInstanceOf(BadRequestException);
       },
     );
 
@@ -425,7 +428,7 @@ describe('TournamentClockService', () => {
           levelEndsAt: NOW,
         }),
       );
-      await expect(service.next('trn-1')).rejects.toThrow(
+      await expect(service.next(CLUBE_ID, 'trn-1')).rejects.toThrow(
         /Nível corrente não existe/,
       );
     });
@@ -437,12 +440,12 @@ describe('TournamentClockService', () => {
         tournamentRow({ clockStatus: 'NOT_STARTED' }),
       );
 
-      const dto = await service.updateLevel('trn-1', 2, {
+      const dto = await service.updateLevel(CLUBE_ID, 'trn-1', 2, {
         bigBlind: 200,
         smallBlind: 100,
       });
 
-      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.withClube).toHaveBeenCalledTimes(1);
       expect(tx.tournamentBlindLevel.update).toHaveBeenCalledWith({
         where: { id: 'lvl-2' },
         data: {
@@ -481,7 +484,7 @@ describe('TournamentClockService', () => {
       );
 
       jest.advanceTimersByTime(18 * MINUTE); // faltam 2 min
-      const dto = await service.updateLevel('trn-1', 1, {
+      const dto = await service.updateLevel(CLUBE_ID, 'trn-1', 1, {
         durationSeconds: 1500, // 20 min → 25 min, delta +5 min
       });
 
@@ -503,7 +506,7 @@ describe('TournamentClockService', () => {
       );
 
       jest.advanceTimersByTime(18 * MINUTE);
-      const dto = await service.updateLevel('trn-1', 1, {
+      const dto = await service.updateLevel(CLUBE_ID, 'trn-1', 1, {
         durationSeconds: 600, // 20 min → 10 min, delta -10 min
       });
 
@@ -522,7 +525,7 @@ describe('TournamentClockService', () => {
         }),
       );
 
-      const dto = await service.updateLevel('trn-1', 2, {
+      const dto = await service.updateLevel(CLUBE_ID, 'trn-1', 2, {
         durationSeconds: 1080, // 15 min → 18 min, delta +3 min
       });
 
@@ -541,7 +544,7 @@ describe('TournamentClockService', () => {
         }),
       );
 
-      await service.updateLevel('trn-1', 2, { durationSeconds: 300 }); // -10 min
+      await service.updateLevel(CLUBE_ID, 'trn-1', 2, { durationSeconds: 300 }); // -10 min
 
       expect(writtenClock(tx).data.clockRemainingMs).toBe(0);
     });
@@ -556,7 +559,7 @@ describe('TournamentClockService', () => {
         }),
       );
 
-      await service.updateLevel('trn-1', 3, { durationSeconds: 60 });
+      await service.updateLevel(CLUBE_ID, 'trn-1', 3, { durationSeconds: 60 });
 
       const { data } = writtenClock(tx);
       expect(data.currentLevelNumber).toBe(1);
@@ -574,7 +577,7 @@ describe('TournamentClockService', () => {
         }),
       );
 
-      await service.updateLevel('trn-1', 1, { ante: 25 });
+      await service.updateLevel(CLUBE_ID, 'trn-1', 1, { ante: 25 });
 
       expect(writtenClock(tx).data.levelEndsAt).toEqual(endsAt);
       expect(tx.tournamentBlindLevel.update).toHaveBeenCalledWith(
@@ -589,7 +592,9 @@ describe('TournamentClockService', () => {
         tournamentRow({ clockStatus: 'FINISHED', currentLevelNumber: 3 }),
       );
 
-      await service.updateLevel('trn-1', 3, { durationSeconds: 3600 });
+      await service.updateLevel(CLUBE_ID, 'trn-1', 3, {
+        durationSeconds: 3600,
+      });
 
       const { data } = writtenClock(tx);
       expect(data.clockStatus).toBe('FINISHED');
@@ -600,14 +605,14 @@ describe('TournamentClockService', () => {
     it('lança 404 para nível fora da grade', async () => {
       const { service } = buildService(tournamentRow({}));
       await expect(
-        service.updateLevel('trn-1', 99, { ante: 10 }),
+        service.updateLevel(CLUBE_ID, 'trn-1', 99, { ante: 10 }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('rejeita bigBlind menor que o smallBlind já gravado', async () => {
       const { service, tx } = buildService(tournamentRow({}));
       await expect(
-        service.updateLevel('trn-1', 2, { bigBlind: 40 }), // smallBlind gravado = 50
+        service.updateLevel(CLUBE_ID, 'trn-1', 2, { bigBlind: 40 }), // smallBlind gravado = 50
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(tx.tournamentBlindLevel.update).not.toHaveBeenCalled();
     });
@@ -626,7 +631,7 @@ describe('TournamentClockService', () => {
         .mockResolvedValueOnce({ count: 0 })
         .mockResolvedValueOnce({ count: 1 });
 
-      await service.pause('trn-1');
+      await service.pause(CLUBE_ID, 'trn-1');
 
       expect(prisma.tournament.findUnique).toHaveBeenCalledTimes(2);
       expect(tx.tournament.updateMany).toHaveBeenCalledTimes(2);
@@ -635,9 +640,9 @@ describe('TournamentClockService', () => {
     it('propaga erro de banco em vez de tratá-lo como conflito de version', async () => {
       const { service, prisma } = buildService(tournamentRow({}));
       const boom = new Error('conexão caiu');
-      prisma.$transaction.mockImplementation(() => Promise.reject(boom));
+      prisma.withClube.mockImplementation(() => Promise.reject(boom));
 
-      await expect(service.start('trn-1')).rejects.toBe(boom);
+      await expect(service.start(CLUBE_ID, 'trn-1')).rejects.toBe(boom);
       expect(prisma.tournament.findUnique).toHaveBeenCalledTimes(1);
     });
 
@@ -645,7 +650,7 @@ describe('TournamentClockService', () => {
       const { service, prisma, tx } = buildService(tournamentRow({}));
       tx.tournament.updateMany.mockResolvedValue({ count: 0 });
 
-      await expect(service.start('trn-1')).rejects.toBeInstanceOf(
+      await expect(service.start(CLUBE_ID, 'trn-1')).rejects.toBeInstanceOf(
         ConflictException,
       );
       expect(prisma.tournament.findUnique).toHaveBeenCalledTimes(3);
@@ -659,24 +664,24 @@ describe('TournamentClockService', () => {
     const build = () => buildService(row);
 
     const started = build();
-    await started.service.start('trn-1');
+    await started.service.start(CLUBE_ID, 'trn-1');
     row = tournamentRow(writtenClock(started.tx).data);
 
     jest.advanceTimersByTime(12 * MINUTE); // faltam 8 min
     const paused = build();
-    const pausedDto = await paused.service.pause('trn-1');
+    const pausedDto = await paused.service.pause(CLUBE_ID, 'trn-1');
     expect(pausedDto.remainingMs).toBe(8 * MINUTE);
     row = tournamentRow(writtenClock(paused.tx).data);
 
     jest.advanceTimersByTime(30 * MINUTE); // intervalo longo, relógio parado
     const resumed = build();
-    const resumedDto = await resumed.service.resume('trn-1');
+    const resumedDto = await resumed.service.resume(CLUBE_ID, 'trn-1');
     expect(resumedDto.remainingMs).toBe(8 * MINUTE);
     row = tournamentRow(writtenClock(resumed.tx).data);
 
     jest.advanceTimersByTime(8 * MINUTE); // nível 1 esgotado
     const advanced = build();
-    const nextDto = await advanced.service.next('trn-1');
+    const nextDto = await advanced.service.next(CLUBE_ID, 'trn-1');
     expect(nextDto.currentLevel?.levelNumber).toBe(2);
     expect(nextDto.remainingMs).toBe(15 * MINUTE);
   });
