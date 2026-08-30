@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import type { PasswordHasherService } from '../common/crypto/password-hasher.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import { ClubService } from './club.service';
 
@@ -25,6 +26,11 @@ const MEMBERSHIP = {
 };
 
 function buildService() {
+  const tx = {
+    user: { create: jest.fn() },
+    clubeMembership: { create: jest.fn() },
+    wallet: { create: jest.fn() },
+  };
   const prisma = {
     clubeMembership: {
       findMany: jest.fn(),
@@ -32,9 +38,16 @@ function buildService() {
       upsert: jest.fn(),
     },
     user: { findUnique: jest.fn() },
+    // `createMemberWithNewUser` abre a transação por aqui — o mock aceita e
+    // roda o callback contra o MESMO `tx` acima, igual `withClube` alhures.
+    $transaction: jest.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
   };
-  const service = new ClubService(prisma as unknown as PrismaService);
-  return { service, prisma };
+  const passwordHasher = { hash: jest.fn().mockResolvedValue('hash-fake') };
+  const service = new ClubService(
+    prisma as unknown as PrismaService,
+    passwordHasher as unknown as PasswordHasherService,
+  );
+  return { service, prisma, tx, passwordHasher };
 }
 
 describe('ClubService', () => {
@@ -253,6 +266,143 @@ describe('ClubService', () => {
         }),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(prisma.clubeMembership.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejeita quando manda userId E email/name ao mesmo tempo', async () => {
+      const { service, prisma } = buildService();
+      asAdmin(prisma);
+
+      await expect(
+        service.upsertMember('user-1', CLUBE.id, {
+          userId: 'user-2',
+          email: 'novo@casa.dev',
+          name: 'Novo',
+          role: 'PLAYER',
+        } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.clubeMembership.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejeita quando não manda nem userId nem email/name', async () => {
+      const { service, prisma } = buildService();
+      asAdmin(prisma);
+
+      await expect(
+        service.upsertMember('user-1', CLUBE.id, { role: 'PLAYER' } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejeita email sem name (cadastro incompleto)', async () => {
+      const { service, prisma } = buildService();
+      asAdmin(prisma);
+
+      await expect(
+        service.upsertMember('user-1', CLUBE.id, {
+          email: 'novo@casa.dev',
+          role: 'PLAYER',
+        } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    describe('cadastro de usuário novo (email + name, sem userId)', () => {
+      it('cria conta + vínculo + carteira numa transação, e devolve temporaryPassword', async () => {
+        const { service, prisma, tx, passwordHasher } = buildService();
+        asAdmin(prisma);
+        tx.user.create.mockResolvedValue({
+          id: 'user-novo',
+          name: 'Jogador Novo',
+          email: 'jogador@casa.dev',
+        });
+        tx.clubeMembership.create.mockResolvedValue({
+          ...MEMBERSHIP,
+          id: 'mem-novo',
+          userId: 'user-novo',
+          role: 'PLAYER',
+        });
+
+        const result = await service.upsertMember('user-1', CLUBE.id, {
+          email: '  Jogador@Casa.dev  ',
+          name: 'Jogador Novo',
+          role: 'PLAYER',
+        } as never);
+
+        // E-mail normalizado (trim + lowercase) antes de gravar.
+        expect(tx.user.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            email: 'jogador@casa.dev',
+            name: 'Jogador Novo',
+            passwordHash: 'hash-fake',
+          }),
+        });
+        expect(passwordHasher.hash).toHaveBeenCalledWith(
+          expect.stringMatching(/^[\w-]{10,}$/) as unknown,
+        );
+        expect(tx.clubeMembership.create).toHaveBeenCalledWith({
+          data: {
+            clubeId: CLUBE.id,
+            userId: 'user-novo',
+            role: 'PLAYER',
+            status: 'ACTIVE',
+          },
+        });
+        expect(tx.wallet.create).toHaveBeenCalledWith({
+          data: { userId: 'user-novo', clubeId: CLUBE.id },
+        });
+        expect(result).toMatchObject({
+          userId: 'user-novo',
+          name: 'Jogador Novo',
+          email: 'jogador@casa.dev',
+        });
+        expect(typeof result.temporaryPassword).toBe('string');
+        expect(result.temporaryPassword!.length).toBeGreaterThanOrEqual(10);
+      });
+
+      it('mapeia e-mail já cadastrado para 409, sem vazar detalhe do banco', async () => {
+        const { service, prisma, tx } = buildService();
+        asAdmin(prisma);
+        const { Prisma } = jest.requireActual('@prisma/client');
+        tx.user.create.mockRejectedValue(
+          new Prisma.PrismaClientKnownRequestError('duplicate', {
+            code: 'P2002',
+            clientVersion: '6.19.3',
+            meta: { target: ['email'] },
+          }),
+        );
+
+        await expect(
+          service.upsertMember('user-1', CLUBE.id, {
+            email: 'ja-existe@casa.dev',
+            name: 'Duplicado',
+            role: 'PLAYER',
+          } as never),
+        ).rejects.toThrow('E-mail já cadastrado.');
+      });
+
+      it('não passa pela trava anti-lockout (dto.userId indefinido nunca é o admin)', async () => {
+        const { service, prisma, tx } = buildService();
+        asAdmin(prisma);
+        tx.user.create.mockResolvedValue({
+          id: 'user-novo',
+          name: 'X',
+          email: 'x@casa.dev',
+        });
+        tx.clubeMembership.create.mockResolvedValue({
+          ...MEMBERSHIP,
+          userId: 'user-novo',
+          role: 'PLAYER',
+        });
+
+        // `status: 'REVOKED'` seria bloqueado pela trava SE fosse o próprio
+        // admin (dto.userId === userId) — aqui não é, então passa.
+        await expect(
+          service.upsertMember('user-1', CLUBE.id, {
+            email: 'x@casa.dev',
+            name: 'X',
+            role: 'PLAYER',
+            status: 'REVOKED',
+          } as never),
+        ).resolves.toBeDefined();
+      });
     });
   });
 });

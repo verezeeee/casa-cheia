@@ -11,9 +11,27 @@ import type {
   ClubeStatus as SharedClubeStatus,
   ClubeSummaryDto,
 } from '@poker-system/shared';
-import type { Clube, ClubeMembership } from '@prisma/client';
+import type {
+  Clube,
+  ClubeMembership,
+  ClubeMembershipStatus,
+} from '@prisma/client';
+import { randomBytes } from 'node:crypto';
+import { mapUniqueConstraintError, normalizeEmail } from '../auth/auth.service';
+import { PasswordHasherService } from '../common/crypto/password-hasher.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { UpsertClubeMembershipDto } from './dto/upsert-clube-membership.dto';
+
+/**
+ * Senha temporária de um usuário CADASTRADO PELO ADMIN (sem autocadastro):
+ * 9 bytes aleatórios em base64url — 12 caracteres, cumpre o `@MinLength(8)`
+ * que `RegisterDto`/login também exigem. Só existe em memória até o hash;
+ * devolvida ao admin UMA VEZ na resposta (`ClubeMembershipDto.temporaryPassword`),
+ * nunca persistida em claro nem recuperável depois.
+ */
+function generateTemporaryPassword(): string {
+  return randomBytes(9).toString('base64url');
+}
 
 /** Mesmos literais em Prisma e @poker-system/shared (ver base.prisma). */
 function toClubeSummary(
@@ -43,7 +61,10 @@ function toMembershipDto(
 
 @Injectable()
 export class ClubService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly passwordHasher: PasswordHasherService,
+  ) {}
 
   /**
    * ATENÇÃO — esta é a ÚNICA consulta legitimamente cross-clube da aplicação.
@@ -111,6 +132,12 @@ export class ClubService {
     return memberships.map(toMembershipDto);
   }
 
+  /**
+   * Dois modos, mutuamente exclusivos (ver docblock de
+   * `UpsertClubeMembershipDto`): `userId` vincula alguém que já tem conta;
+   * `email`+`name` CADASTRA um usuário novo — o admin registrando alguém que
+   * nunca se autocadastrou (não há convite por e-mail nesta fase, ADR-0003).
+   */
   async upsertMember(
     userId: string,
     clubeId: string,
@@ -119,10 +146,24 @@ export class ClubService {
     await this.requireAdmin(userId, clubeId);
 
     const status = dto.status ?? 'ACTIVE';
+    const isNewUser = dto.userId === undefined;
+
+    if (isNewUser && (!dto.email || !dto.name)) {
+      throw new BadRequestException(
+        'Informe userId (usuário existente) OU email + name (cadastrar um usuário novo).',
+      );
+    }
+    if (!isNewUser && (dto.email !== undefined || dto.name !== undefined)) {
+      throw new BadRequestException(
+        'userId e email/name são exclusivos — escolha vincular um usuário existente OU cadastrar um novo.',
+      );
+    }
 
     // Trava anti-lockout: sem ela, o único admin do clube consegue se
     // rebaixar/revogar e ninguém mais consegue administrar o clube — a
-    // recuperação exigiria acesso direto ao banco (não há super-admin, ADR-0001).
+    // recuperação exigiria acesso direto ao banco (não há super-admin,
+    // ADR-0001). Inerte no cadastro de usuário novo: `dto.userId` nunca bate
+    // com o próprio admin quando está indefinido.
     if (
       dto.userId === userId &&
       (dto.role !== 'ADMIN' || status !== 'ACTIVE')
@@ -132,6 +173,10 @@ export class ClubService {
       );
     }
 
+    if (isNewUser) {
+      return this.createMemberWithNewUser(clubeId, dto, status);
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: dto.userId },
       select: { name: true, email: true },
@@ -139,12 +184,54 @@ export class ClubService {
     if (!user) throw new NotFoundException('Usuário não encontrado.');
 
     const membership = await this.prisma.clubeMembership.upsert({
-      where: { clubeId_userId: { clubeId, userId: dto.userId } },
-      create: { clubeId, userId: dto.userId, role: dto.role, status },
+      where: { clubeId_userId: { clubeId, userId: dto.userId! } },
+      create: { clubeId, userId: dto.userId!, role: dto.role, status },
       update: { role: dto.role, status },
     });
 
     return toMembershipDto({ ...membership, user });
+  }
+
+  /**
+   * Cria a CONTA, o VÍNCULO e a CARTEIRA numa transação só — fecha o TODO de
+   * `AuthService.register` ("criar a carteira ao aceitar/registrar a
+   * ClubeMembership"). Senha gerada pelo servidor (`generateTemporaryPassword`),
+   * devolvida ao admin uma única vez em `temporaryPassword` — nunca persistida
+   * em claro nem recuperável depois; quem cadastrou precisa repassá-la ao
+   * jogador (ex.: no balcão) antes de fechar a tela.
+   */
+  private async createMemberWithNewUser(
+    clubeId: string,
+    dto: UpsertClubeMembershipDto,
+    status: ClubeMembershipStatus,
+  ): Promise<ClubeMembershipDto> {
+    const email = normalizeEmail(dto.email!);
+    const temporaryPassword = generateTemporaryPassword();
+    const passwordHash = await this.passwordHasher.hash(temporaryPassword);
+
+    try {
+      const { membership, user } = await this.prisma.$transaction(
+        async (tx) => {
+          const user = await tx.user.create({
+            data: { email, passwordHash, name: dto.name! },
+          });
+          const membership = await tx.clubeMembership.create({
+            data: { clubeId, userId: user.id, role: dto.role, status },
+          });
+          // Carteira do (usuário, clube) — nasce junto, como qualquer outro
+          // ingresso ao clube (ver nota em `wallet.e2e-spec.ts`).
+          await tx.wallet.create({ data: { userId: user.id, clubeId } });
+          return { membership, user };
+        },
+      );
+
+      return {
+        ...toMembershipDto({ ...membership, user }),
+        temporaryPassword,
+      };
+    } catch (error) {
+      throw mapUniqueConstraintError(error);
+    }
   }
 
   /**

@@ -220,7 +220,8 @@ export class AuthService {
   }
 }
 
-function normalizeEmail(email: string): string {
+/** Exportada: `ClubService.createMemberWithNewUser` reaproveita (mesma regra de normalização, um cadastro é um cadastro). */
+export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
@@ -232,7 +233,8 @@ function toSessionUser(user: User): SessionUser {
   };
 }
 
-function mapUniqueConstraintError(error: unknown): Error {
+/** Exportada: `ClubService.createMemberWithNewUser` reaproveita (mesmo P2002 de `users.email`). */
+export function mapUniqueConstraintError(error: unknown): Error {
   if (
     error instanceof Prisma.PrismaClientKnownRequestError &&
     error.code === 'P2002'

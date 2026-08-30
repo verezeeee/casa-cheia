@@ -39,6 +39,12 @@ describe('Clubes (e2e)', () => {
   });
 
   afterAll(async () => {
+    // `wallet` antes de `clubeMembership`/`clube` (FK Restrict) — só existe
+    // porque o cadastro de usuário novo (`POST .../membros` sem `userId`)
+    // cria carteira junto do vínculo.
+    await prismaDirect.wallet.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
     await prismaDirect.clubeMembership.deleteMany({
       where: { clubeId: { in: createdClubeIds } },
     });
@@ -191,6 +197,72 @@ describe('Clubes (e2e)', () => {
         role: 'TOURNAMENT_DIRECTOR',
       }),
     );
+  });
+
+  it('admin cadastra um usuário novo (email+name, sem userId): senha temporária loga de verdade, carteira nasce junto', async () => {
+    const admin = await registerAndLogin();
+    const clubeId = await createClube('Clube Cadastro Direto');
+    await addMember(clubeId, admin.userId, 'ADMIN');
+
+    const email = `${randomUUID()}@club-e2e.test`;
+    const criado = await request(app.getHttpServer())
+      .post(`/api/clubes/${clubeId}/membros`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({ email, name: 'Cadastrado no Balcão', role: 'PLAYER' })
+      .expect(201);
+
+    expect(criado.body).toMatchObject({
+      name: 'Cadastrado no Balcão',
+      email,
+      role: 'PLAYER',
+      status: 'ACTIVE',
+    });
+    const temporaryPassword = criado.body.temporaryPassword as string;
+    expect(typeof temporaryPassword).toBe('string');
+    expect(temporaryPassword.length).toBeGreaterThanOrEqual(10);
+    const newUserId = criado.body.userId as string;
+
+    // A senha devolvida É a senha real — login funciona de ponta a ponta.
+    const loginRes = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ email, password: temporaryPassword })
+      .expect(200);
+    const newUserToken = loginRes.body.accessToken as string;
+
+    // Carteira nasceu junto (fecha o TODO de `AuthService.register`).
+    const balanceRes = await get(
+      `clubes/${clubeId}/carteira/balance`,
+      newUserToken,
+    ).expect(200);
+    expect(balanceRes.body.balance).toBe('0.00');
+
+    // Aparece na listagem de membros do admin.
+    const membros = await get(
+      `clubes/${clubeId}/membros`,
+      admin.accessToken,
+    ).expect(200);
+    expect(membros.body).toContainEqual(
+      expect.objectContaining({ userId: newUserId, email, role: 'PLAYER' }),
+    );
+
+    // E-mail já cadastrado (o mesmo de novo) responde 409, não 500.
+    await request(app.getHttpServer())
+      .post(`/api/clubes/${clubeId}/membros`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({ email, name: 'Duplicado', role: 'PLAYER' })
+      .expect(409);
+
+    // userId e email/name juntos: 400, não ambiguidade silenciosa.
+    await request(app.getHttpServer())
+      .post(`/api/clubes/${clubeId}/membros`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        userId: newUserId,
+        email: 'outro@club-e2e.test',
+        name: 'X',
+        role: 'PLAYER',
+      })
+      .expect(400);
   });
 
   it('quem não é membro recebe 404 (não 403) ao tentar administrar membros', async () => {

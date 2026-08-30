@@ -6,7 +6,7 @@
  * ...). Duplicá-los aqui abriria espaço para divergência silenciosa entre as
  * duas pontas.
  */
-import type { BlindLevelDto } from '@poker-system/shared';
+import type { BlindLevelDto, ClubeMembershipStatus, ClubeRole } from '@poker-system/shared';
 
 /** Corpo de `POST /auth/register`. */
 export interface RegisterRequest {
@@ -149,3 +149,17 @@ export interface UpdateBlindLevelRequest {
   ante?: number;
   durationSeconds?: number;
 }
+
+/**
+ * Corpo de `POST /clubes/:clubeId/membros` (ADMIN). Dois modos, mutuamente
+ * exclusivos — o backend rejeita os dois juntos ou nenhum:
+ * - `{ userId }`: vincula alguém que já tem conta.
+ * - `{ email, name }`: CADASTRA um usuário novo (sem convite por e-mail —
+ *   a senha é gerada pelo servidor e volta em `ClubeMembershipDto.temporaryPassword`).
+ */
+export type UpsertMemberRequest = {
+  role: ClubeRole;
+  status?: ClubeMembershipStatus;
+} & (
+  { userId: string; email?: never; name?: never } | { userId?: never; email: string; name: string }
+);

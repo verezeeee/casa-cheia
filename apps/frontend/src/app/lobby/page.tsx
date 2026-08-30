@@ -7,6 +7,7 @@ import { useSession } from '@/components/providers/session-provider';
 import { CreateTableForm } from '@/components/table/create-table-form';
 import { TableList } from '@/components/table/table-list';
 import { tableApi } from '@/lib/api/table';
+import { TextLink } from '@/components/ui';
 
 /**
  * Resume o estado geral das mesas acima da lista — texto solto com
@@ -52,8 +53,9 @@ function LobbyContent() {
           flex-col) impede que o botão "+ Criar mesa" (fechado) estique para
           a largura inteira por herdar `align-items: stretch` do <main>. */}
       {clubeRole === ClubeRole.ADMIN && (
-        <div>
+        <div className="flex flex-col gap-2">
           <CreateTableForm />
+          <TextLink href="/membros">Gerenciar membros</TextLink>
         </div>
       )}
       <TableList />

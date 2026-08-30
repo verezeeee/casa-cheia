@@ -22,4 +22,13 @@ export interface ClubeMembershipDto {
 
   /** ISO-8601. */
   createdAt: string;
+
+  /**
+   * Senha temporária gerada pelo servidor — SÓ presente na resposta de
+   * `POST .../membros` quando o admin CADASTROU um usuário novo (não veio
+   * `userId`, veio `email`+`name`). Nunca persistida em claro, nunca
+   * recuperável depois desta resposta: quem cadastrou precisa repassá-la ao
+   * jogador (ex.: no balcão) antes de sair da tela.
+   */
+  temporaryPassword?: string;
 }
