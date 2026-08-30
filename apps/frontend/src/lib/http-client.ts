@@ -73,6 +73,13 @@ async function request<TResponse>(
   try {
     const response = await fetch(`${getApiUrl()}${path}`, {
       ...rest,
+      // O backend manda o refresh token num cookie httpOnly (`auth.controller.ts`)
+      // e já habilita `credentials: true` no CORS especificamente por causa
+      // disso — sem `include` aqui, o browser nunca leva o cookie numa
+      // requisição cross-origin (front em :3000, backend em :3001), então
+      // `POST /auth/refresh` fica sempre sem cookie e a sessão nunca sobrevive
+      // a um reload.
+      credentials: 'include',
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
