@@ -19,7 +19,7 @@ describe('BottomNav', () => {
 
     expect(screen.getByRole('link', { name: /Mesas/ })).toHaveAttribute('href', '/lobby');
     expect(screen.getByRole('link', { name: /Torneios/ })).toHaveAttribute('href', '/tournaments');
-    expect(screen.getByRole('link', { name: /Carteira/ })).toHaveAttribute('href', '/wallet');
+    expect(screen.getByRole('link', { name: /Entradas/ })).toHaveAttribute('href', '/entradas');
   });
 
   it('marca "Mesas" como ativa em /lobby e em /tables/:id', () => {
@@ -37,10 +37,10 @@ describe('BottomNav', () => {
     expect(screen.getByRole('link', { name: /Torneios/ })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('marca "Carteira" como ativa em /wallet', () => {
-    mockedUsePathname.mockReturnValue('/wallet');
+  it('marca "Entradas" como ativa em /entradas', () => {
+    mockedUsePathname.mockReturnValue('/entradas');
     render(<BottomNav />);
 
-    expect(screen.getByRole('link', { name: /Carteira/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: /Entradas/ })).toHaveAttribute('aria-current', 'page');
   });
 });

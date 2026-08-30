@@ -1,4 +1,4 @@
-import { PokerChip, Trophy, Wallet } from '@phosphor-icons/react';
+import { ClockCounterClockwise, PokerChip, Trophy } from '@phosphor-icons/react';
 
 /**
  * Abas de navegação primária — compartilhadas entre `BottomNav` (mobile,
@@ -7,7 +7,12 @@ import { PokerChip, Trophy, Wallet } from '@phosphor-icons/react';
 export const NAV_TABS = [
   { href: '/lobby', matches: ['/lobby', '/tables'], label: 'Mesas', Icon: PokerChip },
   { href: '/tournaments', matches: ['/tournaments'], label: 'Torneios', Icon: Trophy },
-  { href: '/wallet', matches: ['/wallet'], label: 'Carteira', Icon: Wallet },
+  {
+    href: '/entradas',
+    matches: ['/entradas'],
+    label: 'Entradas',
+    Icon: ClockCounterClockwise,
+  },
 ] as const;
 
 export function isNavTabActive(pathname: string, matches: readonly string[]): boolean {

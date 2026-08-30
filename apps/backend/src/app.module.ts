@@ -17,6 +17,7 @@ import {
   walletConfig,
 } from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
+import { EntriesModule } from './entries/entries.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TableModule } from './table/table.module';
@@ -67,6 +68,7 @@ import { WalletModule } from './wallet/wallet.module';
     WalletModule,
     TableModule,
     TournamentModule,
+    EntriesModule,
   ],
   controllers: [AppController],
   providers: [

@@ -58,3 +58,6 @@ export * from './enums/clube-onboarding-status.enum';
 // Contratos de leitura de clube e de membros (CL-BE-02).
 export * from './interfaces/clube-summary.dto';
 export * from './interfaces/clube-membership.dto';
+
+// Histórico unificado de entradas (torneio + mesa) — ver `EntriesService`.
+export * from './interfaces/entry-history-item.dto';
