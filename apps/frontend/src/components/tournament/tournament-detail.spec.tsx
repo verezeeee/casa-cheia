@@ -142,6 +142,27 @@ describe('TournamentDetail', () => {
     expect(screen.queryByText('Inscrever-se')).not.toBeInTheDocument();
   });
 
+  // Bug relatado: inscrição REFUNDED continuava mostrando "Você está
+  // inscrito" e escondendo o botão de se inscrever de novo.
+  it('trata inscrição REFUNDED como cancelada — não mostra "inscrito" e libera se inscrever de novo', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'other', email: 'other@x.dev', name: 'Outro' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      entries: [{ ...TOURNAMENT.entries[0], status: 'REFUNDED' as const }],
+    });
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Inscrever-se')).toBeInTheDocument());
+
+    expect(screen.queryByText('Você está inscrito neste torneio.')).not.toBeInTheDocument();
+  });
+
   it('permite cancelar a própria inscrição antes do torneio começar', async () => {
     mockedUseSession.mockReturnValue({
       clubeRole: ClubeRole.PLAYER,

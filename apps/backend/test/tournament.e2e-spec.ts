@@ -900,4 +900,93 @@ describe('Tournaments (e2e)', () => {
       .send({ name: 'Tarde demais' })
       .expect(400);
   });
+
+  // Bug relatado: cancelamento (REFUNDED) continuava contando em
+  // `registeredPlayers` e travando a edição, como se a inscrição seguisse
+  // valendo.
+  it('cancelamento (REFUNDED) não conta em registeredPlayers e libera edição de novo', async () => {
+    const admin = await registerAndLogin(app, { admin: true });
+    const playerA = await registerAndLogin(app);
+    const playerB = await registerAndLogin(app);
+    await Promise.all(
+      [playerA, playerB].map((p) => creditWallet(p.userId, '200.00')),
+    );
+
+    const createRes = await request(app.getHttpServer())
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        name: 'Cancela Tudo',
+        buyIn: '50.00',
+        fee: '5.00',
+        startingStack: 5000,
+        maxPlayers: 9,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        prizes: [{ position: 1, percentage: '100.00' }],
+      })
+      .expect(201);
+    const tournamentId = createRes.body.id as string;
+
+    for (const player of [playerA, playerB]) {
+      await request(app.getHttpServer())
+        .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
+        .set('Authorization', `Bearer ${player.accessToken}`)
+        .set('Idempotency-Key', randomUUID())
+        .expect(201);
+    }
+
+    const afterRegister = await request(app.getHttpServer())
+      .get(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .expect(200);
+    expect(afterRegister.body.registeredPlayers).toBe(2);
+
+    // Os dois cancelam.
+    for (const player of [playerA, playerB]) {
+      await request(app.getHttpServer())
+        .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/unregister`)
+        .set('Authorization', `Bearer ${player.accessToken}`)
+        .set('Idempotency-Key', randomUUID())
+        .expect(201);
+    }
+
+    // Contagem não inclui os cancelados — nem no detalhe, nem no lobby —
+    // mas eles continuam na lista de inscritos, como REFUNDED (trilha).
+    const afterCancel = await request(app.getHttpServer())
+      .get(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .expect(200);
+    expect(afterCancel.body.registeredPlayers).toBe(0);
+    expect(afterCancel.body.entries).toHaveLength(2);
+    expect(
+      afterCancel.body.entries.every(
+        (e: { status: string }) => e.status === 'REFUNDED',
+      ),
+    ).toBe(true);
+
+    const lobbyRes = await request(app.getHttpServer())
+      .get(`/api/clubes/${CLUBE_ID}/torneios`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .expect(200);
+    const lobbyEntry = lobbyRes.body.items.find(
+      (t: { id: string }) => t.id === tournamentId,
+    );
+    expect(lobbyEntry.registeredPlayers).toBe(0);
+
+    // Ninguém "de verdade" inscrito: a configuração volta a ser editável.
+    await request(app.getHttpServer())
+      .patch(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({ name: 'Reaberto pra edição' })
+      .expect(200);
+
+    // Saldos voltaram (buyIn+fee devolvidos a cada um).
+    for (const player of [playerA, playerB]) {
+      const balanceRes = await request(app.getHttpServer())
+        .get(`/api/clubes/${CLUBE_ID}/carteira/balance`)
+        .set('Authorization', `Bearer ${player.accessToken}`)
+        .expect(200);
+      expect(balanceRes.body.balance).toBe('200.00');
+    }
+  });
 });

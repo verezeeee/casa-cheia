@@ -155,12 +155,14 @@ export class TournamentService {
    * direto em REGISTERING (DRAFT não é usado de verdade, ver docblock de
    * `createTournament`) — "antes da 1ª inscrição" É o estágio de rascunho.
    *
-   * ATOMICIDADE SEM LOCK PESSIMISTA: o filtro `entries: { none: {} }` no
-   * WHERE do `updateMany` é o que protege contra uma inscrição concorrente
-   * entre a leitura abaixo e esta escrita — se alguém se inscrever nesse
-   * meio-tempo, a condição deixa de bater, `count` vem 0 e devolvemos 409.
-   * Mais barato que `lockTournament`: não há recurso em disputa a
-   * serializar, só uma corrida rara a detectar.
+   * ATOMICIDADE SEM LOCK PESSIMISTA: o filtro `entries: { none: { status: {
+   * not: 'REFUNDED' } } }` no WHERE do `updateMany` é o que protege contra
+   * uma inscrição concorrente entre a leitura abaixo e esta escrita — se
+   * alguém se inscrever nesse meio-tempo, a condição deixa de bater, `count`
+   * vem 0 e devolvemos 409. Mais barato que `lockTournament`: não há recurso
+   * em disputa a serializar, só uma corrida rara a detectar. Exclui REFUNDED
+   * de propósito: cancelamento não deve travar a edição (mesmo critério do
+   * `_count.entries` abaixo).
    */
   async updateTournament(
     clubeId: string,
@@ -171,7 +173,9 @@ export class TournamentService {
       where: { id: tournamentId, clubeId },
       include: {
         blindLevels: { orderBy: { levelNumber: 'asc' } },
-        _count: { select: { entries: true } },
+        _count: {
+          select: { entries: { where: { status: { not: 'REFUNDED' } } } },
+        },
       },
     });
     if (!tournament) throw new NotFoundException('Torneio não encontrado.');
@@ -232,7 +236,12 @@ export class TournamentService {
           id: tournamentId,
           clubeId,
           status: 'REGISTERING',
-          entries: { none: {} },
+          // `none` sobre não-REFUNDED: uma inscrição CANCELADA não deixa o
+          // torneio travado pra edição (mesmo critério do `_count.entries`
+          // logo acima e de `ALIVE_STATUSES`/`previousEntries` no resto do
+          // service) — sem isto, alguém que se inscreveu e cancelou impedia
+          // o admin de editar um torneio que, na prática, ninguém disputa.
+          entries: { none: { status: { not: 'REFUNDED' } } },
         },
         data: {
           name: dto.name,
@@ -279,7 +288,11 @@ export class TournamentService {
 
       return tx.tournament.findUniqueOrThrow({
         where: { id: tournamentId },
-        include: { _count: { select: { entries: true } } },
+        include: {
+          _count: {
+            select: { entries: { where: { status: { not: 'REFUNDED' } } } },
+          },
+        },
       });
     });
 
@@ -306,7 +319,11 @@ export class TournamentService {
             }
           : {}),
       },
-      include: { _count: { select: { entries: true } } },
+      include: {
+        _count: {
+          select: { entries: { where: { status: { not: 'REFUNDED' } } } },
+        },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: pageSize + 1,
     });
@@ -327,7 +344,11 @@ export class TournamentService {
   ): Promise<TournamentDetailResponse> {
     const tournament = await this.prisma.tournament.findUnique({
       where: { id, clubeId },
-      include: { _count: { select: { entries: true } } },
+      include: {
+        _count: {
+          select: { entries: { where: { status: { not: 'REFUNDED' } } } },
+        },
+      },
     });
     if (!tournament) throw new NotFoundException('Torneio não encontrado.');
 
@@ -992,6 +1013,30 @@ export class TournamentService {
     const remaining = entries.filter((e) =>
       (ALIVE_STATUSES as readonly string[]).includes(e.status),
     );
+
+    // Todo mundo cancelou antes do torneio rodar (torneio que não chegou a
+    // acontecer): sem campeão e sem prêmio a pagar — cada `unregisterEntry`
+    // já devolveu o buyIn ao `prizePool` (decrement), então não sobra
+    // dinheiro pra distribuir. Encerra direto, sem passar pelo cálculo de
+    // payout abaixo (que exigiria uma colocação que nunca vai existir).
+    //
+    // DIFERENTE de "todo mundo foi ELIMINATED sem sobrar campeão" (bug real —
+    // o último remanescente deveria ter sido inferido campeão, não
+    // eliminado): esse caso NÃO cai aqui (`every` exige só REFUNDED) e segue
+    // pro fluxo normal, que barra com "Nenhuma inscrição com
+    // finalPosition=1" em vez de fechar em silêncio um torneio com prêmio
+    // não pago.
+    if (entries.length > 0 && entries.every((e) => e.status === 'REFUNDED')) {
+      await this.prisma.withClube(clubeId, async (tx) => {
+        await lockTournament(tx, clubeId, tournamentId);
+        await tx.tournament.update({
+          where: { id: tournamentId },
+          data: { status: 'FINISHED', finishedAt: new Date() },
+        });
+      });
+      return this.getTournament(clubeId, tournamentId);
+    }
+
     let winnerId: string | null = null;
     if (remaining.length === 1) {
       winnerId = remaining[0].id;

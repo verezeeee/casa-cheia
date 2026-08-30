@@ -454,7 +454,7 @@ describe('TournamentService', () => {
             id: 'trn-1',
             clubeId: CLUBE_ID,
             status: 'REGISTERING',
-            entries: { none: {} },
+            entries: { none: { status: { not: 'REFUNDED' } } },
           }) as unknown,
           data: expect.objectContaining({
             name: 'Sunday Major (editado)',
@@ -1438,6 +1438,98 @@ describe('TournamentService', () => {
       await expect(
         service.finishTournament(CLUBE_ID, 'trn-1'),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    // Bug relatado: inscrições REFUNDED (cancelamento) eram contadas como
+    // "ainda ativas" por um filtro de exclusão que não conhecia esse status.
+    it('não conta inscrições REFUNDED como ativas ao decidir o campeão', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.tournament.findUnique.mockResolvedValueOnce(TOURNAMENT); // status check
+      prisma.tournamentPrize.findMany.mockResolvedValue([
+        { position: 1, percentage: new Prisma.Decimal('100.00') },
+      ]);
+      prisma.tournamentEntry.findMany
+        .mockResolvedValueOnce([
+          {
+            id: 'e1',
+            userId: 'u1',
+            status: 'PLAYING',
+            finalPosition: null,
+            payoutTransactionId: null,
+          },
+          {
+            id: 'e2',
+            userId: 'u2',
+            status: 'REFUNDED', // cancelou antes do torneio começar
+            finalPosition: null,
+            payoutTransactionId: null,
+          },
+        ])
+        .mockResolvedValueOnce([]); // dentro de getTournament()
+      prisma.wallet.findUniqueOrThrow.mockImplementation(() =>
+        Promise.resolve(WALLET),
+      );
+      prisma.tx.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-payout' });
+      prisma.tournament.findUnique.mockResolvedValueOnce({
+        ...TOURNAMENT,
+        status: 'FINISHED',
+        _count: { entries: 2 },
+      });
+
+      // Não deve rejeitar como "2 ativas" — só e1 (PLAYING) conta, vira
+      // campeão direto; e2 (REFUNDED) nem entra na conta.
+      await expect(
+        service.finishTournament(CLUBE_ID, 'trn-1'),
+      ).resolves.toBeDefined();
+      expect(walletService.applyLedgerEntry).toHaveBeenCalledTimes(1); // só e1
+    });
+
+    // Torneio que nunca chegou a rodar: os dois únicos inscritos cancelaram.
+    // Sem campeão possível — encerra sem exigir colocação nem pagar ninguém.
+    it('encerra sem exigir campeão quando TODAS as inscrições foram canceladas', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.tournament.findUnique
+        .mockResolvedValueOnce(TOURNAMENT) // status check
+        .mockResolvedValueOnce({
+          ...TOURNAMENT,
+          status: 'FINISHED',
+          _count: { entries: 2 },
+        }); // getTournament() ao final
+      prisma.tournamentPrize.findMany.mockResolvedValue([
+        { position: 1, percentage: new Prisma.Decimal('60.00') },
+        { position: 2, percentage: new Prisma.Decimal('25.00') },
+        { position: 3, percentage: new Prisma.Decimal('15.00') },
+      ]);
+      prisma.tournamentEntry.findMany
+        .mockResolvedValueOnce([
+          {
+            id: 'e1',
+            userId: 'u1',
+            status: 'REFUNDED',
+            finalPosition: null,
+            payoutTransactionId: null,
+          },
+          {
+            id: 'e2',
+            userId: 'u2',
+            status: 'REFUNDED',
+            finalPosition: null,
+            payoutTransactionId: null,
+          },
+        ])
+        .mockResolvedValueOnce([]); // dentro de getTournament()
+
+      await expect(
+        service.finishTournament(CLUBE_ID, 'trn-1'),
+      ).resolves.toBeDefined();
+      expect(prisma.tx.tournament.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'FINISHED' }),
+        }),
+      );
+      // Ninguém foi pago: não havia campeão.
+      expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
     });
 
     it('paga o campeão inferido automaticamente (só 1 sobrou) e finaliza o torneio', async () => {

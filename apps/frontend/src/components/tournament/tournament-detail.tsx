@@ -229,7 +229,13 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
     return <ErrorState description="Não foi possível carregar o torneio." />;
   }
 
-  const myEntry = tournament.entries.find((e) => e.userId === user?.id);
+  // REFUNDED não conta como "estou inscrito" — mesmo critério do backend
+  // (`previousEntries`/`assertRegistrationAllowed` excluem REFUNDED): quem
+  // cancelou pode ver o próprio card de "Inscrever-se" de novo, não uma
+  // mensagem de inscrito fantasma numa inscrição que já foi estornada.
+  const myEntry = tournament.entries.find(
+    (e) => e.userId === user?.id && e.status !== TournamentEntryStatus.REFUNDED,
+  );
   const myTicket = myEntry ? seatLabel(myEntry) : null;
   // Janela de inscrição é a mesma pra jogador e pra admin registrando por
   // outro — só a checagem de "já inscrito" muda (admin exclui pelo alvo
