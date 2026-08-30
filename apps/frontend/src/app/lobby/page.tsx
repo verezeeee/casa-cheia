@@ -1,6 +1,6 @@
 'use client';
 
-import { UserRole } from '@poker-system/shared';
+import { ClubeRole } from '@poker-system/shared';
 import { useQuery } from '@tanstack/react-query';
 import { RequireAuth } from '@/components/auth/require-auth';
 import { useSession } from '@/components/providers/session-provider';
@@ -38,7 +38,7 @@ function LobbySummary() {
 }
 
 function LobbyContent() {
-  const { user } = useSession();
+  const { clubeRole } = useSession();
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 sm:p-6">
@@ -51,7 +51,7 @@ function LobbyContent() {
           espremeria os dois lados num celular. O <div> (bloco, não item de
           flex-col) impede que o botão "+ Criar mesa" (fechado) estique para
           a largura inteira por herdar `align-items: stretch` do <main>. */}
-      {user?.role === UserRole.ADMIN && (
+      {clubeRole === ClubeRole.ADMIN && (
         <div>
           <CreateTableForm />
         </div>

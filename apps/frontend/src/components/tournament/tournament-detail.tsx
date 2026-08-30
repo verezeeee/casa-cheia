@@ -1,6 +1,6 @@
 'use client';
 
-import { TournamentEntryStatus, TournamentStatus, UserRole } from '@poker-system/shared';
+import { TournamentEntryStatus, TournamentStatus, ClubeRole } from '@poker-system/shared';
 import type { TournamentEntryDto } from '@poker-system/shared';
 import type { BadgeVariant } from '@/components/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -56,7 +56,7 @@ function seatLabel(entry: TournamentEntryDto): string | null {
 }
 
 export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
-  const { user } = useSession();
+  const { user, clubeRole } = useSession();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [eliminating, setEliminating] = useState<string | null>(null);
@@ -132,7 +132,7 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
     return <ErrorState description="Não foi possível carregar o torneio." />;
   }
 
-  const isAdmin = user?.role === UserRole.ADMIN;
+  const isAdmin = clubeRole === ClubeRole.ADMIN;
   const myEntry = tournament.entries.find((e) => e.userId === user?.id);
   const myTicket = myEntry ? seatLabel(myEntry) : null;
   const canRegister =

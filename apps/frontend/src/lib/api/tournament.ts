@@ -8,21 +8,25 @@ import type {
   TournamentTableMapDto,
 } from '@poker-system/shared';
 import { httpClient } from '../http-client';
+import { getCurrentClubeId } from './club-context';
 import type {
   CreateTournamentRequest,
   EliminateEntryRequest,
   UpdateBlindLevelRequest,
 } from './types';
 
+function base(): string {
+  return `/clubes/${getCurrentClubeId()}/torneios`;
+}
+
 const TOURNAMENT_PATHS = {
-  base: '/tournaments',
-  detail: (id: string) => `/tournaments/${id}`,
-  register: (id: string) => `/tournaments/${id}/register`,
-  eliminate: (id: string, entryId: string) => `/tournaments/${id}/entries/${entryId}/eliminate`,
-  finish: (id: string) => `/tournaments/${id}/finish`,
-  redraw: (id: string) => `/tournaments/${id}/redraw`,
-  clock: (id: string, action: ClockAction) => `/tournaments/${id}/clock/${action}`,
-  blindLevel: (id: string, levelNumber: number) => `/tournaments/${id}/blind-levels/${levelNumber}`,
+  detail: (id: string) => `${base()}/${id}`,
+  register: (id: string) => `${base()}/${id}/register`,
+  eliminate: (id: string, entryId: string) => `${base()}/${id}/entries/${entryId}/eliminate`,
+  finish: (id: string) => `${base()}/${id}/finish`,
+  redraw: (id: string) => `${base()}/${id}/redraw`,
+  clock: (id: string, action: ClockAction) => `${base()}/${id}/clock/${action}`,
+  blindLevel: (id: string, levelNumber: number) => `${base()}/${id}/blind-levels/${levelNumber}`,
   /**
    * Leituras PÚBLICAS (`tournament-display.controller.ts`): são os ÚNICOS GETs
    * de relógio e de mapa de mesas do backend — não existe par autenticado sob
@@ -37,14 +41,12 @@ type ClockAction = 'start' | 'pause' | 'resume' | 'next' | 'previous';
 
 export function listTournaments(cursor?: string): Promise<PaginatedResponse<TournamentSummaryDto>> {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
-  return httpClient.get<PaginatedResponse<TournamentSummaryDto>>(
-    `${TOURNAMENT_PATHS.base}${query}`,
-  );
+  return httpClient.get<PaginatedResponse<TournamentSummaryDto>>(`${base()}${query}`);
 }
 
 /** ADMIN. */
 export function createTournament(input: CreateTournamentRequest): Promise<TournamentSummaryDto> {
-  return httpClient.post<TournamentSummaryDto>(TOURNAMENT_PATHS.base, input);
+  return httpClient.post<TournamentSummaryDto>(base(), input);
 }
 
 export function getTournament(id: string): Promise<TournamentDetailResponse> {

@@ -23,6 +23,7 @@ describe('RequireAuth', () => {
     mockedUseSession.mockReturnValue({
       status: 'loading',
       user: null,
+      clubeRole: null,
       login: jest.fn(),
       logout: jest.fn(),
     });
@@ -41,6 +42,7 @@ describe('RequireAuth', () => {
     mockedUseSession.mockReturnValue({
       status: 'unauthenticated',
       user: null,
+      clubeRole: null,
       login: jest.fn(),
       logout: jest.fn(),
     });
@@ -58,7 +60,8 @@ describe('RequireAuth', () => {
   it('renderiza os filhos quando autenticado', () => {
     mockedUseSession.mockReturnValue({
       status: 'authenticated',
-      user: { id: '1', email: 'a@b.dev', name: 'A', role: 'PLAYER' } as never,
+      user: { id: '1', email: 'a@b.dev', name: 'A' },
+      clubeRole: null,
       login: jest.fn(),
       logout: jest.fn(),
     });

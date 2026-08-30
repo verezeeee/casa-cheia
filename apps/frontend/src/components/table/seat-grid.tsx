@@ -1,7 +1,7 @@
 'use client';
 
 import type { TableSeatDto } from '@poker-system/shared';
-import { UserRole } from '@poker-system/shared';
+import { ClubeRole } from '@poker-system/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
@@ -40,7 +40,7 @@ function seatPosition(index: number, total: number): CSSProperties {
 }
 
 export function SeatGrid({ tableId }: { tableId: string }) {
-  const { user } = useSession();
+  const { user, clubeRole } = useSession();
   const router = useRouter();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +155,7 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     return <ErrorState description="Não foi possível carregar os assentos." />;
   }
 
-  const isAdmin = user?.role === UserRole.ADMIN;
+  const isAdmin = clubeRole === ClubeRole.ADMIN;
 
   return (
     <div className="flex flex-col gap-4">

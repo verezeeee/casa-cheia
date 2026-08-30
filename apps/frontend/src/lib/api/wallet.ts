@@ -6,23 +6,28 @@ import type {
   WalletTransactionDto,
 } from '@poker-system/shared';
 import { httpClient } from '../http-client';
+import { getCurrentClubeId } from './club-context';
 import type { CreateDepositRequest, RequestWithdrawalRequest } from './types';
 
+function base(): string {
+  return `/clubes/${getCurrentClubeId()}/carteira`;
+}
+
 const WALLET_PATHS = {
-  balance: '/wallet/balance',
-  transactions: '/wallet/transactions',
-  deposits: '/wallet/deposits',
-  withdrawals: '/wallet/withdrawals',
+  balance: () => `${base()}/balance`,
+  transactions: () => `${base()}/transactions`,
+  deposits: () => `${base()}/deposits`,
+  withdrawals: () => `${base()}/withdrawals`,
 } as const;
 
 export function getBalance(): Promise<WalletBalanceResponse> {
-  return httpClient.get<WalletBalanceResponse>(WALLET_PATHS.balance);
+  return httpClient.get<WalletBalanceResponse>(WALLET_PATHS.balance());
 }
 
 export function getTransactions(cursor?: string): Promise<PaginatedResponse<WalletTransactionDto>> {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
   return httpClient.get<PaginatedResponse<WalletTransactionDto>>(
-    `${WALLET_PATHS.transactions}${query}`,
+    `${WALLET_PATHS.transactions()}${query}`,
   );
 }
 
@@ -35,7 +40,7 @@ export function createDeposit(
   input: CreateDepositRequest,
   idempotencyKey: string,
 ): Promise<PixChargeResponse> {
-  return httpClient.post<PixChargeResponse>(WALLET_PATHS.deposits, input, {
+  return httpClient.post<PixChargeResponse>(WALLET_PATHS.deposits(), input, {
     headers: { 'Idempotency-Key': idempotencyKey },
   });
 }
@@ -44,7 +49,7 @@ export function requestWithdrawal(
   input: RequestWithdrawalRequest,
   idempotencyKey: string,
 ): Promise<PixWithdrawalResponse> {
-  return httpClient.post<PixWithdrawalResponse>(WALLET_PATHS.withdrawals, input, {
+  return httpClient.post<PixWithdrawalResponse>(WALLET_PATHS.withdrawals(), input, {
     headers: { 'Idempotency-Key': idempotencyKey },
   });
 }

@@ -1,4 +1,4 @@
-import { UserRole } from '@poker-system/shared';
+import { ClubeRole } from '@poker-system/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -25,9 +25,10 @@ function renderWithClient(ui: ReactElement) {
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
 
-function session(role: UserRole) {
+function session(clubeRole: ClubeRole) {
   mockedUseSession.mockReturnValue({
-    user: { id: 'u1', email: 'u1@x.dev', name: 'U1', role },
+    user: { id: 'u1', email: 'u1@x.dev', name: 'U1' },
+    clubeRole,
     status: 'authenticated',
     login: jest.fn(),
     logout: jest.fn(),
@@ -65,7 +66,7 @@ describe('TableMap', () => {
   });
 
   it('mostra as mesas com ocupação e assentos', async () => {
-    session(UserRole.PLAYER);
+    session(ClubeRole.PLAYER);
     (tournamentApi.getTableMap as jest.Mock).mockResolvedValue(MAP);
 
     renderWithClient(<TableMap tournamentId="trn-1" />);
@@ -78,7 +79,7 @@ describe('TableMap', () => {
   });
 
   it('não mostra ações para PLAYER', async () => {
-    session(UserRole.PLAYER);
+    session(ClubeRole.PLAYER);
     (tournamentApi.getTableMap as jest.Mock).mockResolvedValue(MAP);
 
     renderWithClient(<TableMap tournamentId="trn-1" />);
@@ -89,7 +90,7 @@ describe('TableMap', () => {
   });
 
   it('ADMIN elimina um jogador pelo assento', async () => {
-    session(UserRole.ADMIN);
+    session(ClubeRole.ADMIN);
     (tournamentApi.getTableMap as jest.Mock).mockResolvedValue(MAP);
     (tournamentApi.eliminateEntry as jest.Mock).mockResolvedValue({});
 
@@ -105,7 +106,7 @@ describe('TableMap', () => {
   });
 
   it('ADMIN faz redraw após confirmar', async () => {
-    session(UserRole.ADMIN);
+    session(ClubeRole.ADMIN);
     (tournamentApi.getTableMap as jest.Mock).mockResolvedValue(MAP);
     (tournamentApi.redraw as jest.Mock).mockResolvedValue(MAP);
 
@@ -119,7 +120,7 @@ describe('TableMap', () => {
   });
 
   it('mostra erro quando a query falha', async () => {
-    session(UserRole.ADMIN);
+    session(ClubeRole.ADMIN);
     (tournamentApi.getTableMap as jest.Mock).mockRejectedValue(new Error('falhou'));
 
     renderWithClient(<TableMap tournamentId="trn-1" />);

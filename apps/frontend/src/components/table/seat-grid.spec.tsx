@@ -1,4 +1,4 @@
-import { UserRole } from '@poker-system/shared';
+import { ClubeRole } from '@poker-system/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -54,7 +54,8 @@ describe('SeatGrid', () => {
 
   it('senta em um assento vago (buy-in)', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'me', email: 'me@x.dev', name: 'Eu', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -82,7 +83,8 @@ describe('SeatGrid', () => {
 
   it('mostra Cash-out apenas no próprio assento', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'me', email: 'me@x.dev', name: 'Eu', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -110,7 +112,8 @@ describe('SeatGrid', () => {
 
   it('ADMIN pode ajustar o stack de outro jogador', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin', role: UserRole.ADMIN },
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -142,7 +145,8 @@ describe('SeatGrid', () => {
 
   it('mostra erro da API quando o buy-in falha', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'me', email: 'me@x.dev', name: 'Eu', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -165,7 +169,8 @@ describe('SeatGrid', () => {
 
   it('mostra "Fechar mesa" só pro ADMIN e chama a API ao confirmar', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin', role: UserRole.ADMIN },
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -185,7 +190,8 @@ describe('SeatGrid', () => {
 
   it('não mostra "Fechar mesa" pro jogador', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'me', email: 'me@x.dev', name: 'Eu', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),

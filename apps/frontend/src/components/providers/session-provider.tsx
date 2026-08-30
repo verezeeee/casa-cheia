@@ -1,15 +1,33 @@
 'use client';
 
-import type { SessionUser } from '@poker-system/shared';
+import type { ClubeRole, SessionUser } from '@poker-system/shared';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { authApi } from '@/lib/api/auth';
+import { clubApi, setCurrentClubeId } from '@/lib/api/club-context';
 import type { LoginRequest } from '@/lib/api/types';
 import { setAccessToken, setUnauthorizedHandler } from '@/lib/http-client';
+
+/**
+ * Resolve o clube "atual" da sessão (MVP de clube único — ver `club-context.ts`)
+ * assim que sabemos quem é o usuário, junto do papel dele NESTE clube
+ * (`ClubeMembership.role` não existe mais em `SessionUser` — ver seu
+ * docblock). Uma conta sem nenhum clube (ainda não convidada) fica com
+ * `currentClubeId`/`clubeRole` nulos: as chamadas a mesa/torneio/carteira vão
+ * falhar explicitamente em vez de usar um clube errado.
+ */
+async function resolveCurrentClube(): Promise<ClubeRole | null> {
+  const clubes = await clubApi.listMyClubes();
+  const current = clubes[0] ?? null;
+  setCurrentClubeId(current?.id ?? null);
+  return current?.role ?? null;
+}
 
 type SessionStatus = 'loading' | 'authenticated' | 'unauthenticated';
 
 interface SessionContextValue {
   user: SessionUser | null;
+  /** Papel do usuário no clube atual (`ClubeSummaryDto.role`) — `null` fora de `authenticated` ou sem clube. */
+  clubeRole: ClubeRole | null;
   status: SessionStatus;
   login: (input: LoginRequest) => Promise<void>;
   logout: () => Promise<void>;
@@ -30,11 +48,14 @@ const SessionContext = createContext<SessionContextValue | null>(null);
  */
 export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [clubeRole, setClubeRole] = useState<ClubeRole | null>(null);
   const [status, setStatus] = useState<SessionStatus>('loading');
 
   const clearSession = useCallback(() => {
     setAccessToken(null);
+    setCurrentClubeId(null);
     setUser(null);
+    setClubeRole(null);
     setStatus('unauthenticated');
   }, []);
 
@@ -55,7 +76,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
     authApi
       .me()
-      .then((sessionUser) => {
+      .then(async (sessionUser) => {
+        setClubeRole(await resolveCurrentClube());
         setUser(sessionUser);
         setStatus('authenticated');
       })
@@ -72,6 +94,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     const { accessToken } = await authApi.login(input);
     setAccessToken(accessToken);
     const sessionUser = await authApi.me();
+    setClubeRole(await resolveCurrentClube());
     setUser(sessionUser);
     setStatus('authenticated');
   }, []);
@@ -81,7 +104,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     clearSession();
   }, [clearSession]);
 
-  const value = useMemo(() => ({ user, status, login, logout }), [user, status, login, logout]);
+  const value = useMemo(
+    () => ({ user, clubeRole, status, login, logout }),
+    [user, clubeRole, status, login, logout],
+  );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

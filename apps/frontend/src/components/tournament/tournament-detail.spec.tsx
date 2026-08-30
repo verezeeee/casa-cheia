@@ -1,4 +1,4 @@
-import { UserRole } from '@poker-system/shared';
+import { ClubeRole } from '@poker-system/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -63,7 +63,8 @@ describe('TournamentDetail', () => {
 
   it('permite que um jogador não inscrito se inscreva', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'me', email: 'me@x.dev', name: 'Eu', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -82,7 +83,8 @@ describe('TournamentDetail', () => {
 
   it('não mostra o botão de inscrição para quem já está inscrito', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'other', email: 'other@x.dev', name: 'Outro', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'other', email: 'other@x.dev', name: 'Outro' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -98,7 +100,8 @@ describe('TournamentDetail', () => {
 
   it('destaca mesa e assento do jogador e repete na linha da listagem', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'other', email: 'other@x.dev', name: 'Outro', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'other', email: 'other@x.dev', name: 'Outro' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -114,7 +117,8 @@ describe('TournamentDetail', () => {
 
   it('omite o destaque quando tableNumber/seatNumber são null', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'other', email: 'other@x.dev', name: 'Outro', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'other', email: 'other@x.dev', name: 'Outro' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -132,7 +136,8 @@ describe('TournamentDetail', () => {
 
   it('ADMIN pode eliminar uma inscrição e encerrar o torneio', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin', role: UserRole.ADMIN },
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -161,7 +166,8 @@ describe('TournamentDetail', () => {
 
   it('linka mesas, relógio e TV — a TV em nova aba', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'me', email: 'me@x.dev', name: 'Eu', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
@@ -185,7 +191,8 @@ describe('TournamentDetail', () => {
 
   it('mostra mensagem de erro quando a query falha', async () => {
     mockedUseSession.mockReturnValue({
-      user: { id: 'me', email: 'me@x.dev', name: 'Eu', role: UserRole.PLAYER },
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu' },
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),

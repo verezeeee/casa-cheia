@@ -1,5 +1,4 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { UserRole } from '@poker-system/shared';
 import { useSession } from '@/components/providers/session-provider';
 import { TopBar } from './top-bar';
 
@@ -17,7 +16,8 @@ describe('TopBar', () => {
   it('mostra o nome do usuário e o wordmark linkando para /lobby', () => {
     mockedUseSession.mockReturnValue({
       status: 'authenticated',
-      user: { id: '1', email: 'a@b.dev', name: 'Ana', role: UserRole.PLAYER },
+      user: { id: '1', email: 'a@b.dev', name: 'Ana' },
+      clubeRole: null,
       login: jest.fn(),
       logout: jest.fn(),
     });
@@ -32,7 +32,8 @@ describe('TopBar', () => {
     const logout = jest.fn();
     mockedUseSession.mockReturnValue({
       status: 'authenticated',
-      user: { id: '1', email: 'a@b.dev', name: 'Ana', role: UserRole.PLAYER },
+      user: { id: '1', email: 'a@b.dev', name: 'Ana' },
+      clubeRole: null,
       login: jest.fn(),
       logout,
     });

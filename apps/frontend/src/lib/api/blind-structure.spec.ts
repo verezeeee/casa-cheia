@@ -1,4 +1,5 @@
 import { blindStructureApi } from './blind-structure';
+import { setCurrentClubeId } from './club-context';
 import type { CreateBlindStructureRequest } from './types';
 
 const API_URL = 'http://localhost:3001/api';
@@ -26,10 +27,12 @@ const PRESET: CreateBlindStructureRequest = {
 describe('api/blind-structure', () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_API_URL = API_URL;
+    setCurrentClubeId('clube-1');
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    setCurrentClubeId(null);
     jest.resetAllMocks();
   });
 
@@ -37,7 +40,7 @@ describe('api/blind-structure', () => {
     mockJsonResponse({ id: 'bs-1' });
     await blindStructureApi.createBlindStructure(PRESET);
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/blind-structures`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/blind-structures`);
     expect(init.method).toBe('POST');
     expect(init.body).toBe(JSON.stringify(PRESET));
   });
@@ -46,21 +49,21 @@ describe('api/blind-structure', () => {
     mockJsonResponse([]);
     await blindStructureApi.listBlindStructures();
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/blind-structures`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/blind-structures`);
     expect(init.method).toBe('GET');
   });
 
   it('getBlindStructure faz GET em /blind-structures/:id', async () => {
     mockJsonResponse({ id: 'bs-1' });
     await blindStructureApi.getBlindStructure('bs-1');
-    expect(lastCall()[0]).toBe(`${API_URL}/blind-structures/bs-1`);
+    expect(lastCall()[0]).toBe(`${API_URL}/clubes/clube-1/blind-structures/bs-1`);
   });
 
   it('updateBlindStructure faz PUT (substitui a grade inteira)', async () => {
     mockJsonResponse({ id: 'bs-1' });
     await blindStructureApi.updateBlindStructure('bs-1', PRESET);
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/blind-structures/bs-1`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/blind-structures/bs-1`);
     expect(init.method).toBe('PUT');
     expect(init.body).toBe(JSON.stringify(PRESET));
   });
@@ -69,7 +72,7 @@ describe('api/blind-structure', () => {
     mockJsonResponse(undefined, 204);
     await expect(blindStructureApi.deleteBlindStructure('bs-1')).resolves.toBeUndefined();
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/blind-structures/bs-1`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/blind-structures/bs-1`);
     expect(init.method).toBe('DELETE');
   });
 });

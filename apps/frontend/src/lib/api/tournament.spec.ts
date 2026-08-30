@@ -1,4 +1,5 @@
 import { setAccessToken } from '../http-client';
+import { setCurrentClubeId } from './club-context';
 import { tournamentApi } from './tournament';
 
 const API_URL = 'http://localhost:3001/api';
@@ -21,17 +22,21 @@ function lastCall(): FetchArgs {
 describe('api/tournament', () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_API_URL = API_URL;
+    // Rotas autenticadas de torneio são /clubes/:clubeId/torneios/... (CL-BE-06);
+    // as de display (abaixo) continuam públicas, sem prefixo de clube.
+    setCurrentClubeId('clube-1');
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    setCurrentClubeId(null);
     jest.resetAllMocks();
   });
 
   it('listTournaments faz GET em /tournaments', async () => {
     mockJsonResponse({ items: [], nextCursor: null });
     await tournamentApi.listTournaments();
-    expect(lastCall()[0]).toBe(`${API_URL}/tournaments`);
+    expect(lastCall()[0]).toBe(`${API_URL}/clubes/clube-1/torneios`);
   });
 
   it('createTournament faz POST em /tournaments com o corpo informado', async () => {
@@ -47,21 +52,21 @@ describe('api/tournament', () => {
     };
     await tournamentApi.createTournament(input);
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tournaments`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/torneios`);
     expect(init.body).toBe(JSON.stringify(input));
   });
 
   it('getTournament faz GET em /tournaments/:id', async () => {
     mockJsonResponse({ id: 'trn-1' });
     await tournamentApi.getTournament('trn-1');
-    expect(lastCall()[0]).toBe(`${API_URL}/tournaments/trn-1`);
+    expect(lastCall()[0]).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1`);
   });
 
   it('registerEntry envia o header Idempotency-Key sem corpo', async () => {
     mockJsonResponse({ id: 'entry-1' });
     await tournamentApi.registerEntry('trn-1', 'idem-1');
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tournaments/trn-1/register`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1/register`);
     expect(init.body).toBeUndefined();
     expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('idem-1');
   });
@@ -70,7 +75,7 @@ describe('api/tournament', () => {
     mockJsonResponse({ id: 'entry-1' });
     await tournamentApi.eliminateEntry('trn-1', 'entry-1', { finalPosition: 3 });
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tournaments/trn-1/entries/entry-1/eliminate`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1/entries/entry-1/eliminate`);
     expect(init.body).toBe(JSON.stringify({ finalPosition: 3 }));
   });
 
@@ -78,7 +83,7 @@ describe('api/tournament', () => {
     mockJsonResponse({ id: 'trn-1', status: 'FINISHED' });
     await tournamentApi.finishTournament('trn-1');
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tournaments/trn-1/finish`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1/finish`);
     expect(init.body).toBeUndefined();
   });
 
@@ -86,7 +91,7 @@ describe('api/tournament', () => {
     mockJsonResponse({ tournamentId: 'trn-1', tables: [] });
     await tournamentApi.redraw('trn-1');
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tournaments/trn-1/redraw`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1/redraw`);
     expect(init.method).toBe('POST');
     expect(init.body).toBeUndefined();
   });
@@ -101,7 +106,7 @@ describe('api/tournament', () => {
     mockJsonResponse({ clockStatus: 'RUNNING' });
     await tournamentApi[fn]('trn-1');
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tournaments/trn-1/clock/${action}`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1/clock/${action}`);
     expect(init.method).toBe('POST');
     expect(init.body).toBeUndefined();
   });
@@ -110,7 +115,7 @@ describe('api/tournament', () => {
     mockJsonResponse({ clockStatus: 'RUNNING' });
     await tournamentApi.updateBlindLevel('trn-1', 4, { durationSeconds: 900 });
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tournaments/trn-1/blind-levels/4`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1/blind-levels/4`);
     expect(init.method).toBe('PATCH');
     expect(init.body).toBe(JSON.stringify({ durationSeconds: 900 }));
   });

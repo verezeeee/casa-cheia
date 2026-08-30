@@ -1,5 +1,4 @@
 import { render, screen } from '@testing-library/react';
-import { UserRole } from '@poker-system/shared';
 import { useSession } from '@/components/providers/session-provider';
 import { AuthStatus } from './auth-status';
 
@@ -18,6 +17,7 @@ describe('AuthStatus', () => {
     mockedUseSession.mockReturnValue({
       status: 'loading',
       user: null,
+      clubeRole: null,
       login: jest.fn(),
       logout: jest.fn(),
     });
@@ -30,6 +30,7 @@ describe('AuthStatus', () => {
     mockedUseSession.mockReturnValue({
       status: 'unauthenticated',
       user: null,
+      clubeRole: null,
       login: jest.fn(),
       logout: jest.fn(),
     });
@@ -43,7 +44,8 @@ describe('AuthStatus', () => {
     const logout = jest.fn();
     mockedUseSession.mockReturnValue({
       status: 'authenticated',
-      user: { id: '1', email: 'a@b.dev', name: 'Ana', role: UserRole.PLAYER },
+      user: { id: '1', email: 'a@b.dev', name: 'Ana' },
+      clubeRole: null,
       login: jest.fn(),
       logout,
     });

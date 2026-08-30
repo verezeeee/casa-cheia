@@ -1,4 +1,4 @@
-import { UserRole } from '@poker-system/shared';
+import { ClubeRole } from '@poker-system/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -16,9 +16,10 @@ jest.mock('@/components/providers/session-provider', () => ({
 
 const mockedUseSession = jest.mocked(useSession);
 
-function mockSession(role: UserRole) {
+function mockSession(clubeRole: ClubeRole) {
   mockedUseSession.mockReturnValue({
-    user: { id: 'u-1', email: 'u@x.dev', name: 'U', role },
+    user: { id: 'u-1', email: 'u@x.dev', name: 'U' },
+    clubeRole,
     status: 'authenticated',
     login: jest.fn(),
     logout: jest.fn(),
@@ -36,7 +37,7 @@ describe('BlindStructureManager', () => {
   });
 
   it('bloqueia quem não é ADMIN', () => {
-    mockSession(UserRole.PLAYER);
+    mockSession(ClubeRole.PLAYER);
 
     renderWithClient(<BlindStructureManager />);
 
@@ -45,7 +46,7 @@ describe('BlindStructureManager', () => {
   });
 
   it('lista as estruturas com o número de níveis', async () => {
-    mockSession(UserRole.ADMIN);
+    mockSession(ClubeRole.ADMIN);
     (blindStructureApi.listBlindStructures as jest.Mock).mockResolvedValue([
       { id: 'bs-1', name: 'Turbo 20 min', levels: [{}, {}, {}] },
     ]);
@@ -57,7 +58,7 @@ describe('BlindStructureManager', () => {
   });
 
   it('cria uma estrutura com um nível e um intervalo herdando os blinds', async () => {
-    mockSession(UserRole.ADMIN);
+    mockSession(ClubeRole.ADMIN);
     (blindStructureApi.listBlindStructures as jest.Mock).mockResolvedValue([]);
     (blindStructureApi.createBlindStructure as jest.Mock).mockResolvedValue({ id: 'bs-1' });
 
@@ -99,7 +100,7 @@ describe('BlindStructureManager', () => {
   });
 
   it('remove um nível do editor', async () => {
-    mockSession(UserRole.ADMIN);
+    mockSession(ClubeRole.ADMIN);
     (blindStructureApi.listBlindStructures as jest.Mock).mockResolvedValue([]);
 
     renderWithClient(<BlindStructureManager />);
@@ -112,7 +113,7 @@ describe('BlindStructureManager', () => {
   });
 
   it('mostra o erro da API quando a criação falha', async () => {
-    mockSession(UserRole.ADMIN);
+    mockSession(ClubeRole.ADMIN);
     (blindStructureApi.listBlindStructures as jest.Mock).mockResolvedValue([]);
     (blindStructureApi.createBlindStructure as jest.Mock).mockRejectedValue(new Error('falhou'));
 

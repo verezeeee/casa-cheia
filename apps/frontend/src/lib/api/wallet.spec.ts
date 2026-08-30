@@ -1,3 +1,4 @@
+import { setCurrentClubeId } from './club-context';
 import { walletApi } from './wallet';
 
 const API_URL = 'http://localhost:3001/api';
@@ -20,10 +21,13 @@ function lastCall(): FetchArgs {
 describe('api/wallet', () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_API_URL = API_URL;
+    // Carteira agora é por (usuário, clube): /clubes/:clubeId/carteira/... (CL-BE-07).
+    setCurrentClubeId('clube-1');
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    setCurrentClubeId(null);
     jest.resetAllMocks();
   });
 
@@ -33,7 +37,7 @@ describe('api/wallet', () => {
     const result = await walletApi.getBalance();
 
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/wallet/balance`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/carteira/balance`);
     expect(init.method).toBe('GET');
     expect(result).toEqual({ balance: '100.00', version: 2 });
   });
@@ -44,7 +48,7 @@ describe('api/wallet', () => {
     await walletApi.getTransactions();
 
     const [url] = lastCall();
-    expect(url).toBe(`${API_URL}/wallet/transactions`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/carteira/transactions`);
   });
 
   it('getTransactions com cursor anexa ?cursor=... (URL-encoded)', async () => {
@@ -53,7 +57,7 @@ describe('api/wallet', () => {
     await walletApi.getTransactions('a/b+c');
 
     const [url] = lastCall();
-    expect(url).toBe(`${API_URL}/wallet/transactions?cursor=a%2Fb%2Bc`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/carteira/transactions?cursor=a%2Fb%2Bc`);
   });
 
   it('createDeposit envia o corpo e o header Idempotency-Key', async () => {
@@ -69,7 +73,7 @@ describe('api/wallet', () => {
     await walletApi.createDeposit({ amount: '50.00' }, 'idem-key-1');
 
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/wallet/deposits`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/carteira/deposits`);
     expect(init.method).toBe('POST');
     expect(init.body).toBe(JSON.stringify({ amount: '50.00' }));
     expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('idem-key-1');
@@ -91,7 +95,7 @@ describe('api/wallet', () => {
     );
 
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/wallet/withdrawals`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/carteira/withdrawals`);
     expect(init.method).toBe('POST');
     expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('idem-key-2');
   });

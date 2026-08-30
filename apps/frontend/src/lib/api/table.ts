@@ -1,26 +1,30 @@
 import type { PaginatedResponse, TableSeatDto, TableSummaryDto } from '@poker-system/shared';
 import { httpClient } from '../http-client';
+import { getCurrentClubeId } from './club-context';
 import type { CreateTableRequest, RecordMovementRequest, SitAtTableRequest } from './types';
 
+function base(): string {
+  return `/clubes/${getCurrentClubeId()}/mesas`;
+}
+
 const TABLE_PATHS = {
-  base: '/tables',
-  seats: (tableId: string) => `/tables/${tableId}/seats`,
-  sit: (tableId: string) => `/tables/${tableId}/sit`,
+  seats: (tableId: string) => `${base()}/${tableId}/seats`,
+  sit: (tableId: string) => `${base()}/${tableId}/sit`,
   cashOut: (tableId: string, sessionId: string) =>
-    `/tables/${tableId}/sessions/${sessionId}/cash-out`,
+    `${base()}/${tableId}/sessions/${sessionId}/cash-out`,
   movements: (tableId: string, sessionId: string) =>
-    `/tables/${tableId}/sessions/${sessionId}/movements`,
-  close: (tableId: string) => `/tables/${tableId}/close`,
+    `${base()}/${tableId}/sessions/${sessionId}/movements`,
+  close: (tableId: string) => `${base()}/${tableId}/close`,
 } as const;
 
 export function listTables(cursor?: string): Promise<PaginatedResponse<TableSummaryDto>> {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
-  return httpClient.get<PaginatedResponse<TableSummaryDto>>(`${TABLE_PATHS.base}${query}`);
+  return httpClient.get<PaginatedResponse<TableSummaryDto>>(`${base()}${query}`);
 }
 
 /** ADMIN. */
 export function createTable(input: CreateTableRequest): Promise<TableSummaryDto> {
-  return httpClient.post<TableSummaryDto>(TABLE_PATHS.base, input);
+  return httpClient.post<TableSummaryDto>(base(), input);
 }
 
 export function getSeats(tableId: string): Promise<TableSeatDto[]> {

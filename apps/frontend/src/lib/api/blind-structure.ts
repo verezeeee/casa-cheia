@@ -1,28 +1,32 @@
 import type { BlindStructureDto } from '@poker-system/shared';
 import { httpClient } from '../http-client';
+import { getCurrentClubeId } from './club-context';
 import type { CreateBlindStructureRequest } from './types';
 
 /**
  * Presets de blinds (`blind-structures.controller.ts`). Prefixo próprio, e não
- * `/tournaments/blind-structures`: lá o `@Get(':id')` é catch-all.
+ * `/torneios/blind-structures`: lá o `@Get(':id')` é catch-all.
  *
  * Leitura vale para qualquer usuário autenticado; mutação é ADMIN.
  */
+function base(): string {
+  return `/clubes/${getCurrentClubeId()}/blind-structures`;
+}
+
 const BLIND_STRUCTURE_PATHS = {
-  base: '/blind-structures',
-  detail: (id: string) => `/blind-structures/${id}`,
+  detail: (id: string) => `${base()}/${id}`,
 } as const;
 
 /** ADMIN. */
 export function createBlindStructure(
   input: CreateBlindStructureRequest,
 ): Promise<BlindStructureDto> {
-  return httpClient.post<BlindStructureDto>(BLIND_STRUCTURE_PATHS.base, input);
+  return httpClient.post<BlindStructureDto>(base(), input);
 }
 
 /** Lista completa — o catálogo é pequeno e o backend não pagina esta rota. */
 export function listBlindStructures(): Promise<BlindStructureDto[]> {
-  return httpClient.get<BlindStructureDto[]>(BLIND_STRUCTURE_PATHS.base);
+  return httpClient.get<BlindStructureDto[]>(base());
 }
 
 export function getBlindStructure(id: string): Promise<BlindStructureDto> {

@@ -1,6 +1,6 @@
 'use client';
 
-import { TournamentTableStatus, UserRole } from '@poker-system/shared';
+import { TournamentTableStatus, ClubeRole } from '@poker-system/shared';
 import type { PublicTournamentSeatDto, PublicTournamentTableDto } from '@poker-system/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -35,7 +35,7 @@ const POLL_INTERVAL_MS = 3_000;
  * existem ocupados e o stack é em fichas.
  */
 export function TableMap({ tournamentId }: { tournamentId: string }) {
-  const { user } = useSession();
+  const { clubeRole } = useSession();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [confirmingRedraw, setConfirmingRedraw] = useState(false);
@@ -98,7 +98,7 @@ export function TableMap({ tournamentId }: { tournamentId: string }) {
     return <ErrorState description="Não foi possível carregar as mesas." />;
   }
 
-  const isAdmin = user?.role === UserRole.ADMIN;
+  const isAdmin = clubeRole === ClubeRole.ADMIN;
 
   return (
     <div className="flex flex-col gap-4">

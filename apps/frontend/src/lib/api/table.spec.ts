@@ -1,3 +1,4 @@
+import { setCurrentClubeId } from './club-context';
 import { tableApi } from './table';
 
 const API_URL = 'http://localhost:3001/api';
@@ -20,17 +21,20 @@ function lastCall(): FetchArgs {
 describe('api/table', () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_API_URL = API_URL;
+    // Todas as rotas de mesa agora são /clubes/:clubeId/mesas/... (CL-BE-05).
+    setCurrentClubeId('clube-1');
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    setCurrentClubeId(null);
     jest.resetAllMocks();
   });
 
   it('listTables faz GET em /tables', async () => {
     mockJsonResponse({ items: [], nextCursor: null });
     await tableApi.listTables();
-    expect(lastCall()[0]).toBe(`${API_URL}/tables`);
+    expect(lastCall()[0]).toBe(`${API_URL}/clubes/clube-1/mesas`);
   });
 
   it('createTable faz POST em /tables com o corpo informado', async () => {
@@ -46,21 +50,21 @@ describe('api/table', () => {
     };
     await tableApi.createTable(input);
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tables`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/mesas`);
     expect(init.body).toBe(JSON.stringify(input));
   });
 
   it('getSeats faz GET em /tables/:id/seats', async () => {
     mockJsonResponse([]);
     await tableApi.getSeats('table-1');
-    expect(lastCall()[0]).toBe(`${API_URL}/tables/table-1/seats`);
+    expect(lastCall()[0]).toBe(`${API_URL}/clubes/clube-1/mesas/table-1/seats`);
   });
 
   it('sitAtTable envia o header Idempotency-Key', async () => {
     mockJsonResponse({ seatNumber: 1 });
     await tableApi.sitAtTable('table-1', { seatNumber: 1, buyInAmount: '50.00' }, 'idem-1');
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tables/table-1/sit`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/mesas/table-1/sit`);
     expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('idem-1');
   });
 
@@ -68,7 +72,7 @@ describe('api/table', () => {
     mockJsonResponse({ seatNumber: 1 });
     await tableApi.cashOut('table-1', 'session-1', 'idem-2');
     const [url, init] = lastCall();
-    expect(url).toBe(`${API_URL}/tables/table-1/sessions/session-1/cash-out`);
+    expect(url).toBe(`${API_URL}/clubes/clube-1/mesas/table-1/sessions/session-1/cash-out`);
     expect(init.body).toBeUndefined();
     expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('idem-2');
   });
@@ -79,6 +83,8 @@ describe('api/table', () => {
       amount: '10.00',
       reason: 'HAND_RESULT',
     });
-    expect(lastCall()[0]).toBe(`${API_URL}/tables/table-1/sessions/session-1/movements`);
+    expect(lastCall()[0]).toBe(
+      `${API_URL}/clubes/clube-1/mesas/table-1/sessions/session-1/movements`,
+    );
   });
 });

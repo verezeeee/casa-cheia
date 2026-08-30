@@ -1,6 +1,6 @@
 'use client';
 
-import { UserRole } from '@poker-system/shared';
+import { ClubeRole } from '@poker-system/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
@@ -63,13 +63,13 @@ function toInput(row: LevelRow, index: number): BlindLevelInput {
 
 /** Catálogo de presets de blinds. Leitura para todos, criação só para ADMIN. */
 export function BlindStructureManager() {
-  const { user } = useSession();
+  const { clubeRole } = useSession();
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [rows, setRows] = useState<LevelRow[]>([FIRST_ROW]);
   const [error, setError] = useState<string | null>(null);
 
-  const isAdmin = user?.role === UserRole.ADMIN;
+  const isAdmin = clubeRole === ClubeRole.ADMIN;
 
   const {
     data: structures,

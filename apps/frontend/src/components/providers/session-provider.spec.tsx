@@ -1,7 +1,8 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { UserRole, type SessionUser } from '@poker-system/shared';
+import type { SessionUser } from '@poker-system/shared';
 import type { ReactNode } from 'react';
 import { authApi } from '@/lib/api/auth';
+import { clubApi } from '@/lib/api/club-context';
 import { SessionProvider, useSession } from './session-provider';
 
 jest.mock('@/lib/api/auth', () => ({
@@ -14,13 +15,20 @@ jest.mock('@/lib/api/auth', () => ({
   },
 }));
 
+// `resolveCurrentClube` (session-provider.tsx) chama isso a cada hidratação/
+// login bem-sucedido — sem o mock, a suíte tentaria uma requisição real.
+jest.mock('@/lib/api/club-context', () => ({
+  clubApi: { listMyClubes: jest.fn() },
+  setCurrentClubeId: jest.fn(),
+}));
+
 const mockedAuthApi = jest.mocked(authApi);
+const mockedClubApi = jest.mocked(clubApi);
 
 const sessionUser: SessionUser = {
   id: 'usr_1',
   email: 'player@poker.dev',
   name: 'Player One',
-  role: UserRole.PLAYER,
 };
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -28,6 +36,12 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 describe('SessionProvider / useSession', () => {
+  beforeEach(() => {
+    // Sem clube ligado ao teste, por padrão — os testes deste arquivo cobrem
+    // `user`/`status`, não `clubeRole` (isso vive em `club-context.spec.ts`).
+    mockedClubApi.listMyClubes.mockResolvedValue([]);
+  });
+
   afterEach(() => {
     jest.resetAllMocks();
   });

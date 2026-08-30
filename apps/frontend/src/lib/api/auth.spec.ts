@@ -1,4 +1,4 @@
-import { UserRole, type SessionUser } from '@poker-system/shared';
+import type { SessionUser } from '@poker-system/shared';
 import { ApiError } from '../http-client';
 import { authApi, login, logout, me, refresh, register } from './auth';
 
@@ -36,7 +36,6 @@ const sessionUser: SessionUser = {
   id: 'usr_1',
   email: 'player@poker.dev',
   name: 'Player One',
-  role: UserRole.PLAYER,
 };
 
 const tokens = { accessToken: 'jwt.access.token', expiresIn: 900 };
@@ -170,7 +169,6 @@ describe('api/auth', () => {
       expect(result.id).toBe('usr_1');
       expect(result.email).toBe('player@poker.dev');
       expect(result.name).toBe('Player One');
-      expect(result.role).toBe(UserRole.PLAYER);
     });
 
     it('converte 401 (sem sessão) em ApiError', async () => {
