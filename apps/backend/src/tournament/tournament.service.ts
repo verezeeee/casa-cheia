@@ -431,17 +431,19 @@ export class TournamentService {
         });
         // Nível EFETIVO (não o gravado): o relógio anda sozinho por tempo de
         // parede (`advanceClockToNow`) e ninguém pode ter mexido nele
-        // recentemente — sem isto, o corte de `reentryUntilLevel` abaixo
-        // deixaria passar uma reentrada tardia só porque a coluna no banco
-        // ainda não tinha sido atualizada por um `next()` manual.
+        // recentemente — sem isto, o corte por nível abaixo deixaria passar
+        // uma inscrição tardia só porque a coluna no banco ainda não tinha
+        // sido atualizada por um `next()` manual.
+        const now = new Date();
         const currentLevelNumber = advanceClockToNow(
           tournament,
           tournament.blindLevels,
-          new Date(),
+          now,
         ).currentLevelNumber;
         assertRegistrationAllowed(
           { ...tournament, currentLevelNumber },
           previousEntries,
+          now,
         );
 
         // Conta só quem está VIVO: com reentry, o eliminado devolveu a vaga.
@@ -538,6 +540,103 @@ export class TournamentService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Cancela a PRÓPRIA inscrição — só antes do torneio começar (`REGISTERING`).
+   * Depois disso (`RUNNING`) a ficha já pode ter mudado de mãos na mesa;
+   * "desistir" vira uma eliminação de verdade, que é decisão do staff
+   * (`eliminateEntry`), não um botão do jogador.
+   *
+   * Devolve buy-in + fee + bônus de staff (se pago) — reverso exato do
+   * débito de `registerEntry`. Não deleta a entry (histórico append-only):
+   * vira `REFUNDED`, o mesmo status que a unique parcial
+   * (`tournament_entries_active_user_unique`) e a contagem de
+   * `previousEntries` já tratam como "não conta" — o jogador pode se
+   * inscrever de novo depois, como se fosse a primeira vez.
+   */
+  async unregisterEntry(
+    userId: string,
+    clubeId: string,
+    tournamentId: string,
+    idempotencyKey: string,
+  ): Promise<TournamentEntryDto> {
+    const ledgerKey = `tournament-refund:${idempotencyKey}`;
+
+    const replay = await findReplay(this.prisma, clubeId, ledgerKey);
+    if (replay) return toTournamentEntryDto(replay);
+
+    const entry = await this.prisma.withClube(clubeId, async (tx) => {
+      await lockTournament(tx, clubeId, tournamentId);
+
+      const twin = await findReplay(tx, clubeId, ledgerKey);
+      if (twin) return twin;
+
+      const tournament = await tx.tournament.findUniqueOrThrow({
+        where: { id: tournamentId },
+      });
+      if (tournament.status !== 'REGISTERING') {
+        throw new BadRequestException(
+          'Só é possível cancelar a inscrição antes do torneio começar.',
+        );
+      }
+
+      const existing = await tx.tournamentEntry.findFirst({
+        where: { tournamentId, userId, status: 'REGISTERED' },
+      });
+      if (!existing) {
+        throw new NotFoundException('Você não está inscrito neste torneio.');
+      }
+
+      await tx.tournamentSeat.updateMany({
+        where: { tournamentEntryId: existing.id, active: true },
+        data: { active: false, releasedAt: new Date() },
+      });
+
+      const wallet = await tx.wallet.findUniqueOrThrow({
+        where: { userId_clubeId: { userId, clubeId } },
+      });
+      let refund = new Prisma.Decimal(tournament.buyIn).add(tournament.fee);
+      let description = 'Cancelamento de inscrição em torneio';
+      if (existing.staffBonusPaid) {
+        refund = refund.add(tournament.staffBonusCost ?? 0);
+        description += ' (+ bônus de staff)';
+      }
+
+      await this.walletService.applyLedgerEntry(tx, wallet.id, {
+        type: 'TOURNAMENT_REFUND',
+        amount: refund,
+        idempotencyKey: ledgerKey,
+        description,
+        tournamentEntryId: existing.id,
+      });
+
+      await tx.tournament.update({
+        where: { id: tournamentId },
+        data: {
+          prizePool: { decrement: tournament.buyIn },
+          version: { increment: 1 },
+        },
+      });
+
+      const updated = await tx.tournamentEntry.update({
+        where: { id: existing.id },
+        data: { status: 'REFUNDED', chipStack: 0 },
+        include: ENTRY_INCLUDE,
+      });
+
+      // Mesmo pós-processamento de assento de `eliminateEntry`: libera a
+      // mesa se ela esvaziou e rebalanceia quem restou, mesmo estando ainda
+      // em REGISTERING (o MVP senta o jogador já na inscrição — ver docblock
+      // de `registerEntry`).
+      const tables = await this.readTables(tx, tournamentId);
+      await this.applyMoves(tx, tables, planRebalance(toSnapshots(tables)));
+      await closeEmptyTables(tx, tournamentId);
+
+      return updated;
+    });
+
+    return toTournamentEntryDto(entry);
   }
 
   /**
@@ -1095,8 +1194,10 @@ function assertRegistrationAllowed(
     maxReentries: number | null;
     reentryUntilLevel: number | null;
     currentLevelNumber: number | null;
+    lateRegUntil: Date | null;
   },
   previousEntries: number,
+  now: Date,
 ): void {
   const isReentry = previousEntries > 0;
 
@@ -1112,26 +1213,36 @@ function assertRegistrationAllowed(
         `Limite de ${tournament.maxReentries} reentrada(s) por jogador já atingido.`,
       );
     }
-    if (
-      tournament.reentryUntilLevel !== null &&
-      tournament.currentLevelNumber !== null &&
-      tournament.currentLevelNumber > tournament.reentryUntilLevel
-    ) {
-      throw new BadRequestException(
-        `Reentradas encerradas — o torneio passou do nível ${tournament.reentryUntilLevel}.`,
-      );
-    }
   }
 
   // Reentrada em torneio já RUNNING é o caso NORMAL (o jogador só reentra
   // depois de ser eliminado, e a primeira eliminação já mudou o status).
-  // Inscrição nova continua exigindo REGISTERING.
+  // Inscrição NOVA em torneio RUNNING é "late registration": só entra dentro
+  // de `lateRegUntil` (nulo = torneio não admite tardia, ver docblock do
+  // campo em tournament.prisma) — reentrada não passa por este relógio, só
+  // pelo corte de nível abaixo, igual sempre foi.
   const open =
     tournament.status === 'REGISTERING' ||
-    (isReentry && tournament.status === 'RUNNING');
+    (tournament.status === 'RUNNING' &&
+      (isReentry ||
+        (tournament.lateRegUntil !== null && now <= tournament.lateRegUntil)));
   if (!open) {
     throw new BadRequestException(
       'Inscrições não estão abertas para este torneio.',
+    );
+  }
+
+  // Corte por NÍVEL: mesmo campo (`reentryUntilLevel`) fecha tanto reentrada
+  // quanto inscrição nova tardia — na mesa, "late reg" e "re-entry" fecham no
+  // mesmo instante/nível, é uma janela só.
+  if (
+    tournament.status === 'RUNNING' &&
+    tournament.reentryUntilLevel !== null &&
+    tournament.currentLevelNumber !== null &&
+    tournament.currentLevelNumber > tournament.reentryUntilLevel
+  ) {
+    throw new BadRequestException(
+      `Inscrições encerradas — o torneio passou do nível ${tournament.reentryUntilLevel}.`,
     );
   }
 }

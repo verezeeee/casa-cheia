@@ -13,6 +13,7 @@ const TYPE_LABEL: Record<WalletTransactionDto['type'], string> = {
   TABLE_CASH_OUT: 'Cash-out de mesa',
   TOURNAMENT_BUY_IN: 'Inscrição em torneio',
   TOURNAMENT_PAYOUT: 'Premiação de torneio',
+  TOURNAMENT_REFUND: 'Cancelamento de inscrição',
   ADJUSTMENT: 'Ajuste administrativo',
 };
 

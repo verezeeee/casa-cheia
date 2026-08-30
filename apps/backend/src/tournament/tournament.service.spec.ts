@@ -103,6 +103,7 @@ function buildPrisma() {
       create: jest.fn(),
       update: jest.fn(),
       findUnique: shared.entryFindUnique,
+      findFirst: jest.fn(),
       findMany: jest.fn().mockResolvedValue([]),
       count: shared.entryCount,
     },
@@ -955,7 +956,7 @@ describe('TournamentService', () => {
 
       await expect(
         service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-2'),
-      ).rejects.toThrow(/Reentradas encerradas/);
+      ).rejects.toThrow(/Inscrições encerradas/);
     });
 
     it('recusa por nível-limite mesmo quando a coluna gravada está DESATUALIZADA (relógio andou sozinho)', async () => {
@@ -997,7 +998,7 @@ describe('TournamentService', () => {
 
         await expect(
           service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-2'),
-        ).rejects.toThrow(/Reentradas encerradas/);
+        ).rejects.toThrow(/Inscrições encerradas/);
       } finally {
         jest.useRealTimers();
       }
@@ -1039,6 +1040,199 @@ describe('TournamentService', () => {
           }),
         }),
       );
+    });
+  });
+
+  // Inscrição NOVA (não reentrada) num torneio já RUNNING — "late registration".
+  describe('registerEntry (late registration em torneio RUNNING)', () => {
+    it('aceita inscrição nova dentro do lateRegUntil', async () => {
+      const { service, prisma, walletService } = buildService();
+      primeRegister(prisma, walletService, {
+        ...TOURNAMENT,
+        status: 'RUNNING',
+        lateRegUntil: new Date(Date.now() + 60_000),
+      });
+
+      await expect(
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
+      ).resolves.toBeDefined();
+    });
+
+    it('recusa inscrição nova sem lateRegUntil configurado', async () => {
+      const { service, prisma } = buildService();
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.tournament.findUnique.mockResolvedValue({
+        ...TOURNAMENT,
+        status: 'RUNNING',
+        lateRegUntil: null,
+      });
+
+      await expect(
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
+      ).rejects.toThrow(/Inscrições não estão abertas/);
+    });
+
+    it('recusa inscrição nova depois do lateRegUntil', async () => {
+      const { service, prisma } = buildService();
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.tournament.findUnique.mockResolvedValue({
+        ...TOURNAMENT,
+        status: 'RUNNING',
+        lateRegUntil: new Date(Date.now() - 60_000),
+      });
+
+      await expect(
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
+      ).rejects.toThrow(/Inscrições não estão abertas/);
+    });
+
+    it('recusa inscrição nova depois do nível-limite mesmo dentro do lateRegUntil', async () => {
+      const { service, prisma } = buildService();
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.tournament.findUnique.mockResolvedValue({
+        ...TOURNAMENT,
+        status: 'RUNNING',
+        lateRegUntil: new Date(Date.now() + 60_000),
+        reentryUntilLevel: 2,
+        currentLevelNumber: 3,
+      });
+
+      await expect(
+        service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
+      ).rejects.toThrow(/Inscrições encerradas/);
+    });
+  });
+
+  describe('unregisterEntry', () => {
+    const registered = {
+      id: 'entry-1',
+      tournamentId: 'trn-1',
+      userId: 'user-1',
+      status: 'REGISTERED',
+      staffBonusPaid: false,
+    };
+
+    it('rejeita cancelar depois que o torneio começou', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue({
+        ...TOURNAMENT,
+        status: 'RUNNING',
+      });
+
+      await expect(
+        service.unregisterEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.tx.tournamentEntry.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('lança 404 quando o usuário não tem inscrição ativa', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue(TOURNAMENT);
+      prisma.tx.tournamentEntry.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.unregisterEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('devolve buy-in+fee, marca REFUNDED e libera o assento', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue(TOURNAMENT);
+      prisma.tx.tournamentEntry.findFirst.mockResolvedValue(registered);
+      prisma.tx.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-refund' });
+      prisma.tx.tournamentEntry.update.mockResolvedValue({
+        ...ENTRY_ROW,
+        status: 'REFUNDED',
+        chipStack: 0,
+      });
+
+      const result = await service.unregisterEntry(
+        'user-1',
+        CLUBE_ID,
+        'trn-1',
+        'idem-1',
+      );
+
+      expect(prisma.tx.tournamentSeat.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tournamentEntryId: 'entry-1', active: true },
+          data: expect.objectContaining({ active: false }),
+        }),
+      );
+      const [, walletId, params] = walletService.applyLedgerEntry.mock.calls[0];
+      expect(walletId).toBe(WALLET.id);
+      expect(params).toEqual(
+        expect.objectContaining({
+          type: 'TOURNAMENT_REFUND',
+          idempotencyKey: 'tournament-refund:idem-1',
+          tournamentEntryId: 'entry-1',
+        }),
+      );
+      expect((params.amount as Prisma.Decimal).toFixed(2)).toBe('100.00'); // buyIn 90 + fee 10
+      expect(prisma.tx.tournament.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            prizePool: { decrement: TOURNAMENT.buyIn },
+          }),
+        }),
+      );
+      expect(prisma.tx.tournamentEntry.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'entry-1' },
+          data: { status: 'REFUNDED', chipStack: 0 },
+        }),
+      );
+      expect(result.status).toBe('REFUNDED');
+    });
+
+    it('inclui o bônus de staff no reembolso quando foi pago na inscrição', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue({
+        ...TOURNAMENT,
+        staffBonusCost: new Prisma.Decimal('20.00'),
+        staffBonusChips: 5000,
+      });
+      prisma.tx.tournamentEntry.findFirst.mockResolvedValue({
+        ...registered,
+        staffBonusPaid: true,
+      });
+      prisma.tx.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-refund' });
+      prisma.tx.tournamentEntry.update.mockResolvedValue({
+        ...ENTRY_ROW,
+        status: 'REFUNDED',
+        chipStack: 0,
+      });
+
+      await service.unregisterEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1');
+
+      const [, , params] = walletService.applyLedgerEntry.mock.calls[0];
+      expect((params.amount as Prisma.Decimal).toFixed(2)).toBe('120.00'); // 90 + 10 + 20
+    });
+
+    it('é idempotente: replay via chave de idempotência devolve a mesma entry sem repetir a transação', async () => {
+      const { service, prisma } = buildService();
+      prisma.walletTransaction.findUnique.mockResolvedValue({
+        tournamentEntryId: 'entry-1',
+      });
+      prisma.tournamentEntry.findUnique.mockResolvedValue({
+        ...ENTRY_ROW,
+        status: 'REFUNDED',
+      });
+
+      const result = await service.unregisterEntry(
+        'user-1',
+        CLUBE_ID,
+        'trn-1',
+        'idem-1',
+      );
+
+      expect(result.status).toBe('REFUNDED');
+      expect(prisma.withClube).not.toHaveBeenCalled();
     });
   });
 

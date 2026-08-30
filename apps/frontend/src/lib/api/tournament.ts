@@ -25,6 +25,7 @@ const TOURNAMENT_PATHS = {
   detail: (id: string) => `${base()}/${id}`,
   register: (id: string) => `${base()}/${id}/register`,
   registerForUser: (id: string, userId: string) => `${base()}/${id}/register/${userId}`,
+  unregister: (id: string) => `${base()}/${id}/unregister`,
   eliminate: (id: string, entryId: string) => `${base()}/${id}/entries/${entryId}/eliminate`,
   finish: (id: string) => `${base()}/${id}/finish`,
   redraw: (id: string) => `${base()}/${id}/redraw`,
@@ -75,6 +76,13 @@ export function registerEntry(
   // (`dto.staffBonus ?? false`), isto é só para não mandar `"{}"` à toa.
   const body = input.staffBonus === undefined ? undefined : input;
   return httpClient.post<TournamentEntryDto>(TOURNAMENT_PATHS.register(id), body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+}
+
+/** Cancela a PRÓPRIA inscrição — só antes do torneio começar (o backend recusa com 400 depois). */
+export function unregisterEntry(id: string, idempotencyKey: string): Promise<TournamentEntryDto> {
+  return httpClient.post<TournamentEntryDto>(TOURNAMENT_PATHS.unregister(id), undefined, {
     headers: { 'Idempotency-Key': idempotencyKey },
   });
 }
@@ -168,6 +176,7 @@ export const tournamentApi = {
   updateTournament,
   getTournament,
   registerEntry,
+  unregisterEntry,
   registerEntryForUser,
   eliminateEntry,
   finishTournament,

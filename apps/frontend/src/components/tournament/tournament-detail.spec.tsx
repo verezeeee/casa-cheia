@@ -1,8 +1,9 @@
 import { ClubeRole } from '@poker-system/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { useSession } from '@/components/providers/session-provider';
+import { clubMembersApi } from '@/lib/api/club';
 import { tournamentApi } from '@/lib/api/tournament';
 import { TournamentDetail } from './tournament-detail';
 
@@ -10,10 +11,16 @@ jest.mock('@/lib/api/tournament', () => ({
   tournamentApi: {
     getTournament: jest.fn(),
     registerEntry: jest.fn(),
+    unregisterEntry: jest.fn(),
+    registerEntryForUser: jest.fn(),
     eliminateEntry: jest.fn(),
     finishTournament: jest.fn(),
     updateTournament: jest.fn(),
   },
+}));
+
+jest.mock('@/lib/api/club', () => ({
+  clubMembersApi: { listMembers: jest.fn() },
 }));
 
 // `EditTournamentForm` (montado ao clicar em "Editar") busca o catálogo de
@@ -132,6 +139,46 @@ describe('TournamentDetail', () => {
       expect(screen.getByText('Você está inscrito neste torneio.')).toBeInTheDocument(),
     );
     expect(screen.queryByText('Inscrever-se')).not.toBeInTheDocument();
+  });
+
+  it('permite cancelar a própria inscrição antes do torneio começar', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'other', email: 'other@x.dev', name: 'Outro' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
+    (tournamentApi.unregisterEntry as jest.Mock).mockResolvedValue({});
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Cancelar inscrição')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Cancelar inscrição'));
+    await waitFor(() =>
+      expect(tournamentApi.unregisterEntry).toHaveBeenCalledWith('trn-1', expect.any(String)),
+    );
+  });
+
+  it('não mostra a opção de cancelar depois que o torneio começou', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'other', email: 'other@x.dev', name: 'Outro' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      status: 'RUNNING' as const,
+    });
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() =>
+      expect(screen.getByText('Você está inscrito neste torneio.')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Cancelar inscrição')).not.toBeInTheDocument();
   });
 
   it('destaca mesa e assento do jogador e repete na linha da listagem', async () => {
@@ -283,6 +330,68 @@ describe('TournamentDetail', () => {
     await waitFor(() => expect(screen.getByText(TOURNAMENT.name)).toBeInTheDocument());
 
     expect(screen.queryByText('Editar')).not.toBeInTheDocument();
+  });
+
+  it('ADMIN busca um membro, revisa o modal de confirmação e inscreve em nome dele', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      staffBonusCost: '5.00',
+      staffBonusChips: 2_500,
+    });
+    (clubMembersApi.listMembers as jest.Mock).mockResolvedValue([
+      {
+        id: 'mem-2',
+        userId: 'user-2',
+        name: 'Novo Jogador',
+        email: 'novo@x.dev',
+        document: null,
+        role: 'PLAYER',
+        status: 'ACTIVE',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+    (tournamentApi.registerEntryForUser as jest.Mock).mockResolvedValue({});
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Inscrever jogador')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText('Nome, e-mail ou CPF'), {
+      target: { value: 'novo' },
+    });
+    await waitFor(() => expect(screen.getByText('Novo Jogador')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Inscrever'));
+
+    // Modal mostra pra quem/qual torneio/valores antes de confirmar — escopado
+    // ao próprio diálogo porque "Sunday Major"/"R$ 90,00" também aparecem no
+    // card de topo, atrás dele.
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getByRole('heading', { name: 'Confirmar inscrição' })).toBeInTheDocument();
+    expect(dialog.getByText(/Novo Jogador/)).toBeInTheDocument();
+    expect(dialog.getByText(TOURNAMENT.name)).toBeInTheDocument();
+    expect(dialog.getByText('R$ 90,00')).toBeInTheDocument(); // buy-in
+    expect(dialog.getByText('R$ 10,00')).toBeInTheDocument(); // taxa
+
+    fireEvent.click(dialog.getByRole('checkbox', { name: /bônus de staff/i }));
+    fireEvent.click(dialog.getByRole('button', { name: 'Confirmar inscrição' }));
+
+    await waitFor(() =>
+      expect(tournamentApi.registerEntryForUser).toHaveBeenCalledWith(
+        'trn-1',
+        'user-2',
+        expect.any(String),
+        { staffBonus: true },
+      ),
+    );
+    // Fecha o modal e limpa a busca depois de inscrever.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('mostra mensagem de erro quando a query falha', async () => {

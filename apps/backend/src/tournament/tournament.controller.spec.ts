@@ -51,6 +51,7 @@ function buildController() {
       | 'listTournaments'
       | 'getTournament'
       | 'registerEntry'
+      | 'unregisterEntry'
       | 'eliminateEntry'
       | 'finishTournament'
     >
@@ -60,6 +61,7 @@ function buildController() {
     listTournaments: jest.fn(),
     getTournament: jest.fn(),
     registerEntry: jest.fn(),
+    unregisterEntry: jest.fn(),
     eliminateEntry: jest.fn(),
     finishTournament: jest.fn(),
   };
@@ -217,6 +219,31 @@ describe('TournamentController', () => {
         'trn-1',
         'idem-1',
         true,
+      );
+    });
+  });
+
+  describe('unregister', () => {
+    it('exige Idempotency-Key', async () => {
+      const { controller } = buildController();
+      await expect(
+        controller.unregister(PLAYER, CLUBE_ID, 'trn-1', undefined),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('delega ao service com o id de quem chama', async () => {
+      const { controller, tournamentService } = buildController();
+      tournamentService.unregisterEntry.mockResolvedValue({
+        ...ENTRY,
+        status: TournamentEntryStatus.REFUNDED,
+      });
+
+      await controller.unregister(PLAYER, CLUBE_ID, 'trn-1', 'idem-1');
+      expect(tournamentService.unregisterEntry).toHaveBeenCalledWith(
+        PLAYER.id,
+        CLUBE_ID,
+        'trn-1',
+        'idem-1',
       );
     });
   });

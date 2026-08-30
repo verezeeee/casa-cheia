@@ -111,6 +111,23 @@ export class TournamentController {
     );
   }
 
+  /** Cancela a PRÓPRIA inscrição — só antes do torneio começar (ver docblock do service). */
+  @Post(':id/unregister')
+  async unregister(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('clubeId') clubeId: string,
+    @Param('id') tournamentId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ): Promise<TournamentEntryDto> {
+    requireIdempotencyKey(idempotencyKey);
+    return this.tournamentService.unregisterEntry(
+      user.id,
+      clubeId,
+      tournamentId,
+      idempotencyKey,
+    );
+  }
+
   /**
    * ADMIN registrando outro membro do clube (já cadastrado) no torneio — ex.:
    * jogador chegou na mesa e quem lança a ficha é o staff. Mesma regra de

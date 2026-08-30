@@ -6,14 +6,24 @@ import {
   ClubeRole,
   ClubeMembershipStatus,
 } from '@poker-system/shared';
-import type { TournamentEntryDto } from '@poker-system/shared';
+import type { ClubeMembershipDto, TournamentEntryDto } from '@poker-system/shared';
 import type { BadgeVariant } from '@/components/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
 import { clubMembersApi } from '@/lib/api/club';
 import { tournamentApi } from '@/lib/api/tournament';
-import { Badge, Button, Card, ErrorState, Input, Skeleton, TextLink, Toast } from '@/components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  Dialog,
+  ErrorState,
+  Input,
+  Skeleton,
+  TextLink,
+  Toast,
+} from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
 import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
 import { EditTournamentForm } from './edit-tournament-form';
@@ -53,6 +63,17 @@ const STATUS_GROUP_LABEL: Record<TournamentEntryStatus, string> = {
 };
 
 /**
+ * `Date.now()` FORA do componente de propósito: o lint de pureza do React
+ * Compiler recusa chamada direta a função impura no corpo de render — só
+ * dentro de uma função comum, textualmente fora do component/hook, escapa
+ * da análise (é exatamente o "não depende de estado reativo" que o lint
+ * checa; aqui é uma janela de tempo real, recalculada a cada render mesmo).
+ */
+function lateRegistrationOpen(lateRegUntil: string | null): boolean {
+  return lateRegUntil !== null && Date.now() <= new Date(lateRegUntil).getTime();
+}
+
+/**
  * "Ticket" do jogador. `null` enquanto o torneio não atribuiu assento (ou em
  * entries anteriores ao MVP de mesas, onde os campos nem existem no payload).
  */
@@ -71,6 +92,8 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const [eliminating, setEliminating] = useState<string | null>(null);
   const [finalPosition, setFinalPosition] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
+  const [confirmingMember, setConfirmingMember] = useState<ClubeMembershipDto | null>(null);
+  const [confirmStaffBonus, setConfirmStaffBonus] = useState(false);
 
   const {
     data: tournament,
@@ -115,11 +138,12 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const registerForUserMutation = useMutation({
     mutationFn: (userId: string) =>
       tournamentApi.registerEntryForUser(tournamentId, userId, crypto.randomUUID(), {
-        staffBonus: wantsStaffBonus,
+        staffBonus: confirmStaffBonus,
       }),
     onSuccess: () => {
       setError(null);
       setMemberSearch('');
+      setConfirmingMember(null);
       invalidate();
     },
     onError: (caught: unknown) => {
@@ -128,6 +152,11 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
       );
     },
   });
+
+  function openConfirmRegister(member: ClubeMembershipDto) {
+    setConfirmStaffBonus(false);
+    setConfirmingMember(member);
+  }
 
   const eliminateMutation = useMutation({
     mutationFn: (entryId: string) =>
@@ -142,6 +171,19 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
     },
     onError: (caught: unknown) => {
       setError(caught instanceof ApiError ? caught.message : 'Não foi possível eliminar.');
+    },
+  });
+
+  const unregisterMutation = useMutation({
+    mutationFn: () => tournamentApi.unregisterEntry(tournamentId, crypto.randomUUID()),
+    onSuccess: () => {
+      setError(null);
+      invalidate();
+    },
+    onError: (caught: unknown) => {
+      setError(
+        caught instanceof ApiError ? caught.message : 'Não foi possível cancelar a inscrição.',
+      );
     },
   });
 
@@ -177,11 +219,23 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const myTicket = myEntry ? seatLabel(myEntry) : null;
   // Janela de inscrição é a mesma pra jogador e pra admin registrando por
   // outro — só a checagem de "já inscrito" muda (admin exclui pelo alvo
-  // buscado, não por `myEntry`).
+  // buscado, não por `myEntry`). "Late registration": torneio já RUNNING mas
+  // ainda dentro do `lateRegUntil` — mesma regra do backend
+  // (`assertRegistrationAllowed`), exceto o corte por NÍVEL (o relógio não é
+  // buscado nesta tela; se passou do nível o backend recusa e o erro aparece
+  // no Toast normalmente).
+  const lateRegOpen =
+    tournament.status === TournamentStatus.RUNNING && lateRegistrationOpen(tournament.lateRegUntil);
   const registrationOpen =
-    tournament.status === TournamentStatus.REGISTERING &&
+    (tournament.status === TournamentStatus.REGISTERING || lateRegOpen) &&
     tournament.registeredPlayers < tournament.maxPlayers;
   const canRegister = !myEntry && registrationOpen;
+  // Mesma janela do backend (`unregisterEntry`): só antes do torneio começar
+  // — depois disso a ficha pode ter mudado de mãos na mesa, e "desistir"
+  // vira eliminação de verdade (decisão do staff, não um botão do jogador).
+  const canUnregister =
+    myEntry?.status === TournamentEntryStatus.REGISTERED &&
+    tournament.status === TournamentStatus.REGISTERING;
 
   const registeredUserIds = new Set(tournament.entries.map((e) => e.userId));
   const memberQuery = memberSearch.trim().toLowerCase();
@@ -287,6 +341,17 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
           ) : (
             <p className="mt-3 text-sm text-success">Você está inscrito neste torneio.</p>
           ))}
+        {canUnregister && (
+          <Button
+            className="mt-3"
+            variant="ghost"
+            fullWidth
+            loading={unregisterMutation.isPending}
+            onClick={() => unregisterMutation.mutate()}
+          >
+            Cancelar inscrição
+          </Button>
+        )}
 
         {isAdmin && canFinish && (
           <Button
@@ -327,14 +392,7 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
                       <p className="truncate font-medium">{member.name}</p>
                       <p className="truncate text-xs text-muted">{member.email}</p>
                     </div>
-                    <Button
-                      size="sm"
-                      loading={
-                        registerForUserMutation.isPending &&
-                        registerForUserMutation.variables === member.userId
-                      }
-                      onClick={() => registerForUserMutation.mutate(member.userId)}
-                    >
+                    <Button size="sm" onClick={() => openConfirmRegister(member)}>
                       Inscrever
                     </Button>
                   </li>
@@ -344,6 +402,65 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
           )}
         </Card>
       )}
+
+      <Dialog
+        open={confirmingMember !== null}
+        onClose={() => setConfirmingMember(null)}
+        title="Confirmar inscrição"
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirmingMember(null)}
+              disabled={registerForUserMutation.isPending}
+            >
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              loading={registerForUserMutation.isPending}
+              onClick={() => registerForUserMutation.mutate(confirmingMember!.userId)}
+            >
+              Confirmar inscrição
+            </Button>
+          </>
+        }
+      >
+        {confirmingMember && (
+          <div className="flex flex-col gap-3 text-foreground">
+            <p>
+              Inscrever <span className="font-medium">{confirmingMember.name}</span> (
+              {confirmingMember.email}) em <span className="font-medium">{tournament.name}</span>.
+            </p>
+            <dl className="flex flex-col gap-1 text-sm">
+              <div className="flex justify-between">
+                <dt className="text-muted">Buy-in</dt>
+                <dd className="font-ledger">{formatMoneySafe(tournament.buyIn)}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted">Taxa</dt>
+                <dd className="font-ledger">{formatMoneySafe(tournament.fee)}</dd>
+              </div>
+            </dl>
+            {tournament.staffBonusCost && (
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-[var(--accent)]"
+                  checked={confirmStaffBonus}
+                  onChange={(e) => setConfirmStaffBonus(e.target.checked)}
+                />
+                Bônus de staff ({formatMoneySafe(tournament.staffBonusCost)} → +
+                {tournament.staffBonusChips} fichas)
+              </label>
+            )}
+            <p className="text-xs text-muted">
+              O valor sai da carteira do próprio jogador, não da sua.
+            </p>
+          </div>
+        )}
+      </Dialog>
 
       <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1fr_1.5fr] lg:items-start lg:gap-4">
         <Card title="Grade de premiação">
