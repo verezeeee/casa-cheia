@@ -87,7 +87,7 @@ export function Button({
       {...rest}
     >
       {loading && <Spinner size={spinnerSize[size]} decorative />}
-      <span>{loading && loadingText ? loadingText : children}</span>
+      {loading && loadingText ? loadingText : children}
     </button>
   );
 }
