@@ -95,6 +95,70 @@ export type TournamentClockView = {
 };
 
 /**
+ * "Anda" o relógio pelo tempo de parede que passou desde a última escrita —
+ * é isto que faz o nível (e os segundos) avançarem SOZINHOS, sem depender de
+ * alguém clicar em "Próximo nível" (`tournament-clock.service.ts`).
+ *
+ * PURA: não escreve nada, só recalcula. Cada `levelEndsAt` seguinte nasce do
+ * `levelEndsAt` ANTERIOR + a duração do próximo nível — nunca `now +
+ * duração` — porque isso é o que mantém o resultado correto mesmo pulando
+ * vários níveis de uma vez (ex.: ninguém abriu a TV por 40 minutos): o fim de
+ * cada nível cai exatamente onde cairia se o relógio tivesse avançado nível a
+ * nível em tempo real, sem acumular deriva.
+ *
+ * Fora de `RUNNING` (ou sem `levelEndsAt`) é NO-OP: `PAUSED`/`NOT_STARTED`/
+ * `FINISHED` não andam com o relógio de parede, e é assim que já deveria ser.
+ *
+ * Usada nos dois pontos que precisam do nível FISICAMENTE correto agora, não
+ * do que estiver gravado: a leitura do relógio (`TournamentClockService.read`
+ * / `mutate`) e a checagem de corte de reentrada
+ * (`TournamentService.registerEntry`, que lê `currentLevelNumber` para
+ * comparar com `reentryUntilLevel` — sem isto, uma reentrada tardia poderia
+ * escapar do corte só porque ninguém tinha mexido no relógio recentemente).
+ */
+export function advanceClockToNow(
+  clock: TournamentClockView,
+  levels: BlindLevelRow[],
+  now: Date,
+): TournamentClockView {
+  if (clock.clockStatus !== 'RUNNING' || !clock.levelEndsAt) return clock;
+
+  const sorted = [...levels].sort((a, b) => a.levelNumber - b.levelNumber);
+  let index = sorted.findIndex(
+    (level) => level.levelNumber === clock.currentLevelNumber,
+  );
+  if (index === -1) return clock;
+
+  // Estritamente MENOR: no instante exato em que um nível termina, ele ainda
+  // é o nível corrente (com 0 restante, já clampado em `toTournamentClockDto`)
+  // — só rola pro próximo depois que o tempo passa de verdade. Com `<=` no
+  // lugar de `<`, ficar exatamente na borda entre dois níveis os pularia os
+  // dois de uma vez (e um `next()` chamado bem nessa borda avançaria dois
+  // níveis em vez de um).
+  let levelEndsAt = clock.levelEndsAt;
+  while (levelEndsAt.getTime() < now.getTime()) {
+    const next = sorted[index + 1];
+    if (!next) {
+      return {
+        clockStatus: 'FINISHED',
+        currentLevelNumber: sorted[index].levelNumber,
+        levelEndsAt: null,
+        clockRemainingMs: null,
+      };
+    }
+    index += 1;
+    levelEndsAt = new Date(levelEndsAt.getTime() + next.durationSeconds * 1000);
+  }
+
+  return {
+    clockStatus: 'RUNNING',
+    currentLevelNumber: sorted[index].levelNumber,
+    levelEndsAt,
+    clockRemainingMs: null,
+  };
+}
+
+/**
  * Projeta o estado do relógio para quem exibe. `remainingMs` é SEMPRE derivado
  * aqui, no servidor: em `RUNNING` a partir de `levelEndsAt`, em `PAUSED` do
  * valor congelado, e `0` nos estados sem contagem. `now` é o mesmo instante

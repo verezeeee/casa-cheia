@@ -156,6 +156,123 @@ describe('TournamentClockService', () => {
         NotFoundException,
       );
     });
+
+    describe('avança sozinho por tempo de parede (advanceClockToNow)', () => {
+      it('sem NENHUMA mutação prévia, já mostra o nível fisicamente correto', async () => {
+        // Nível 1 (20 min) começou; ninguém tocou no relógio depois disso.
+        const { service, tx } = buildService(
+          tournamentRow({
+            clockStatus: 'RUNNING',
+            currentLevelNumber: 1,
+            levelEndsAt: new Date(NOW.getTime() + 20 * MINUTE),
+          }),
+        );
+
+        // 20 (nível 1) + 10 (dentro do nível 2, 15 min) = passaram-se 30 min.
+        jest.setSystemTime(new Date(NOW.getTime() + 30 * MINUTE));
+        const dto = await service.read('trn-1');
+
+        expect(dto.currentLevel?.levelNumber).toBe(2);
+        expect(dto.remainingMs).toBe(5 * MINUTE); // 15 - 10
+        // `read` continua PURO: nada foi persistido só de ler.
+        expect(tx.tournament.updateMany).not.toHaveBeenCalled();
+      });
+
+      it('pula MAIS DE UM nível de uma vez sem acumular deriva', async () => {
+        // 20 (nível 1) + 15 (nível 2) + 3 (dentro do nível 3, 10 min) = 38 min.
+        const { service } = buildService(
+          tournamentRow({
+            clockStatus: 'RUNNING',
+            currentLevelNumber: 1,
+            levelEndsAt: new Date(NOW.getTime() + 20 * MINUTE),
+          }),
+        );
+
+        jest.setSystemTime(new Date(NOW.getTime() + 38 * MINUTE));
+        const dto = await service.read('trn-1');
+
+        expect(dto.currentLevel?.levelNumber).toBe(3);
+        expect(dto.remainingMs).toBe(7 * MINUTE); // 10 - 3
+      });
+
+      it('passar do ÚLTIMO nível encerra sozinho (FINISHED), só de ler', async () => {
+        const { service } = buildService(
+          tournamentRow({
+            clockStatus: 'RUNNING',
+            currentLevelNumber: 1,
+            levelEndsAt: new Date(NOW.getTime() + 20 * MINUTE),
+          }),
+        );
+
+        // 20 + 15 + 10 = 45 min é a grade inteira; passa disso.
+        jest.setSystemTime(new Date(NOW.getTime() + 50 * MINUTE));
+        const dto = await service.read('trn-1');
+
+        expect(dto.clockStatus).toBe('FINISHED');
+        expect(dto.currentLevel?.levelNumber).toBe(3); // trava no último, à vista da TV
+        expect(dto.remainingMs).toBe(0);
+        expect(dto.levelEndsAt).toBeNull();
+      });
+
+      it('PAUSED não anda com o tempo de parede — continua congelado até alguém retomar', async () => {
+        const { service } = buildService(
+          tournamentRow({
+            clockStatus: 'PAUSED',
+            currentLevelNumber: 1,
+            clockRemainingMs: 3 * MINUTE,
+          }),
+        );
+
+        jest.setSystemTime(new Date(NOW.getTime() + 3 * 60 * MINUTE));
+        const dto = await service.read('trn-1');
+
+        expect(dto.currentLevel?.levelNumber).toBe(1);
+        expect(dto.remainingMs).toBe(3 * MINUTE);
+      });
+    });
+  });
+
+  describe('avança sozinho em qualquer mutação (não só em read)', () => {
+    it('pause() chamado depois de o tempo passar 2 níveis pausa no nível fisicamente correto', async () => {
+      const { service, tx } = buildService(
+        tournamentRow({
+          clockStatus: 'RUNNING',
+          currentLevelNumber: 1,
+          levelEndsAt: new Date(NOW.getTime() + 20 * MINUTE),
+        }),
+      );
+
+      // 20 + 15 + 4 min dentro do nível 3 (10 min) = 39 min.
+      jest.setSystemTime(new Date(NOW.getTime() + 39 * MINUTE));
+      const dto = await service.pause(CLUBE_ID, 'trn-1');
+
+      expect(dto.currentLevel?.levelNumber).toBe(3);
+      expect(dto.remainingMs).toBe(6 * MINUTE); // 10 - 4
+      expect(writtenClock(tx).data).toMatchObject({
+        clockStatus: 'PAUSED',
+        currentLevelNumber: 3,
+        clockRemainingMs: 6 * MINUTE,
+      });
+    });
+
+    it('next() chamado bem depois do fim persiste o avanço + o próprio passo manual', async () => {
+      const { service, tx } = buildService(
+        tournamentRow({
+          clockStatus: 'RUNNING',
+          currentLevelNumber: 1,
+          levelEndsAt: new Date(NOW.getTime() + 20 * MINUTE),
+        }),
+      );
+
+      // Nível 1 (20 min) já teria terminado há 5 min — ninguém clicou em nada
+      // até agora. `next()` primeiro alcança o nível 2 (fisicamente atual) e
+      // DAÍ avança manualmente para o nível 3.
+      jest.setSystemTime(new Date(NOW.getTime() + 25 * MINUTE));
+      const dto = await service.next(CLUBE_ID, 'trn-1');
+
+      expect(dto.currentLevel?.levelNumber).toBe(3);
+      expect(writtenClock(tx).data.currentLevelNumber).toBe(3);
+    });
   });
 
   describe('start', () => {

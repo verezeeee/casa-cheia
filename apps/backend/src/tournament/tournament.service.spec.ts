@@ -613,6 +613,51 @@ describe('TournamentService', () => {
       ).rejects.toThrow(/Reentradas encerradas/);
     });
 
+    it('recusa por nível-limite mesmo quando a coluna gravada está DESATUALIZADA (relógio andou sozinho)', async () => {
+      // O relógio anda por tempo de parede sem precisar de `next()` manual
+      // (`advanceClockToNow`, `tournament.mappers.ts`) — `currentLevelNumber`
+      // gravado no banco pode estar atrasado se ninguém tocou no relógio
+      // recentemente. Esta é a checagem de segurança que evita uma reentrada
+      // escapar do corte só porque a coluna crua ainda não foi atualizada.
+      const anchor = new Date('2026-02-01T21:00:00.000Z');
+      jest.useFakeTimers();
+      try {
+        jest.setSystemTime(anchor);
+
+        const { service, prisma } = buildService();
+        eliminatedBefore(prisma, {
+          ...TOURNAMENT,
+          status: 'RUNNING',
+          allowReentry: true,
+          reentryUntilLevel: 2,
+          // GRAVADO como nível 1 (dentro do limite) — mas o tempo de parede
+          // já avançou fisicamente para o nível 3.
+          currentLevelNumber: 1,
+          clockStatus: 'RUNNING',
+          levelEndsAt: new Date(anchor.getTime() + 10 * 60_000), // nível 1 termina em 10 min
+          blindLevels: [1, 2, 3].map((levelNumber) => ({
+            levelNumber,
+            smallBlind: 25 * levelNumber,
+            bigBlind: 50 * levelNumber,
+            ante: 0,
+            durationSeconds: 600, // 10 min cada
+            isBreak: false,
+            breakLabel: null,
+          })),
+        });
+
+        // 25 min de tempo real: nível 1 (10) + nível 2 (10) + 5 min dentro do
+        // nível 3 — bem além do corte de reentrada (nível 2).
+        jest.setSystemTime(new Date(anchor.getTime() + 25 * 60_000));
+
+        await expect(
+          service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-2'),
+        ).rejects.toThrow(/Reentradas encerradas/);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('aceita reentrada em torneio já RUNNING, com novo assento e prize pool', async () => {
       const { service, prisma, walletService } = buildService();
       primeRegister(prisma, walletService, {

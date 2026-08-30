@@ -8,7 +8,7 @@ import type { TournamentClockDto } from '@poker-system/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import type { UpdateBlindLevelDto } from './dto/update-blind-level.dto';
 import type { BlindLevelRow, TournamentClockView } from './tournament.mappers';
-import { toTournamentClockDto } from './tournament.mappers';
+import { advanceClockToNow, toTournamentClockDto } from './tournament.mappers';
 
 const MAX_ATTEMPTS = 3;
 
@@ -44,6 +44,15 @@ type ClockPlan = {
  * nível com o relógio parado); `FINISHED` é terminal. A invariante de colunas
  * (`RUNNING ⇒ levelEndsAt`, `PAUSED ⇒ clockRemainingMs`) é a mesma do CHECK
  * `tournaments_clock_state_coherent`.
+ *
+ * RUNNING também anda SOZINHO pelo tempo de parede: ninguém precisa clicar em
+ * "Próximo nível" no instante exato em que o cronômetro zera. Toda leitura
+ * (`read`) e toda mutação (`pause`/`resume`/`next`/`previous`/`updateLevel`)
+ * passa o estado gravado por `advanceClockToNow` (`tournament.mappers.ts`)
+ * antes de usá-lo — inclusive pulando vários níveis de uma vez se ninguém
+ * olhou o relógio por um tempo, e virando `FINISHED` sozinho ao passar do
+ * último nível. `next`/`previous` continuam existindo para o diretor corrigir
+ * manualmente (ex.: pular um nível de propósito).
  */
 @Injectable()
 export class TournamentClockService {
@@ -71,7 +80,9 @@ export class TournamentClockService {
     });
     if (!tournament) throw new NotFoundException('Torneio não encontrado.');
 
-    return toTournamentClockDto(tournament, tournament.blindLevels, new Date());
+    const now = new Date();
+    const clock = advanceClockToNow(tournament, tournament.blindLevels, now);
+    return toTournamentClockDto(clock, tournament.blindLevels, now);
   }
 
   /** `NOT_STARTED → RUNNING`, no primeiro nível da grade. */
@@ -280,8 +291,13 @@ export class TournamentClockService {
       if (!tournament) throw new NotFoundException('Torneio não encontrado.');
 
       const now = new Date();
-      const { clock, levels, levelWrite } = plan(
+      const advanced = advanceClockToNow(
         tournament,
+        tournament.blindLevels,
+        now,
+      );
+      const { clock, levels, levelWrite } = plan(
+        advanced,
         tournament.blindLevels,
         now,
       );

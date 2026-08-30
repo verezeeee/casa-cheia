@@ -22,6 +22,7 @@ import type { Move, TableSnapshot } from './seating';
 import { planInitialSeat, planRebalance, planRedraw } from './seating';
 import type { TournamentTableRow } from './tournament.mappers';
 import {
+  advanceClockToNow,
   toPublicTournamentTableMapDto,
   toTournamentDetailResponse,
   toTournamentEntryDto,
@@ -287,6 +288,7 @@ export class TournamentService {
 
         const tournament = await tx.tournament.findUniqueOrThrow({
           where: { id: tournamentId },
+          include: { blindLevels: { orderBy: { levelNumber: 'asc' } } },
         });
 
         // Inscrições ANTERIORES deste jogador neste torneio (as vivas o banco
@@ -295,7 +297,25 @@ export class TournamentService {
         const previousEntries = await tx.tournamentEntry.count({
           where: { tournamentId, userId, status: { not: 'REFUNDED' } },
         });
-        assertRegistrationAllowed(tournament, previousEntries);
+        // Nível EFETIVO (não o gravado): o relógio anda sozinho por tempo de
+        // parede (`advanceClockToNow`) e ninguém pode ter mexido nele
+        // recentemente — sem isto, o corte de `reentryUntilLevel` abaixo
+        // deixaria passar uma reentrada tardia só porque a coluna no banco
+        // ainda não tinha sido atualizada por um `next()` manual.
+        // Nível EFETIVO (não o gravado): o relógio anda sozinho por tempo de
+        // parede (`advanceClockToNow`) e ninguém pode ter mexido nele
+        // recentemente — sem isto, o corte de `reentryUntilLevel` abaixo
+        // deixaria passar uma reentrada tardia só porque a coluna no banco
+        // ainda não tinha sido atualizada por um `next()` manual.
+        const currentLevelNumber = advanceClockToNow(
+          tournament,
+          tournament.blindLevels,
+          new Date(),
+        ).currentLevelNumber;
+        assertRegistrationAllowed(
+          { ...tournament, currentLevelNumber },
+          previousEntries,
+        );
 
         // Conta só quem está VIVO: com reentry, o eliminado devolveu a vaga.
         const aliveCount = await tx.tournamentEntry.count({
