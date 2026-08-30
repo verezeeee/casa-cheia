@@ -12,6 +12,7 @@ jest.mock('@/lib/api/tournament', () => ({
     getTournament: jest.fn(),
     registerEntry: jest.fn(),
     unregisterEntry: jest.fn(),
+    unregisterEntryForUser: jest.fn(),
     registerEntryForUser: jest.fn(),
     eliminateEntry: jest.fn(),
     finishTournament: jest.fn(),
@@ -245,6 +246,48 @@ describe('TournamentDetail', () => {
 
     fireEvent.click(screen.getByText('Encerrar torneio'));
     await waitFor(() => expect(tournamentApi.finishTournament).toHaveBeenCalledWith('trn-1'));
+  });
+
+  it('ADMIN pode cancelar a inscrição de outro jogador antes do torneio começar', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
+    (tournamentApi.unregisterEntryForUser as jest.Mock).mockResolvedValue({});
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Cancelar inscrição')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Cancelar inscrição'));
+    await waitFor(() =>
+      expect(tournamentApi.unregisterEntryForUser).toHaveBeenCalledWith(
+        'trn-1',
+        'other',
+        expect.any(String),
+      ),
+    );
+  });
+
+  it('ADMIN não vê a opção de cancelar inscrição de outro jogador depois que o torneio começou', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      status: 'RUNNING' as const,
+    });
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Eliminar')).toBeInTheDocument());
+    expect(screen.queryByText('Cancelar inscrição')).not.toBeInTheDocument();
   });
 
   it('linka mesas, relógio e TV — a TV em nova aba', async () => {

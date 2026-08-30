@@ -26,6 +26,7 @@ const TOURNAMENT_PATHS = {
   register: (id: string) => `${base()}/${id}/register`,
   registerForUser: (id: string, userId: string) => `${base()}/${id}/register/${userId}`,
   unregister: (id: string) => `${base()}/${id}/unregister`,
+  unregisterForUser: (id: string, userId: string) => `${base()}/${id}/unregister/${userId}`,
   eliminate: (id: string, entryId: string) => `${base()}/${id}/entries/${entryId}/eliminate`,
   finish: (id: string) => `${base()}/${id}/finish`,
   redraw: (id: string) => `${base()}/${id}/redraw`,
@@ -85,6 +86,21 @@ export function unregisterEntry(id: string, idempotencyKey: string): Promise<Tou
   return httpClient.post<TournamentEntryDto>(TOURNAMENT_PATHS.unregister(id), undefined, {
     headers: { 'Idempotency-Key': idempotencyKey },
   });
+}
+
+/** ADMIN. Cancela a inscrição de OUTRO membro — mesma janela de `unregisterEntry`. */
+export function unregisterEntryForUser(
+  id: string,
+  userId: string,
+  idempotencyKey: string,
+): Promise<TournamentEntryDto> {
+  return httpClient.post<TournamentEntryDto>(
+    TOURNAMENT_PATHS.unregisterForUser(id, userId),
+    undefined,
+    {
+      headers: { 'Idempotency-Key': idempotencyKey },
+    },
+  );
 }
 
 /** ADMIN. Inscreve outro membro do clube (já cadastrado) — buy-in sai da carteira dele, não da de quem chama. */
@@ -177,6 +193,7 @@ export const tournamentApi = {
   getTournament,
   registerEntry,
   unregisterEntry,
+  unregisterEntryForUser,
   registerEntryForUser,
   eliminateEntry,
   finishTournament,

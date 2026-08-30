@@ -248,6 +248,41 @@ describe('TournamentController', () => {
     });
   });
 
+  describe('unregisterForUser (admin)', () => {
+    it('exige Idempotency-Key', async () => {
+      const { controller } = buildController();
+      await expect(
+        controller.unregisterForUser(
+          CLUBE_ID,
+          'trn-1',
+          'other-user',
+          undefined,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('delega ao service com o id do ALVO, não de quem chama', async () => {
+      const { controller, tournamentService } = buildController();
+      tournamentService.unregisterEntry.mockResolvedValue({
+        ...ENTRY,
+        status: TournamentEntryStatus.REFUNDED,
+      });
+
+      await controller.unregisterForUser(
+        CLUBE_ID,
+        'trn-1',
+        'other-user',
+        'idem-1',
+      );
+      expect(tournamentService.unregisterEntry).toHaveBeenCalledWith(
+        'other-user',
+        CLUBE_ID,
+        'trn-1',
+        'idem-1',
+      );
+    });
+  });
+
   describe('registerForUser (admin)', () => {
     it('exige Idempotency-Key', async () => {
       const { controller } = buildController();

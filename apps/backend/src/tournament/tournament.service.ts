@@ -984,8 +984,13 @@ export class TournamentService {
       where: { tournamentId, clubeId },
     });
 
-    const remaining = entries.filter(
-      (e) => e.status !== 'ELIMINATED' && e.status !== 'PAID',
+    // Mesma definição de "ainda em jogo" usada no cap de vagas em
+    // `registerEntry` (`ALIVE_STATUSES`) — era uma lista de exclusão própria
+    // aqui (`!== 'ELIMINATED' && !== 'PAID'`) que ficou pra trás quando
+    // `REFUNDED` (cancelamento de inscrição) foi introduzido: uma inscrição
+    // cancelada contava como "ainda ativa" e travava o encerramento sozinha.
+    const remaining = entries.filter((e) =>
+      (ALIVE_STATUSES as readonly string[]).includes(e.status),
     );
     let winnerId: string | null = null;
     if (remaining.length === 1) {

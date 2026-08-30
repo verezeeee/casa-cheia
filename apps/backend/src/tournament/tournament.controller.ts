@@ -154,6 +154,29 @@ export class TournamentController {
     );
   }
 
+  /**
+   * ADMIN cancelando a inscrição de OUTRO membro — mesmo service de
+   * `unregister` (mesma regra: só antes do torneio começar), só muda de
+   * quem é o alvo (`userId` da rota, não `user.id` do token).
+   */
+  @Post(':id/unregister/:userId')
+  @UseGuards(RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async unregisterForUser(
+    @Param('clubeId') clubeId: string,
+    @Param('id') tournamentId: string,
+    @Param('userId') userId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ): Promise<TournamentEntryDto> {
+    requireIdempotencyKey(idempotencyKey);
+    return this.tournamentService.unregisterEntry(
+      userId,
+      clubeId,
+      tournamentId,
+      idempotencyKey,
+    );
+  }
+
   @Post(':id/entries/:entryId/eliminate')
   @UseGuards(RolesGuard)
   @Roles(ClubeRole.ADMIN)

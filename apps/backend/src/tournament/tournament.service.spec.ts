@@ -1495,5 +1495,53 @@ describe('TournamentService', () => {
         }),
       );
     });
+
+    it('não conta inscrição REFUNDED (cancelada) como ainda ativa', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.tournament.findUnique.mockResolvedValueOnce(TOURNAMENT); // status check
+      prisma.tournamentPrize.findMany.mockResolvedValue([
+        { position: 1, percentage: new Prisma.Decimal('100.00') },
+      ]);
+      prisma.tournamentEntry.findMany
+        .mockResolvedValueOnce([
+          {
+            id: 'e1',
+            userId: 'u1',
+            status: 'PLAYING',
+            finalPosition: null,
+            payoutTransactionId: null,
+          },
+          // Cancelou a própria inscrição antes do torneio começar — não
+          // deveria contar como "ainda em jogo" e travar o auto-detect do
+          // campeão (é a regressão que `unregisterEntry` teria introduzido
+          // sem o filtro por `ALIVE_STATUSES` aqui).
+          {
+            id: 'e2',
+            userId: 'u2',
+            status: 'REFUNDED',
+            finalPosition: null,
+            payoutTransactionId: null,
+          },
+        ])
+        .mockResolvedValueOnce([]); // getTournament() ao final.
+      prisma.tx.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-payout' });
+      prisma.tournament.findUnique.mockResolvedValueOnce({
+        ...TOURNAMENT,
+        status: 'FINISHED',
+        _count: { entries: 2 },
+      });
+
+      await service.finishTournament(CLUBE_ID, 'trn-1');
+
+      // Só 1 payout: o campeão inferido (e1). A REFUNDED não recebe nada.
+      expect(walletService.applyLedgerEntry).toHaveBeenCalledTimes(1);
+      expect(prisma.tx.tournamentEntry.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'e1' },
+          data: expect.objectContaining({ status: 'PAID', finalPosition: 1 }),
+        }),
+      );
+    });
   });
 });

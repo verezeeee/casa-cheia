@@ -187,6 +187,20 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
     },
   });
 
+  const unregisterForUserMutation = useMutation({
+    mutationFn: (userId: string) =>
+      tournamentApi.unregisterEntryForUser(tournamentId, userId, crypto.randomUUID()),
+    onSuccess: () => {
+      setError(null);
+      invalidate();
+    },
+    onError: (caught: unknown) => {
+      setError(
+        caught instanceof ApiError ? caught.message : 'Não foi possível cancelar a inscrição.',
+      );
+    },
+  });
+
   const finishMutation = useMutation({
     mutationFn: () => tournamentApi.finishTournament(tournamentId),
     onSuccess: () => {
@@ -503,6 +517,15 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
                         onCancelEliminate={() => setEliminating(null)}
                         onSubmitEliminate={(e) => handleEliminate(e, entry.id)}
                         eliminating={eliminateMutation.isPending}
+                        // Antes do torneio começar, cancelar (com reembolso)
+                        // é a ação certa — "Eliminar" não devolve dinheiro e
+                        // é decisão de jogo, não de inscrição.
+                        canUnregister={tournament.status === TournamentStatus.REGISTERING}
+                        onUnregister={() => unregisterForUserMutation.mutate(entry.userId)}
+                        unregistering={
+                          unregisterForUserMutation.isPending &&
+                          unregisterForUserMutation.variables === entry.userId
+                        }
                       />
                     ))}
                   </ul>
@@ -526,6 +549,9 @@ interface EntryRowProps {
   onCancelEliminate: () => void;
   onSubmitEliminate: (event: FormEvent<HTMLFormElement>) => void;
   eliminating: boolean;
+  canUnregister: boolean;
+  onUnregister: () => void;
+  unregistering: boolean;
 }
 
 function EntryRow({
@@ -538,6 +564,9 @@ function EntryRow({
   onCancelEliminate,
   onSubmitEliminate,
   eliminating,
+  canUnregister,
+  onUnregister,
+  unregistering,
 }: EntryRowProps) {
   const ticket = seatLabel(entry);
 
@@ -587,9 +616,16 @@ function EntryRow({
               </div>
             </form>
           ) : (
-            <Button size="sm" variant="ghost" onClick={onStartEliminate}>
-              Eliminar
-            </Button>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" onClick={onStartEliminate}>
+                Eliminar
+              </Button>
+              {canUnregister && (
+                <Button size="sm" variant="ghost" loading={unregistering} onClick={onUnregister}>
+                  Cancelar inscrição
+                </Button>
+              )}
+            </div>
           )}
         </>
       )}
