@@ -221,6 +221,43 @@ describe('TournamentController', () => {
     });
   });
 
+  describe('registerForUser (admin)', () => {
+    it('exige Idempotency-Key', async () => {
+      const { controller } = buildController();
+      await expect(
+        controller.registerForUser(
+          CLUBE_ID,
+          'trn-1',
+          'other-user',
+          undefined,
+          {},
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('delega ao service com o id do ALVO, não de quem chama', async () => {
+      const { controller, tournamentService } = buildController();
+      tournamentService.registerEntry.mockResolvedValue(ENTRY);
+
+      await controller.registerForUser(
+        CLUBE_ID,
+        'trn-1',
+        'other-user',
+        'idem-1',
+        {
+          staffBonus: true,
+        },
+      );
+      expect(tournamentService.registerEntry).toHaveBeenCalledWith(
+        'other-user',
+        CLUBE_ID,
+        'trn-1',
+        'idem-1',
+        true,
+      );
+    });
+  });
+
   it('eliminate delega ao service', async () => {
     const { controller, tournamentService } = buildController();
     tournamentService.eliminateEntry.mockResolvedValue({

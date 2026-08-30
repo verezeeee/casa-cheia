@@ -16,6 +16,9 @@ export interface ClubeMembershipDto {
 
   email: string;
 
+  /** CPF (somente dígitos). `null` até o KYC — a maioria dos membros hoje. */
+  document: string | null;
+
   role: ClubeRole;
 
   status: ClubeMembershipStatus;

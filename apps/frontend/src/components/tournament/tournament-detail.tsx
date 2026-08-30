@@ -1,11 +1,17 @@
 'use client';
 
-import { TournamentEntryStatus, TournamentStatus, ClubeRole } from '@poker-system/shared';
+import {
+  TournamentEntryStatus,
+  TournamentStatus,
+  ClubeRole,
+  ClubeMembershipStatus,
+} from '@poker-system/shared';
 import type { TournamentEntryDto } from '@poker-system/shared';
 import type { BadgeVariant } from '@/components/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
+import { clubMembersApi } from '@/lib/api/club';
 import { tournamentApi } from '@/lib/api/tournament';
 import { Badge, Button, Card, ErrorState, Input, Skeleton, TextLink, Toast } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
@@ -64,6 +70,7 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const [isEditing, setIsEditing] = useState(false);
   const [eliminating, setEliminating] = useState<string | null>(null);
   const [finalPosition, setFinalPosition] = useState('');
+  const [memberSearch, setMemberSearch] = useState('');
 
   const {
     data: tournament,
@@ -72,6 +79,17 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   } = useQuery({
     queryKey: ['tournaments', tournamentId],
     queryFn: () => tournamentApi.getTournament(tournamentId),
+  });
+
+  // Só ADMIN chama `GET .../membros` (o backend responde 403 pra quem não é)
+  // — a query nem dispara pros outros papéis. Hook de query não pode vir
+  // depois do `return` antecipado de loading/erro, então recalcula `isAdmin`
+  // aqui (o `clubeRole` já está disponível desde o topo do componente).
+  const isAdmin = clubeRole === ClubeRole.ADMIN;
+  const { data: members } = useQuery({
+    queryKey: ['clube', 'members'],
+    queryFn: () => clubMembersApi.listMembers(),
+    enabled: isAdmin,
   });
 
   function invalidate() {
@@ -91,6 +109,23 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
     },
     onError: (caught: unknown) => {
       setError(caught instanceof ApiError ? caught.message : 'Não foi possível se inscrever.');
+    },
+  });
+
+  const registerForUserMutation = useMutation({
+    mutationFn: (userId: string) =>
+      tournamentApi.registerEntryForUser(tournamentId, userId, crypto.randomUUID(), {
+        staffBonus: wantsStaffBonus,
+      }),
+    onSuccess: () => {
+      setError(null);
+      setMemberSearch('');
+      invalidate();
+    },
+    onError: (caught: unknown) => {
+      setError(
+        caught instanceof ApiError ? caught.message : 'Não foi possível inscrever o jogador.',
+      );
     },
   });
 
@@ -138,13 +173,28 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
     return <ErrorState description="Não foi possível carregar o torneio." />;
   }
 
-  const isAdmin = clubeRole === ClubeRole.ADMIN;
   const myEntry = tournament.entries.find((e) => e.userId === user?.id);
   const myTicket = myEntry ? seatLabel(myEntry) : null;
-  const canRegister =
-    !myEntry &&
+  // Janela de inscrição é a mesma pra jogador e pra admin registrando por
+  // outro — só a checagem de "já inscrito" muda (admin exclui pelo alvo
+  // buscado, não por `myEntry`).
+  const registrationOpen =
     tournament.status === TournamentStatus.REGISTERING &&
     tournament.registeredPlayers < tournament.maxPlayers;
+  const canRegister = !myEntry && registrationOpen;
+
+  const registeredUserIds = new Set(tournament.entries.map((e) => e.userId));
+  const memberQuery = memberSearch.trim().toLowerCase();
+  const memberCandidates = (members ?? []).filter((member) => {
+    if (member.status !== ClubeMembershipStatus.ACTIVE) return false;
+    if (registeredUserIds.has(member.userId)) return false;
+    if (!memberQuery) return false;
+    return (
+      member.name.toLowerCase().includes(memberQuery) ||
+      member.email.toLowerCase().includes(memberQuery) ||
+      (member.document?.includes(memberQuery) ?? false)
+    );
+  });
   const canFinish =
     tournament.status === TournamentStatus.REGISTERING ||
     tournament.status === TournamentStatus.RUNNING;
@@ -251,54 +301,100 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
         )}
       </Card>
 
-      <Card title="Grade de premiação">
-        <ul className="flex flex-col gap-3">
-          {tournament.prizes.map((prize) => (
-            <li key={prize.position} className="flex items-center gap-3 text-sm">
-              <span className="w-16 shrink-0 text-muted">{prize.position}º lugar</span>
-              <span className="h-2 flex-1 overflow-hidden rounded-full bg-surface-hover">
-                <span
-                  className="block h-full rounded-full bg-accent"
-                  style={{ width: `${prize.percentage}%` }}
-                />
-              </span>
-              <span className="font-ledger w-14 shrink-0 text-right">{prize.percentage}%</span>
-            </li>
-          ))}
-        </ul>
-      </Card>
+      {isAdmin && registrationOpen && (
+        <Card title="Inscrever jogador">
+          <p className="text-sm text-muted">
+            Busque um membro já cadastrado no clube por nome, e-mail ou CPF para inscrevê-lo em nome
+            dele — o buy-in sai da carteira do jogador, não da sua.
+          </p>
+          <Input
+            className="mt-3"
+            placeholder="Nome, e-mail ou CPF"
+            value={memberSearch}
+            onChange={(e) => setMemberSearch(e.target.value)}
+          />
+          {memberSearch.trim() && (
+            <ul className="mt-3 flex flex-col gap-2 divide-y divide-border">
+              {memberCandidates.length === 0 ? (
+                <li className="pt-2 text-sm text-muted">Nenhum membro encontrado.</li>
+              ) : (
+                memberCandidates.map((member) => (
+                  <li
+                    key={member.userId}
+                    className="flex items-center justify-between gap-2 pt-2 first:pt-0"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{member.name}</p>
+                      <p className="truncate text-xs text-muted">{member.email}</p>
+                    </div>
+                    <Button
+                      size="sm"
+                      loading={
+                        registerForUserMutation.isPending &&
+                        registerForUserMutation.variables === member.userId
+                      }
+                      onClick={() => registerForUserMutation.mutate(member.userId)}
+                    >
+                      Inscrever
+                    </Button>
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
+        </Card>
+      )}
 
-      <Card title="Inscritos">
-        {tournament.entries.length === 0 ? (
-          <p className="text-sm text-muted">Nenhuma inscrição ainda.</p>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {entryGroups.map((group) => (
-              <div key={group.status}>
-                <p className="text-xs font-medium tracking-wide text-muted uppercase">
-                  {STATUS_GROUP_LABEL[group.status]} · {group.entries.length}
-                </p>
-                <ul className="mt-2 flex flex-col gap-2 divide-y divide-border">
-                  {group.entries.map((entry) => (
-                    <EntryRow
-                      key={entry.id}
-                      entry={entry}
-                      isAdmin={isAdmin}
-                      isEliminating={eliminating === entry.id}
-                      finalPosition={finalPosition}
-                      onFinalPositionChange={setFinalPosition}
-                      onStartEliminate={() => setEliminating(entry.id)}
-                      onCancelEliminate={() => setEliminating(null)}
-                      onSubmitEliminate={(e) => handleEliminate(e, entry.id)}
-                      eliminating={eliminateMutation.isPending}
-                    />
-                  ))}
-                </ul>
-              </div>
+      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[1fr_1.5fr] lg:items-start lg:gap-4">
+        <Card title="Grade de premiação">
+          <ul className="flex flex-col gap-3">
+            {tournament.prizes.map((prize) => (
+              <li key={prize.position} className="flex items-center gap-3 text-sm">
+                <span className="w-16 shrink-0 text-muted">{prize.position}º lugar</span>
+                <span className="h-2 flex-1 overflow-hidden rounded-full bg-surface-hover">
+                  <span
+                    className="block h-full rounded-full bg-accent"
+                    style={{ width: `${prize.percentage}%` }}
+                  />
+                </span>
+                <span className="font-ledger w-14 shrink-0 text-right">{prize.percentage}%</span>
+              </li>
             ))}
-          </div>
-        )}
-      </Card>
+          </ul>
+        </Card>
+
+        <Card title="Inscritos">
+          {tournament.entries.length === 0 ? (
+            <p className="text-sm text-muted">Nenhuma inscrição ainda.</p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {entryGroups.map((group) => (
+                <div key={group.status}>
+                  <p className="text-xs font-medium tracking-wide text-muted uppercase">
+                    {STATUS_GROUP_LABEL[group.status]} · {group.entries.length}
+                  </p>
+                  <ul className="mt-2 flex flex-col gap-2 divide-y divide-border">
+                    {group.entries.map((entry) => (
+                      <EntryRow
+                        key={entry.id}
+                        entry={entry}
+                        isAdmin={isAdmin}
+                        isEliminating={eliminating === entry.id}
+                        finalPosition={finalPosition}
+                        onFinalPositionChange={setFinalPosition}
+                        onStartEliminate={() => setEliminating(entry.id)}
+                        onCancelEliminate={() => setEliminating(null)}
+                        onSubmitEliminate={(e) => handleEliminate(e, entry.id)}
+                        eliminating={eliminateMutation.isPending}
+                      />
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
     </div>
   );
 }

@@ -111,6 +111,32 @@ export class TournamentController {
     );
   }
 
+  /**
+   * ADMIN registrando outro membro do clube (já cadastrado) no torneio — ex.:
+   * jogador chegou na mesa e quem lança a ficha é o staff. Mesma regra de
+   * negócio e mesmo service de `register`, só muda de qual carteira sai o
+   * buy-in (`userId` da rota, não `user.id` do token).
+   */
+  @Post(':id/register/:userId')
+  @UseGuards(RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async registerForUser(
+    @Param('clubeId') clubeId: string,
+    @Param('id') tournamentId: string,
+    @Param('userId') userId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Body() dto: RegisterEntryDto,
+  ): Promise<TournamentEntryDto> {
+    requireIdempotencyKey(idempotencyKey);
+    return this.tournamentService.registerEntry(
+      userId,
+      clubeId,
+      tournamentId,
+      idempotencyKey,
+      dto.staffBonus ?? false,
+    );
+  }
+
   @Post(':id/entries/:entryId/eliminate')
   @UseGuards(RolesGuard)
   @Roles(ClubeRole.ADMIN)

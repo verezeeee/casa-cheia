@@ -24,6 +24,7 @@ function base(): string {
 const TOURNAMENT_PATHS = {
   detail: (id: string) => `${base()}/${id}`,
   register: (id: string) => `${base()}/${id}/register`,
+  registerForUser: (id: string, userId: string) => `${base()}/${id}/register/${userId}`,
   eliminate: (id: string, entryId: string) => `${base()}/${id}/entries/${entryId}/eliminate`,
   finish: (id: string) => `${base()}/${id}/finish`,
   redraw: (id: string) => `${base()}/${id}/redraw`,
@@ -74,6 +75,19 @@ export function registerEntry(
   // (`dto.staffBonus ?? false`), isto é só para não mandar `"{}"` à toa.
   const body = input.staffBonus === undefined ? undefined : input;
   return httpClient.post<TournamentEntryDto>(TOURNAMENT_PATHS.register(id), body, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+}
+
+/** ADMIN. Inscreve outro membro do clube (já cadastrado) — buy-in sai da carteira dele, não da de quem chama. */
+export function registerEntryForUser(
+  id: string,
+  userId: string,
+  idempotencyKey: string,
+  input: RegisterEntryRequest = {},
+): Promise<TournamentEntryDto> {
+  const body = input.staffBonus === undefined ? undefined : input;
+  return httpClient.post<TournamentEntryDto>(TOURNAMENT_PATHS.registerForUser(id, userId), body, {
     headers: { 'Idempotency-Key': idempotencyKey },
   });
 }
@@ -154,6 +168,7 @@ export const tournamentApi = {
   updateTournament,
   getTournament,
   registerEntry,
+  registerEntryForUser,
   eliminateEntry,
   finishTournament,
   getClock,
