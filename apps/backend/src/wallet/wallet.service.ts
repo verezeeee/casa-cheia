@@ -107,6 +107,11 @@ export class WalletService {
    * `AbacatePayClient.createPixCharge`). Cache local de replay (devolver a
    * MESMA resposta sem tocar o gateway de novo) fica para o interceptor
    * genérico de idempotência da Fase 5.
+   *
+   * Recusa cedo (503) quando o módulo de pagamento está em standby
+   * (`wallet.paymentsEnabled`, default `false`) — evita bater num gateway que
+   * nem está configurado pra produção ainda enquanto o resto do sistema é
+   * testado sem depender de dinheiro real (ver `applyLedgerEntry`).
    */
   async createDeposit(
     userId: string,
@@ -114,6 +119,8 @@ export class WalletService {
     dto: CreateDepositDto,
     idempotencyKey: string,
   ): Promise<PixChargeResponse> {
+    this.assertPaymentsEnabled();
+
     const amount = new Prisma.Decimal(dto.amount);
     const limits = this.walletLimits();
 
@@ -181,6 +188,8 @@ export class WalletService {
    * lock pessimista) — ver `PixWithdrawalStatus.REQUESTED` — antes de
    * qualquer chamada ao gateway, para que o saldo não possa ser gasto em
    * paralelo enquanto o saque está em voo.
+   *
+   * Recusa cedo (503) em standby — mesma nota de `createDeposit`.
    */
   async requestWithdrawal(
     userId: string,
@@ -188,6 +197,8 @@ export class WalletService {
     dto: RequestWithdrawalDto,
     idempotencyKey: string,
   ): Promise<PixWithdrawalResponse> {
+    this.assertPaymentsEnabled();
+
     const amount = new Prisma.Decimal(dto.amount);
     const limits = this.walletLimits();
 
@@ -501,6 +512,20 @@ export class WalletService {
    * nunca abre transação própria, para poder compor com a escrita do
    * chamador (ex.: `TableSession` + `StackMovement` do buy-in) atomicamente.
    *
+   * PAGAMENTOS EM STANDBY (`wallet.paymentsEnabled`, default `false` — ver
+   * `env.validation.ts`): sendo o ÚNICO chokepoint, é o único lugar que
+   * precisa saber disso — `TableService`/`TournamentService` continuam
+   * chamando este método exatamente como sempre chamaram, sem saber que o
+   * saldo está sendo "emprestado". Quando um débito estouraria o saldo E o
+   * módulo está em standby, em vez de recusar por saldo insuficiente, grava
+   * um `ADJUSTMENT` cobrindo exatamente a diferença ANTES do débito — nunca
+   * um saldo negativo de verdade (violaria o `CHECK (balance >= 0)`) nem um
+   * desvio da invariante SUM(wallet_transactions.amount) == wallets.balance:
+   * o "dinheiro de teste" é um lançamento real e rastreável, só com um motivo
+   * que deixa claro que não é depósito de verdade. Com `paymentsEnabled:
+   * true` (produção), o comportamento é IDÊNTICO ao de sempre — 422 de saldo
+   * insuficiente.
+   *
    * ESCOPO DE CLUBE (CL-BE-04): recebe `walletId`, não `userId` — o chamador
    * já resolveu a wallet certa via `(userId, clubeId)` antes de chegar aqui,
    * então este método não precisa saber de clube. O `SELECT ... FOR UPDATE`
@@ -533,10 +558,31 @@ export class WalletService {
       throw new NotFoundException('Carteira não encontrada.');
     }
 
-    const currentBalance = new Prisma.Decimal(locked.balance.toString());
-    const newBalance = currentBalance.add(params.amount);
+    let currentBalance = new Prisma.Decimal(locked.balance.toString());
+    let newBalance = currentBalance.add(params.amount);
+
     if (newBalance.isNegative()) {
-      throw new UnprocessableEntityException('Saldo insuficiente.');
+      if (this.paymentsEnabled()) {
+        throw new UnprocessableEntityException('Saldo insuficiente.');
+      }
+
+      // Standby: cobre a diferença com um ADJUSTMENT real antes do débito —
+      // nunca pula direto pra um saldo negativo (ver docblock do método).
+      const shortfall = newBalance.negated();
+      const balanceAfterTopUp = currentBalance.add(shortfall);
+      await tx.walletTransaction.create({
+        data: {
+          walletId,
+          type: 'ADJUSTMENT',
+          status: 'COMPLETED',
+          amount: shortfall,
+          balanceAfter: balanceAfterTopUp,
+          idempotencyKey: `standby-topup:${params.idempotencyKey}`,
+          description: 'Ajuste automático — pagamentos em standby',
+        },
+      });
+      currentBalance = balanceAfterTopUp;
+      newBalance = currentBalance.add(params.amount);
     }
 
     const transaction = await tx.walletTransaction.create({
@@ -561,6 +607,23 @@ export class WalletService {
     });
 
     return transaction;
+  }
+
+  /** `wallet.paymentsEnabled` — default `false` (standby). Ver `env.validation.ts`. */
+  private paymentsEnabled(): boolean {
+    return (
+      this.configService.get<{ paymentsEnabled?: boolean }>('wallet')
+        ?.paymentsEnabled ?? false
+    );
+  }
+
+  /** Guarda de entrada de `createDeposit`/`requestWithdrawal` — nada de gateway em standby. */
+  private assertPaymentsEnabled(): void {
+    if (!this.paymentsEnabled()) {
+      throw new ServiceUnavailableException(
+        'Pagamentos estão em standby por enquanto — depósitos e saques ficam indisponíveis.',
+      );
+    }
   }
 
   /**

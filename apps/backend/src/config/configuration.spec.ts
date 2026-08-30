@@ -141,11 +141,13 @@ describe('configuration factories', () => {
       delete process.env.WALLET_MIN_DEPOSIT;
       delete process.env.WALLET_MAX_DEPOSIT;
       delete process.env.WALLET_MIN_WITHDRAWAL;
+      delete process.env.PAYMENTS_ENABLED;
 
       expect(walletConfig()).toEqual({
         minDeposit: '10.00',
         maxDeposit: '50000.00',
         minWithdrawal: '10.00',
+        paymentsEnabled: false,
       });
     });
 
@@ -153,16 +155,29 @@ describe('configuration factories', () => {
       process.env.WALLET_MIN_DEPOSIT = '20.00';
       process.env.WALLET_MAX_DEPOSIT = '10000.00';
       process.env.WALLET_MIN_WITHDRAWAL = '30.50';
+      delete process.env.PAYMENTS_ENABLED;
 
       const config = walletConfig();
       expect(config).toEqual({
         minDeposit: '20.00',
         maxDeposit: '10000.00',
         minWithdrawal: '30.50',
+        paymentsEnabled: false,
       });
       expect(typeof config.minDeposit).toBe('string');
       expect(typeof config.maxDeposit).toBe('string');
       expect(typeof config.minWithdrawal).toBe('string');
+    });
+
+    it('paymentsEnabled é standby (false) por padrão e só liga com PAYMENTS_ENABLED=true explícito', () => {
+      delete process.env.PAYMENTS_ENABLED;
+      expect(walletConfig().paymentsEnabled).toBe(false);
+
+      process.env.PAYMENTS_ENABLED = 'true';
+      expect(walletConfig().paymentsEnabled).toBe(true);
+
+      process.env.PAYMENTS_ENABLED = 'false';
+      expect(walletConfig().paymentsEnabled).toBe(false);
     });
   });
 });

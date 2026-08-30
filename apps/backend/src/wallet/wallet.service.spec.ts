@@ -26,10 +26,18 @@ const WALLET: Wallet = {
   updatedAt: new Date('2026-01-01T00:00:00.000Z'),
 };
 
+/**
+ * `paymentsEnabled: true` por padrão nos testes — o oposto do default de
+ * produção (`false`, standby) — porque é sob enforcement total que a
+ * "saldo insuficiente" e as demais regras financeiras existem para ser
+ * testadas. Os casos de standby (`describe('pagamentos em standby')`)
+ * sobrescrevem isso explicitamente via `buildService({ paymentsEnabled: false })`.
+ */
 const WALLET_CONFIG = {
   minDeposit: '10.00',
   maxDeposit: '5000.00',
   minWithdrawal: '10.00',
+  paymentsEnabled: true,
 };
 const ABACATEPAY_CONFIG = {
   webhookSecret: 'shh-secret',
@@ -64,11 +72,20 @@ function buildPrisma() {
   };
 }
 
-function buildService(overrides?: { prisma?: ReturnType<typeof buildPrisma> }) {
+function buildService(overrides?: {
+  prisma?: ReturnType<typeof buildPrisma>;
+  paymentsEnabled?: boolean;
+}) {
   const prisma = overrides?.prisma ?? buildPrisma();
 
   const configGet = jest.fn((key: string) => {
-    if (key === 'wallet') return WALLET_CONFIG;
+    if (key === 'wallet') {
+      return {
+        ...WALLET_CONFIG,
+        paymentsEnabled:
+          overrides?.paymentsEnabled ?? WALLET_CONFIG.paymentsEnabled,
+      };
+    }
     if (key === 'abacatePay') return ABACATEPAY_CONFIG;
     return undefined;
   });
@@ -813,6 +830,160 @@ describe('WalletService', () => {
       expect(prisma.tx.wallet.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: WALLET.id } }),
       );
+    });
+  });
+
+  describe('pagamentos em standby (wallet.paymentsEnabled = false)', () => {
+    describe('applyLedgerEntry', () => {
+      it('com a flag ligada (produção), comportamento idêntico ao de hoje: 422 de saldo insuficiente', async () => {
+        const { service, prisma } = buildService({ paymentsEnabled: true });
+        mockLockedWallet(prisma, '5.00');
+
+        await expect(
+          service.applyLedgerEntry(prisma.tx as never, WALLET.id, {
+            type: 'TABLE_BUY_IN',
+            amount: new Prisma.Decimal('-50.00'),
+            idempotencyKey: 'buyin-1',
+          }),
+        ).rejects.toBeInstanceOf(UnprocessableEntityException);
+        expect(prisma.tx.walletTransaction.create).not.toHaveBeenCalled();
+      });
+
+      it('em standby, cobre a diferença com um ADJUSTMENT e completa o débito sem lançar', async () => {
+        const { service, prisma } = buildService({ paymentsEnabled: false });
+        mockLockedWallet(prisma, '5.00');
+        prisma.tx.walletTransaction.create.mockImplementation(
+          ({ data }: { data: Record<string, unknown> }) =>
+            Promise.resolve({ id: 'txn-fake', ...data }),
+        );
+
+        const result = await service.applyLedgerEntry(
+          prisma.tx as never,
+          WALLET.id,
+          {
+            type: 'TABLE_BUY_IN',
+            amount: new Prisma.Decimal('-50.00'),
+            idempotencyKey: 'buyin-1',
+          },
+        );
+
+        // Duas escritas no ledger: o ADJUSTMENT automático (+45, cobre o
+        // buraco de 5→-50) e o débito original de -50, saldo final 0 — nunca
+        // negativo (CHECK wallets_balance_non_negative).
+        expect(prisma.tx.walletTransaction.create).toHaveBeenCalledTimes(2);
+        const [topUpCall, debitCall] = prisma.tx.walletTransaction.create.mock
+          .calls as Array<[{ data: Record<string, unknown> }]>;
+        const topUp = topUpCall[0].data;
+        expect(topUp).toMatchObject({
+          walletId: WALLET.id,
+          type: 'ADJUSTMENT',
+          idempotencyKey: 'standby-topup:buyin-1',
+        });
+        expect((topUp.amount as Prisma.Decimal).toFixed(2)).toBe('45.00');
+        expect((topUp.balanceAfter as Prisma.Decimal).toFixed(2)).toBe('50.00');
+
+        const debit = debitCall[0].data;
+        expect(debit).toMatchObject({
+          walletId: WALLET.id,
+          type: 'TABLE_BUY_IN',
+          idempotencyKey: 'buyin-1',
+        });
+        expect((debit.balanceAfter as Prisma.Decimal).toFixed(2)).toBe('0.00');
+
+        const updateCall = prisma.tx.wallet.update.mock.calls[0] as [
+          { where: { id: string }; data: { balance: Prisma.Decimal } },
+        ];
+        expect(updateCall[0].where).toEqual({ id: WALLET.id });
+        expect(updateCall[0].data.balance.toFixed(2)).toBe('0.00');
+
+        expect(result.idempotencyKey).toBe('buyin-1'); // devolve o débito, não o ajuste
+      });
+
+      it('em standby, saldo já suficiente não gera ADJUSTMENT nenhum (só cobre o que falta)', async () => {
+        const { service, prisma } = buildService({ paymentsEnabled: false });
+        mockLockedWallet(prisma, '100.00');
+
+        await service.applyLedgerEntry(prisma.tx as never, WALLET.id, {
+          type: 'TABLE_BUY_IN',
+          amount: new Prisma.Decimal('-50.00'),
+          idempotencyKey: 'buyin-2',
+        });
+
+        expect(prisma.tx.walletTransaction.create).toHaveBeenCalledTimes(1); // só o débito
+        expect(prisma.tx.walletTransaction.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ type: 'TABLE_BUY_IN' }) as unknown,
+          }),
+        );
+      });
+    });
+
+    describe('createDeposit / requestWithdrawal', () => {
+      it('createDeposit recusa com 503 em standby, sem chamar o gateway', async () => {
+        const { service, prisma, abacatePayClient } = buildService({
+          paymentsEnabled: false,
+        });
+        prisma.wallet.findUnique.mockResolvedValue(WALLET);
+
+        await expect(
+          service.createDeposit(
+            WALLET.userId,
+            WALLET.clubeId,
+            { amount: '50.00' },
+            'idem-1',
+          ),
+        ).rejects.toBeInstanceOf(ServiceUnavailableException);
+        expect(abacatePayClient.createPixCharge).not.toHaveBeenCalled();
+      });
+
+      it('requestWithdrawal recusa com 503 em standby, sem tocar o saldo', async () => {
+        const { service, prisma } = buildService({ paymentsEnabled: false });
+        prisma.wallet.findUnique.mockResolvedValue(WALLET);
+
+        await expect(
+          service.requestWithdrawal(
+            WALLET.userId,
+            WALLET.clubeId,
+            { amount: '50.00', pixKey: 'a@b.com', pixKeyType: 'EMAIL' },
+            'idem-1',
+          ),
+        ).rejects.toBeInstanceOf(ServiceUnavailableException);
+        expect(prisma.walletTransaction.findUnique).not.toHaveBeenCalled();
+      });
+
+      it('com a flag ligada, createDeposit/requestWithdrawal funcionam normalmente', async () => {
+        const { service, prisma, abacatePayClient } = buildService({
+          paymentsEnabled: true,
+        });
+        prisma.wallet.findUnique.mockResolvedValue(WALLET);
+        abacatePayClient.createPixCharge.mockResolvedValue({
+          externalId: 'ext-1',
+          status: 'PENDING',
+          rawStatus: 'PENDING',
+          amount: '50.00',
+          brCode: '000201...',
+          expiresAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+        });
+        prisma.pixCharge.create.mockResolvedValue({
+          id: 'chg-1',
+          externalId: 'ext-1',
+          status: 'PENDING',
+          amount: new Prisma.Decimal('50.00'),
+          qrCodePayload: '000201...',
+          qrCodeImageUrl: null,
+          expiresAt: new Date(),
+        });
+
+        await expect(
+          service.createDeposit(
+            WALLET.userId,
+            WALLET.clubeId,
+            { amount: '50.00' },
+            'idem-1',
+          ),
+        ).resolves.toBeDefined();
+      });
     });
   });
 });

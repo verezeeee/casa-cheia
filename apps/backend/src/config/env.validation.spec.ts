@@ -220,4 +220,33 @@ describe('envValidationSchema', () => {
       expect(value.WALLET_MIN_WITHDRAWAL).toBe('25.50');
     });
   });
+
+  describe('PAYMENTS_ENABLED (módulo de pagamento em standby)', () => {
+    it('default é false (standby) quando ausente', () => {
+      const { error, value } = envValidationSchema.validate(validEnv);
+
+      expect(error).toBeUndefined();
+      expect(value.PAYMENTS_ENABLED).toBe(false);
+    });
+
+    it('aceita true explícito', () => {
+      const { error, value } = envValidationSchema.validate({
+        ...validEnv,
+        PAYMENTS_ENABLED: 'true',
+      });
+
+      expect(error).toBeUndefined();
+      expect(value.PAYMENTS_ENABLED).toBe(true);
+    });
+
+    it('rejeita valor não-booleano', () => {
+      const { error } = envValidationSchema.validate({
+        ...validEnv,
+        PAYMENTS_ENABLED: 'talvez',
+      });
+
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('PAYMENTS_ENABLED');
+    });
+  });
 });

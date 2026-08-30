@@ -127,4 +127,18 @@ export const envValidationSchema = Joi.object({
   WALLET_MIN_WITHDRAWAL: decimalString('WALLET_MIN_WITHDRAWAL').default(
     '10.00',
   ),
+
+  /**
+   * Módulo de pagamento (depósito/saque PIX + exigência de saldo em
+   * buy-in/inscrição) inteiro em standby por padrão: `false` até o gateway
+   * de pagamento (ADR-0002) estar em produção de verdade. Com a flag
+   * desligada, `WalletService.applyLedgerEntry` cobre automaticamente um
+   * débito que estouraria o saldo (ver docblock lá) em vez de recusar, e
+   * depósito/saque respondem 503. Ligar exige setar a env explicitamente —
+   * nunca liga sozinho.
+   */
+  PAYMENTS_ENABLED: Joi.boolean().default(false).messages({
+    'boolean.base':
+      'PAYMENTS_ENABLED deve ser um booleano ("true" ou "false").',
+  }),
 }).unknown(true);

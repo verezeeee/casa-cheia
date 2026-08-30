@@ -48,6 +48,16 @@ const TEST_ENV_DEFAULTS: Readonly<Record<string, string>> = {
   WALLET_MIN_DEPOSIT: '10.00',
   WALLET_MAX_DEPOSIT: '50000.00',
   WALLET_MIN_WITHDRAWAL: '10.00',
+
+  // INVERSÃO DELIBERADA do default de produção (`false`, standby — ver
+  // `env.validation.ts`): a suíte testa a APLICAÇÃO com o módulo de
+  // pagamento LIGADO, porque é o comportamento que protege dinheiro de
+  // verdade e é dele que vêm os testes de "saldo insuficiente"
+  // (`wallet.e2e-spec.ts`, `table.e2e-spec.ts`, `tournament.e2e-spec.ts`,
+  // `wallet.service.spec.ts`). O standby em si tem sua própria suíte
+  // dedicada (`payments-standby.e2e-spec.ts`), que sobe seu próprio
+  // `TestingModule` com `PAYMENTS_ENABLED=false` — não depende deste default.
+  PAYMENTS_ENABLED: 'true',
 };
 
 // Banco de teste dedicado tem precedência sobre a URL de desenvolvimento.

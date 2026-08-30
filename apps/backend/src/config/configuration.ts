@@ -80,4 +80,6 @@ export const walletConfig = registerAs('wallet', () => ({
   minDeposit: process.env.WALLET_MIN_DEPOSIT ?? '10.00',
   maxDeposit: process.env.WALLET_MAX_DEPOSIT ?? '50000.00',
   minWithdrawal: process.env.WALLET_MIN_WITHDRAWAL ?? '10.00',
+  /** Ver docblock de `PAYMENTS_ENABLED` em `env.validation.ts`. Default standby. */
+  paymentsEnabled: toBoolean(process.env.PAYMENTS_ENABLED, false),
 }));
