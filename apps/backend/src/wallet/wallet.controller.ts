@@ -1,9 +1,11 @@
 import {
+  Body,
   Controller,
   Get,
   Headers,
-  NotImplementedException,
+  Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
@@ -14,54 +16,75 @@ import type {
   WalletBalanceResponse,
   WalletTransactionDto,
 } from '@poker-system/shared';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
+import { ClubeMembershipGuard } from '../club/guards/clube-membership.guard';
 import { SENSITIVE_ROUTE_THROTTLE } from '../common/http/rate-limits';
 import { requireIdempotencyKey } from '../common/http/require-idempotency-key';
+import { CreateDepositDto } from './dto/create-deposit.dto';
+import { ListTransactionsQueryDto } from './dto/list-transactions-query.dto';
+import { RequestWithdrawalDto } from './dto/request-withdrawal.dto';
 import { WalletService } from './wallet.service';
 
-/**
- * TODO(CL-BE-07): `WalletService` agora exige `clubeId` (CL-BE-04, carteira
- * por (usuário, clube)) e este controller ainda não tem rota de clube — essa
- * migração (`/wallet` → `/clubes/:clubeId/carteira`) é escopo de CL-BE-07,
- * não desta tarefa. Em vez de inventar uma origem provisória para o
- * `clubeId` (query param, header, etc.) que CL-BE-07 teria que desfazer,
- * cada endpoint fica deliberadamente INOPERANTE (`501 Not Implemented`) até
- * a rota de clube existir. A cobertura de comportamento por clube fica
- * inteiramente em `wallet.service.spec.ts` (unit) — não há e2e aqui.
- */
-const CLUBE_ROUTE_PENDENTE =
-  'Rota de carteira por clube pendente (CL-BE-07): /clubes/:clubeId/carteira ainda não existe.';
-
-@Controller('wallet')
-@UseGuards(JwtAuthGuard)
+@Controller('clubes/:clubeId/carteira')
+@UseGuards(JwtAuthGuard, ClubeMembershipGuard)
 export class WalletController {
   constructor(private readonly walletService: WalletService) {}
 
   @Get('balance')
-  getBalance(): WalletBalanceResponse {
-    throw new NotImplementedException(CLUBE_ROUTE_PENDENTE);
+  getBalance(
+    @Param('clubeId') clubeId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<WalletBalanceResponse> {
+    return this.walletService.getBalance(user.id, clubeId);
   }
 
   @Get('transactions')
-  getTransactions(): PaginatedResponse<WalletTransactionDto> {
-    throw new NotImplementedException(CLUBE_ROUTE_PENDENTE);
+  getTransactions(
+    @Param('clubeId') clubeId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: ListTransactionsQueryDto,
+  ): Promise<PaginatedResponse<WalletTransactionDto>> {
+    return this.walletService.getTransactions(
+      user.id,
+      clubeId,
+      query.cursor,
+      query.limit,
+    );
   }
 
   @Post('deposits')
   @Throttle(SENSITIVE_ROUTE_THROTTLE)
   createDeposit(
+    @Param('clubeId') clubeId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateDepositDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
-  ): PixChargeResponse {
+  ): Promise<PixChargeResponse> {
     requireIdempotencyKey(idempotencyKey);
-    throw new NotImplementedException(CLUBE_ROUTE_PENDENTE);
+    return this.walletService.createDeposit(
+      user.id,
+      clubeId,
+      dto,
+      idempotencyKey,
+    );
   }
 
   @Post('withdrawals')
   @Throttle(SENSITIVE_ROUTE_THROTTLE)
   requestWithdrawal(
+    @Param('clubeId') clubeId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RequestWithdrawalDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
-  ): PixWithdrawalResponse {
+  ): Promise<PixWithdrawalResponse> {
     requireIdempotencyKey(idempotencyKey);
-    throw new NotImplementedException(CLUBE_ROUTE_PENDENTE);
+    return this.walletService.requestWithdrawal(
+      user.id,
+      clubeId,
+      dto,
+      idempotencyKey,
+    );
   }
 }

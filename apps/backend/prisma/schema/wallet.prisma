@@ -20,15 +20,27 @@
 // fisicamente sessão de mesa ou inscrição de torneio, apenas muda `status`.
 //
 // ESCOPO DE CLUBE (CL-DB-01) — SÓ A RAIZ DO AGREGADO CARREGA `clube_id`
-// `Wallet` tem `clubeId` porque é a RAIZ deste agregado. `WalletTransaction`,
-// `PixCharge`, `PixWithdrawal` e `StackMovement` NÃO têm, e isso é deliberado:
-// cada um deles só existe pendurado num pai que já está escopado (a wallet, ou
-// a sessão/inscrição), então o clube é derivável por JOIN. Duplicar a coluna
-// criaria uma segunda fonte de verdade para o tenant e, com ela, a
-// possibilidade de um lançamento apontar para um clube diferente do da sua
-// própria carteira — uma inconsistência que o banco não teria como recusar.
+// `Wallet` tem `clubeId` porque é a RAIZ deste agregado. `WalletTransaction` e
+// `StackMovement` NÃO têm, e isso é deliberado: cada um deles só existe
+// pendurado num pai que já está escopado (a wallet, ou a sessão/inscrição),
+// então o clube é derivável por JOIN. Duplicar a coluna criaria uma segunda
+// fonte de verdade para o tenant e, com ela, a possibilidade de um lançamento
+// apontar para um clube diferente do da sua própria carteira — uma
+// inconsistência que o banco não teria como recusar.
 // (`WebhookEvent` também não tem: é log de infraestrutura do PSP, anterior à
 // resolução de qual clube o evento diz respeito.)
+//
+// EXCEÇÃO: `PixCharge` e `PixWithdrawal` (CL-BE-07). Diferente dos dois
+// modelos acima, elas NASCEM antes de qualquer elo com a wallet (o vínculo
+// com `WalletTransaction` só existe depois que o webhook confirma o
+// pagamento) — não têm pai escopado no momento da criação, então o clube não
+// é derivável por JOIN nesse instante. `CL-DB-03` documentou essa exata
+// lacuna na migration de RLS e deixou as duas tabelas de fora das policies
+// até aqui; `clubeId` fecha o buraco: o webhook do gateway (que só conhece
+// `userId`, nunca o clube) agora resolve a `Wallet` certa via
+// `(userId, clubeId)` sem ambiguidade, e a policy de RLS destas duas tabelas
+// (mesma migration incremental que adiciona esta coluna) volta a ser um
+// predicado direto, igual ao de `Wallet`.
 //
 // `WalletTransaction` ↔ `TournamentEntry` tem TRÊS caminhos de relação
 // distintos (`WalletTransaction.tournamentEntryId`,
@@ -199,6 +211,15 @@ model PixCharge {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
 
+  /// Clube dono da cobrança (CL-BE-07). Sem isto, o webhook de confirmação
+  /// só tinha `userId` para achar a `Wallet` a creditar — ambíguo desde que
+  /// `Wallet` passou a ser por `(userId, clubeId)` (CL-BE-04): um jogador com
+  /// carteira em dois clubes teria a wallet errada creditada. Fecha também a
+  /// lacuna de RLS que `CL-DB-03` documentou (`pix_charges` sem `clube_id`
+  /// próprio era estruturalmente impossível de escopar).
+  clubeId String @map("clube_id")
+  clube   Clube  @relation(fields: [clubeId], references: [id], onDelete: Restrict)
+
   /// Identificador da cobrança no gateway. Unique: âncora de reconciliação e de
   /// desduplicação entre o nosso registro e o do PSP.
   externalId String @unique
@@ -224,6 +245,7 @@ model PixCharge {
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([status, expiresAt])
+  @@index([clubeId])
   @@map("pix_charges")
 }
 
@@ -238,6 +260,10 @@ model PixWithdrawal {
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  /// Clube dono do saque (CL-BE-07) — mesma justificativa de `PixCharge.clubeId`.
+  clubeId String @map("clube_id")
+  clube   Clube  @relation(fields: [clubeId], references: [id], onDelete: Restrict)
 
   /// Identificador no gateway — nulo até a confirmação do envio.
   externalId String? @unique
@@ -258,6 +284,7 @@ model PixWithdrawal {
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([status])
+  @@index([clubeId])
   @@map("pix_withdrawals")
 }
 

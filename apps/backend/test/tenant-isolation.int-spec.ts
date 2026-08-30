@@ -35,6 +35,8 @@ describe('Isolamento entre clubes (RLS, Postgres real)', () => {
   let walletA: string;
   let walletB: string;
   let txB: string;
+  let pixChargeB: string;
+  let pixWithdrawalB: string;
   let userId: string;
 
   /**
@@ -146,6 +148,35 @@ describe('Isolamento entre clubes (RLS, Postgres real)', () => {
       where: { walletId: walletB },
     });
     txB = transacaoB.id;
+
+    // `pix_charges`/`pix_withdrawals` (CL-BE-07): a lacuna que CL-DB-03 deixou
+    // documentada — sem `clube_id` próprio não dava pra escopá-las. Fixture
+    // do clube B, alvo de vazamento que o contexto A não pode enxergar.
+    const chargeB = await owner.pixCharge.create({
+      data: {
+        userId,
+        clubeId: clubeB,
+        externalId: `chg-${randomUUID()}`,
+        amount: 50,
+        status: 'PENDING',
+        qrCodePayload: '000201...',
+        expiresAt: new Date(Date.now() + 30 * 60_000),
+        rawPayload: {},
+      },
+    });
+    pixChargeB = chargeB.id;
+
+    const withdrawalB = await owner.pixWithdrawal.create({
+      data: {
+        userId,
+        clubeId: clubeB,
+        amount: 20,
+        pixKey: 'jogador@pix.dev',
+        pixKeyType: 'EMAIL',
+        status: 'REQUESTED',
+      },
+    });
+    pixWithdrawalB = withdrawalB.id;
   });
 
   afterAll(async () => {
@@ -185,6 +216,24 @@ describe('Isolamento entre clubes (RLS, Postgres real)', () => {
       );
 
       expect(rows.map((r) => r.id)).not.toContain(txB);
+    });
+
+    it('não enxerga a cobrança PIX do clube B (CL-BE-07: fecha a lacuna de CL-DB-03)', async () => {
+      const rows = await asClube(
+        clubeA,
+        (tx) => tx.$queryRaw<{ id: string }[]>`SELECT id FROM pix_charges`,
+      );
+
+      expect(rows.map((r) => r.id)).not.toContain(pixChargeB);
+    });
+
+    it('não enxerga o saque PIX do clube B (CL-BE-07: fecha a lacuna de CL-DB-03)', async () => {
+      const rows = await asClube(
+        clubeA,
+        (tx) => tx.$queryRaw<{ id: string }[]>`SELECT id FROM pix_withdrawals`,
+      );
+
+      expect(rows.map((r) => r.id)).not.toContain(pixWithdrawalB);
     });
   });
 
@@ -237,6 +286,18 @@ describe('Isolamento entre clubes (RLS, Postgres real)', () => {
               VALUES (${randomUUID()}, ${clubeA}, 'Mesa legítima', 'CASH_GAME'::"TableType", 1, 2, 100, 500, 6, 'OPEN'::"TableStatus", ${userId}, NOW())`,
         ),
       ).resolves.toBe(1);
+    });
+
+    it('INSERT em pix_charges com clube_id de outro tenant é recusado pelo WITH CHECK (CL-BE-07)', async () => {
+      await expect(
+        asClube(
+          clubeA,
+          (tx) =>
+            tx.$executeRaw`
+              INSERT INTO pix_charges (id, "userId", clube_id, "externalId", amount, status, "qrCodePayload", "expiresAt", "rawPayload", "updatedAt")
+              VALUES (${randomUUID()}, ${userId}, ${clubeB}, ${`chg-${randomUUID()}`}, 10, 'PENDING'::"PixChargeStatus", '000201...', NOW() + interval '30 minutes', '{}'::jsonb, NOW())`,
+        ),
+      ).rejects.toThrow(/row-level security/i);
     });
   });
 
