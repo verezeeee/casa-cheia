@@ -111,6 +111,14 @@ function buildPrisma() {
       update: jest.fn(),
       findUniqueOrThrow: shared.tournamentRead,
     },
+    tournamentPrize: {
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+    },
+    tournamentBlindLevel: {
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+    },
     tournamentTable: {
       findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn(),
@@ -388,6 +396,231 @@ describe('TournamentService', () => {
       await expect(
         service.getTournament(CLUBE_ID, 'inexistente'),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('updateTournament', () => {
+    const EDITABLE = {
+      ...TOURNAMENT,
+      clockStatus: 'NOT_STARTED',
+      blindLevels: [] as unknown[],
+      _count: { entries: 0 },
+    };
+
+    it('lança 404 quando o torneio não existe', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue(null);
+      await expect(
+        service.updateTournament(CLUBE_ID, 'inexistente', { name: 'Novo' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejeita quando já existe alguém inscrito', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue({
+        ...EDITABLE,
+        _count: { entries: 1 },
+      });
+      await expect(
+        service.updateTournament(CLUBE_ID, 'trn-1', { name: 'Novo' }),
+      ).rejects.toThrow(/antes da primeira inscrição/);
+    });
+
+    it('rejeita quando o torneio não está REGISTERING', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue({
+        ...EDITABLE,
+        status: 'RUNNING',
+      });
+      await expect(
+        service.updateTournament(CLUBE_ID, 'trn-1', { name: 'Novo' }),
+      ).rejects.toThrow(/antes da primeira inscrição/);
+    });
+
+    it('edita campos escalares e devolve o torneio atualizado', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue(EDITABLE);
+      prisma.tx.tournament.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.updateTournament(CLUBE_ID, 'trn-1', {
+        name: 'Sunday Major (editado)',
+        buyIn: '100.00',
+      });
+
+      expect(prisma.tx.tournament.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: 'trn-1',
+            clubeId: CLUBE_ID,
+            status: 'REGISTERING',
+            entries: { none: {} },
+          }) as unknown,
+          data: expect.objectContaining({
+            name: 'Sunday Major (editado)',
+            buyIn: '100.00',
+          }) as unknown,
+        }),
+      );
+    });
+
+    it('409 quando alguém se inscreve entre a leitura e a escrita (corrida)', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue(EDITABLE);
+      prisma.tx.tournament.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.updateTournament(CLUBE_ID, 'trn-1', { name: 'Novo' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('prizes substitui a grade inteira (delete + create)', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue(EDITABLE);
+      prisma.tx.tournament.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.updateTournament(CLUBE_ID, 'trn-1', {
+        prizes: [
+          { position: 1, percentage: '60.00' },
+          { position: 2, percentage: '40.00' },
+        ],
+      });
+
+      expect(prisma.tx.tournamentPrize.deleteMany).toHaveBeenCalledWith({
+        where: { tournamentId: 'trn-1' },
+      });
+      expect(prisma.tx.tournamentPrize.createMany).toHaveBeenCalledWith({
+        data: [
+          { tournamentId: 'trn-1', position: 1, percentage: '60.00' },
+          { tournamentId: 'trn-1', position: 2, percentage: '40.00' },
+        ],
+      });
+    });
+
+    it('rejeita prizes cuja soma não fecha 100', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue(EDITABLE);
+
+      await expect(
+        service.updateTournament(CLUBE_ID, 'trn-1', {
+          prizes: [{ position: 1, percentage: '90.00' }],
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.tx.tournament.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('blindStructureId substitui os níveis quando o relógio está NOT_STARTED', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue(EDITABLE);
+      prisma.tx.tournament.updateMany.mockResolvedValue({ count: 1 });
+      prisma.blindStructure.findUnique.mockResolvedValue({
+        id: 'bs-2',
+        levels: [
+          {
+            levelNumber: 1,
+            smallBlind: 100,
+            bigBlind: 200,
+            ante: 0,
+            durationSeconds: 600,
+            isBreak: false,
+            breakLabel: null,
+          },
+        ],
+      });
+
+      await service.updateTournament(CLUBE_ID, 'trn-1', {
+        blindStructureId: 'bs-2',
+      });
+
+      expect(prisma.tx.tournamentBlindLevel.deleteMany).toHaveBeenCalledWith({
+        where: { tournamentId: 'trn-1' },
+      });
+      expect(prisma.tx.tournamentBlindLevel.createMany).toHaveBeenCalledWith({
+        data: [
+          expect.objectContaining({
+            tournamentId: 'trn-1',
+            levelNumber: 1,
+            bigBlind: 200,
+          }),
+        ],
+      });
+    });
+
+    it('rejeita trocar blindStructureId com o relógio já iniciado', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue({
+        ...EDITABLE,
+        clockStatus: 'RUNNING',
+      });
+
+      await expect(
+        service.updateTournament(CLUBE_ID, 'trn-1', {
+          blindStructureId: 'bs-2',
+        }),
+      ).rejects.toThrow(/relógio já iniciado/);
+      expect(prisma.tx.tournament.updateMany).not.toHaveBeenCalled();
+    });
+
+    describe('coerência de reentry/bônus de staff considera o estado JÁ GRAVADO', () => {
+      it('rejeita reentryUntilLevel isolado quando allowReentry já gravado é false', async () => {
+        const { service, prisma } = buildService();
+        prisma.tournament.findUnique.mockResolvedValue({
+          ...EDITABLE,
+          allowReentry: false,
+        });
+
+        await expect(
+          service.updateTournament(CLUBE_ID, 'trn-1', {
+            reentryUntilLevel: 5,
+          }),
+        ).rejects.toThrow(/allowReentry = true/);
+      });
+
+      it('aceita reentryUntilLevel isolado quando allowReentry JÁ ESTAVA true', async () => {
+        const { service, prisma } = buildService();
+        prisma.tournament.findUnique.mockResolvedValue({
+          ...EDITABLE,
+          allowReentry: true,
+          blindLevels: [{ levelNumber: 1 }, { levelNumber: 2 }],
+        });
+        prisma.tx.tournament.updateMany.mockResolvedValue({ count: 1 });
+
+        await expect(
+          service.updateTournament(CLUBE_ID, 'trn-1', {
+            reentryUntilLevel: 2,
+          }),
+        ).resolves.toBeDefined();
+      });
+
+      it('rejeita staffBonusChips isolado quando staffBonusCost já gravado é null', async () => {
+        const { service, prisma } = buildService();
+        prisma.tournament.findUnique.mockResolvedValue({
+          ...EDITABLE,
+          staffBonusCost: null,
+          staffBonusChips: null,
+        });
+
+        await expect(
+          service.updateTournament(CLUBE_ID, 'trn-1', {
+            staffBonusChips: 2_500,
+          }),
+        ).rejects.toThrow(/staffBonusCost e staffBonusChips/);
+      });
+
+      it('aceita mudar só staffBonusChips quando staffBonusCost já estava gravado', async () => {
+        const { service, prisma } = buildService();
+        prisma.tournament.findUnique.mockResolvedValue({
+          ...EDITABLE,
+          staffBonusCost: new Prisma.Decimal('5.00'),
+          staffBonusChips: 1_000,
+        });
+        prisma.tx.tournament.updateMany.mockResolvedValue({ count: 1 });
+
+        await expect(
+          service.updateTournament(CLUBE_ID, 'trn-1', {
+            staffBonusChips: 3_000,
+          }),
+        ).resolves.toBeDefined();
+      });
     });
   });
 

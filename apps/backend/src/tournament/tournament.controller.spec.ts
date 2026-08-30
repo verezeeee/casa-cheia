@@ -47,6 +47,7 @@ function buildController() {
     Pick<
       TournamentService,
       | 'createTournament'
+      | 'updateTournament'
       | 'listTournaments'
       | 'getTournament'
       | 'registerEntry'
@@ -55,6 +56,7 @@ function buildController() {
     >
   > = {
     createTournament: jest.fn(),
+    updateTournament: jest.fn(),
     listTournaments: jest.fn(),
     getTournament: jest.fn(),
     registerEntry: jest.fn(),
@@ -106,6 +108,30 @@ describe('TournamentController', () => {
     );
   });
 
+  it('updateTournament delega ao service', async () => {
+    const { controller, tournamentService } = buildController();
+    tournamentService.updateTournament.mockResolvedValue({
+      id: 'trn-1',
+      name: 'Sunday Major (editado)',
+      buyIn: '90.00',
+      fee: '10.00',
+      staffBonusCost: null,
+      staffBonusChips: null,
+      maxPlayers: 100,
+      registeredPlayers: 0,
+      status: TournamentStatus.REGISTERING,
+      startsAt: new Date().toISOString(),
+    });
+
+    const dto = { name: 'Sunday Major (editado)' };
+    await controller.updateTournament(CLUBE_ID, 'trn-1', dto);
+    expect(tournamentService.updateTournament).toHaveBeenCalledWith(
+      CLUBE_ID,
+      'trn-1',
+      dto,
+    );
+  });
+
   it('listTournaments repassa cursor e limit', async () => {
     const { controller, tournamentService } = buildController();
     tournamentService.listTournaments.mockResolvedValue({
@@ -134,6 +160,14 @@ describe('TournamentController', () => {
       registeredPlayers: 1,
       status: TournamentStatus.REGISTERING,
       startsAt: new Date().toISOString(),
+      startingStack: 10_000,
+      tableCapacity: 9,
+      lateRegUntil: null,
+      guaranteedPrize: null,
+      blindStructureId: null,
+      allowReentry: false,
+      maxReentries: null,
+      reentryUntilLevel: null,
       prizes: [],
       entries: [],
     });
@@ -217,6 +251,14 @@ describe('TournamentController', () => {
       registeredPlayers: 1,
       status: TournamentStatus.FINISHED,
       startsAt: new Date().toISOString(),
+      startingStack: 10_000,
+      tableCapacity: 9,
+      lateRegUntil: null,
+      guaranteedPrize: null,
+      blindStructureId: null,
+      allowReentry: false,
+      maxReentries: null,
+      reentryUntilLevel: null,
       prizes: [],
       entries: [],
     });

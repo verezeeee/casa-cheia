@@ -12,7 +12,14 @@ jest.mock('@/lib/api/tournament', () => ({
     registerEntry: jest.fn(),
     eliminateEntry: jest.fn(),
     finishTournament: jest.fn(),
+    updateTournament: jest.fn(),
   },
+}));
+
+// `EditTournamentForm` (montado ao clicar em "Editar") busca o catálogo de
+// presets — sem o mock, a suíte tentaria uma requisição real.
+jest.mock('@/lib/api/blind-structure', () => ({
+  blindStructureApi: { listBlindStructures: jest.fn().mockResolvedValue([]) },
 }));
 
 jest.mock('@/components/providers/session-provider', () => ({
@@ -216,6 +223,66 @@ describe('TournamentDetail', () => {
     expect(tv).toHaveAttribute('href', '/display/tournaments/trn-1');
     expect(tv).toHaveAttribute('target', '_blank');
     expect(tv).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('ADMIN vê "Editar" só quando REGISTERING e ninguém se inscreveu, e volta ao clicar em Cancelar', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      registeredPlayers: 0,
+      entries: [],
+    });
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Editar')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Editar'));
+    await waitFor(() => expect(screen.getByText('Editar torneio')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Cancelar'));
+    await waitFor(() => expect(screen.getByText('Editar')).toBeInTheDocument());
+  });
+
+  it('não mostra "Editar" quando já tem gente inscrita', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT); // registeredPlayers: 1
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText(TOURNAMENT.name)).toBeInTheDocument());
+
+    expect(screen.queryByText('Editar')).not.toBeInTheDocument();
+  });
+
+  it('não mostra "Editar" para quem não é ADMIN', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      registeredPlayers: 0,
+      entries: [],
+    });
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText(TOURNAMENT.name)).toBeInTheDocument());
+
+    expect(screen.queryByText('Editar')).not.toBeInTheDocument();
   });
 
   it('mostra mensagem de erro quando a query falha', async () => {

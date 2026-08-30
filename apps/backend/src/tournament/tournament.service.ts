@@ -18,6 +18,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WalletService } from '../wallet/wallet.service';
 import type { CreateTournamentDto } from './dto/create-tournament.dto';
 import type { EliminateEntryDto } from './dto/eliminate-entry.dto';
+import type { UpdateTournamentDto } from './dto/update-tournament.dto';
 import type { Move, TableSnapshot } from './seating';
 import { planInitialSeat, planRebalance, planRedraw } from './seating';
 import type { TournamentTableRow } from './tournament.mappers';
@@ -105,21 +106,7 @@ export class TournamentService {
     clubeId: string,
     dto: CreateTournamentDto,
   ): Promise<TournamentSummaryDto> {
-    const sum = dto.prizes.reduce(
-      (total, prize) => total.add(new Prisma.Decimal(prize.percentage)),
-      new Prisma.Decimal(0),
-    );
-    if (sum.minus(ONE_HUNDRED).abs().greaterThan(PERCENTAGE_TOLERANCE)) {
-      throw new BadRequestException(
-        `A soma dos percentuais da grade de premiação deve ser 100.00 (atual: ${sum.toFixed(2)}).`,
-      );
-    }
-    const positions = dto.prizes.map((p) => p.position);
-    if (new Set(positions).size !== positions.length) {
-      throw new BadRequestException(
-        'Colocações da grade de premiação não podem se repetir.',
-      );
-    }
+    assertValidPrizeGrade(dto.prizes);
 
     const levels = await this.copyBlindLevels(dto.blindStructureId);
     assertCoherentReentryConfig(dto, levels.length);
@@ -156,6 +143,147 @@ export class TournamentService {
     });
 
     return toTournamentSummaryDto({ ...tournament, _count: { entries: 0 } });
+  }
+
+  /**
+   * Edita a configuração do torneio (nome, buy-in, fee, bônus de staff,
+   * fichas, vagas, horário, grade de premiação, reentry, estrutura de
+   * blinds) — SÓ enquanto `status === 'REGISTERING'` e NINGUÉM se inscreveu
+   * ainda. Depois da 1ª inscrição a configuração trava: mudar buyIn/fee/
+   * staffBonus/prizes com gente já inscrita faria jogadores pagando ou
+   * disputando coisas diferentes dentro do MESMO torneio. `status` nasce
+   * direto em REGISTERING (DRAFT não é usado de verdade, ver docblock de
+   * `createTournament`) — "antes da 1ª inscrição" É o estágio de rascunho.
+   *
+   * ATOMICIDADE SEM LOCK PESSIMISTA: o filtro `entries: { none: {} }` no
+   * WHERE do `updateMany` é o que protege contra uma inscrição concorrente
+   * entre a leitura abaixo e esta escrita — se alguém se inscrever nesse
+   * meio-tempo, a condição deixa de bater, `count` vem 0 e devolvemos 409.
+   * Mais barato que `lockTournament`: não há recurso em disputa a
+   * serializar, só uma corrida rara a detectar.
+   */
+  async updateTournament(
+    clubeId: string,
+    tournamentId: string,
+    dto: UpdateTournamentDto,
+  ): Promise<TournamentSummaryDto> {
+    const tournament = await this.prisma.tournament.findUnique({
+      where: { id: tournamentId, clubeId },
+      include: {
+        blindLevels: { orderBy: { levelNumber: 'asc' } },
+        _count: { select: { entries: true } },
+      },
+    });
+    if (!tournament) throw new NotFoundException('Torneio não encontrado.');
+    if (tournament.status !== 'REGISTERING' || tournament._count.entries > 0) {
+      throw new BadRequestException(
+        'Só é possível editar o torneio antes da primeira inscrição.',
+      );
+    }
+
+    if (dto.prizes) assertValidPrizeGrade(dto.prizes);
+
+    // Trocando a estrutura: copia os níveis novos JÁ (404 cedo se o preset
+    // não existe, mesmo comportamento de `createTournament`) e exige o
+    // relógio intocado — não faz sentido substituir a grade com ele rodando.
+    let newLevels: Prisma.TournamentBlindLevelCreateManyInput[] | null = null;
+    if (dto.blindStructureId !== undefined) {
+      if (tournament.clockStatus !== 'NOT_STARTED') {
+        throw new BadRequestException(
+          'Não é possível trocar a estrutura de blinds com o relógio já iniciado.',
+        );
+      }
+      const copied = await this.copyBlindLevels(dto.blindStructureId);
+      newLevels = copied.map((level) => ({ ...level, tournamentId }));
+    }
+    const effectiveLevelCount =
+      newLevels?.length ?? tournament.blindLevels.length;
+
+    // ESTADO EFETIVO (patch mesclado sobre o que já está gravado) — não o
+    // patch isolado. Ver docblock de `assertCoherentReentryConfig`.
+    assertCoherentReentryConfig(
+      {
+        allowReentry: dto.allowReentry ?? tournament.allowReentry,
+        maxReentries:
+          dto.maxReentries !== undefined
+            ? dto.maxReentries
+            : (tournament.maxReentries ?? undefined),
+        reentryUntilLevel:
+          dto.reentryUntilLevel !== undefined
+            ? dto.reentryUntilLevel
+            : (tournament.reentryUntilLevel ?? undefined),
+      },
+      effectiveLevelCount,
+    );
+    assertCoherentStaffBonusConfig({
+      staffBonusCost:
+        dto.staffBonusCost !== undefined
+          ? dto.staffBonusCost
+          : (tournament.staffBonusCost?.toString() ?? undefined),
+      staffBonusChips:
+        dto.staffBonusChips !== undefined
+          ? dto.staffBonusChips
+          : (tournament.staffBonusChips ?? undefined),
+    });
+
+    const updated = await this.prisma.withClube(clubeId, async (tx) => {
+      const result = await tx.tournament.updateMany({
+        where: {
+          id: tournamentId,
+          clubeId,
+          status: 'REGISTERING',
+          entries: { none: {} },
+        },
+        data: {
+          name: dto.name,
+          buyIn: dto.buyIn,
+          fee: dto.fee,
+          staffBonusCost: dto.staffBonusCost,
+          staffBonusChips: dto.staffBonusChips,
+          startingStack: dto.startingStack,
+          maxPlayers: dto.maxPlayers,
+          tableCapacity: dto.tableCapacity,
+          startsAt: dto.startsAt ? new Date(dto.startsAt) : undefined,
+          lateRegUntil: dto.lateRegUntil
+            ? new Date(dto.lateRegUntil)
+            : undefined,
+          guaranteedPrize: dto.guaranteedPrize,
+          blindStructureId: dto.blindStructureId,
+          allowReentry: dto.allowReentry,
+          maxReentries: dto.maxReentries,
+          reentryUntilLevel: dto.reentryUntilLevel,
+          version: { increment: 1 },
+        },
+      });
+      if (result.count === 0) {
+        throw new ConflictException(
+          'O torneio mudou (alguém se inscreveu) durante a edição — recarregue e tente de novo.',
+        );
+      }
+
+      if (dto.prizes) {
+        await tx.tournamentPrize.deleteMany({ where: { tournamentId } });
+        await tx.tournamentPrize.createMany({
+          data: dto.prizes.map((p) => ({
+            tournamentId,
+            position: p.position,
+            percentage: p.percentage,
+          })),
+        });
+      }
+
+      if (newLevels) {
+        await tx.tournamentBlindLevel.deleteMany({ where: { tournamentId } });
+        await tx.tournamentBlindLevel.createMany({ data: newLevels });
+      }
+
+      return tx.tournament.findUniqueOrThrow({
+        where: { id: tournamentId },
+        include: { _count: { select: { entries: true } } },
+      });
+    });
+
+    return toTournamentSummaryDto(updated);
   }
 
   async listTournaments(
@@ -1008,9 +1136,19 @@ function assertRegistrationAllowed(
   }
 }
 
-/** Configuração de reentrada coerente na criação do torneio (MT-BE-03). */
+/**
+ * Configuração de reentrada coerente (MT-BE-03). Recebe só os 3 campos que
+ * lê — na criação é o `CreateTournamentDto` inteiro (satisfaz o `Pick` por
+ * estrutura); na edição (`updateTournament`) é o ESTADO EFETIVO mesclado
+ * (patch sobre o que já está gravado), não o patch isolado — um PATCH que só
+ * manda `reentryUntilLevel` sem tocar `allowReentry` precisa ser validado
+ * contra o `allowReentry` que já está no banco, não contra `undefined`.
+ */
 function assertCoherentReentryConfig(
-  dto: CreateTournamentDto,
+  dto: Pick<
+    CreateTournamentDto,
+    'allowReentry' | 'maxReentries' | 'reentryUntilLevel'
+  >,
   levelCount: number,
 ): void {
   if (
@@ -1035,14 +1173,43 @@ function assertCoherentReentryConfig(
 /**
  * Espelha o CHECK `tournaments_staff_bonus_coherent` (migration
  * `add_staff_bonus`) com uma mensagem amigável: custo e fichas do bônus de
- * staff andam juntos, um sem o outro não faz sentido.
+ * staff andam juntos, um sem o outro não faz sentido. Mesma nota de
+ * `assertCoherentReentryConfig` sobre criação vs. edição (estado efetivo).
  */
-function assertCoherentStaffBonusConfig(dto: CreateTournamentDto): void {
+function assertCoherentStaffBonusConfig(
+  dto: Pick<CreateTournamentDto, 'staffBonusCost' | 'staffBonusChips'>,
+): void {
   const hasCost = dto.staffBonusCost !== undefined;
   const hasChips = dto.staffBonusChips !== undefined;
   if (hasCost !== hasChips) {
     throw new BadRequestException(
       'staffBonusCost e staffBonusChips precisam vir juntos, ou nenhum dos dois.',
+    );
+  }
+}
+
+/**
+ * Grade de premiação válida: soma dos percentuais fecha 100.00 e posições
+ * não se repetem. Regra sobre o CONJUNTO de linhas — um `@Matches` de campo
+ * único (no DTO) não expressa isso. Compartilhada por `createTournament` e
+ * `updateTournament`.
+ */
+function assertValidPrizeGrade(
+  prizes: Array<{ position: number; percentage: string }>,
+): void {
+  const sum = prizes.reduce(
+    (total, prize) => total.add(new Prisma.Decimal(prize.percentage)),
+    new Prisma.Decimal(0),
+  );
+  if (sum.minus(ONE_HUNDRED).abs().greaterThan(PERCENTAGE_TOLERANCE)) {
+    throw new BadRequestException(
+      `A soma dos percentuais da grade de premiação deve ser 100.00 (atual: ${sum.toFixed(2)}).`,
+    );
+  }
+  const positions = prizes.map((p) => p.position);
+  if (new Set(positions).size !== positions.length) {
+    throw new BadRequestException(
+      'Colocações da grade de premiação não podem se repetir.',
     );
   }
 }

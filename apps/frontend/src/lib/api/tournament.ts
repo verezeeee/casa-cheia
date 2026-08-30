@@ -14,6 +14,7 @@ import type {
   EliminateEntryRequest,
   RegisterEntryRequest,
   UpdateBlindLevelRequest,
+  UpdateTournamentRequest,
 } from './types';
 
 function base(): string {
@@ -48,6 +49,14 @@ export function listTournaments(cursor?: string): Promise<PaginatedResponse<Tour
 /** ADMIN. */
 export function createTournament(input: CreateTournamentRequest): Promise<TournamentSummaryDto> {
   return httpClient.post<TournamentSummaryDto>(base(), input);
+}
+
+/** ADMIN. Só funciona antes da 1ª inscrição — o backend recusa com 400 depois. */
+export function updateTournament(
+  id: string,
+  input: UpdateTournamentRequest,
+): Promise<TournamentSummaryDto> {
+  return httpClient.patch<TournamentSummaryDto>(TOURNAMENT_PATHS.detail(id), input);
 }
 
 export function getTournament(id: string): Promise<TournamentDetailResponse> {
@@ -142,6 +151,7 @@ export function updateBlindLevel(
 export const tournamentApi = {
   listTournaments,
   createTournament,
+  updateTournament,
   getTournament,
   registerEntry,
   eliminateEntry,

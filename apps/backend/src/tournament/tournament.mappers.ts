@@ -304,6 +304,16 @@ export function toTournamentDetailResponse(
 ): TournamentDetailResponse {
   return {
     ...toTournamentSummaryDto(tournament),
+    startingStack: tournament.startingStack,
+    tableCapacity: tournament.tableCapacity,
+    lateRegUntil: tournament.lateRegUntil?.toISOString() ?? null,
+    guaranteedPrize: tournament.guaranteedPrize
+      ? toMoney(tournament.guaranteedPrize)
+      : null,
+    blindStructureId: tournament.blindStructureId,
+    allowReentry: tournament.allowReentry,
+    maxReentries: tournament.maxReentries,
+    reentryUntilLevel: tournament.reentryUntilLevel,
     prizes: prizes.map(toTournamentPrizeDto),
     entries: entries.map(toTournamentEntryDto),
   };

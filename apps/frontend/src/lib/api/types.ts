@@ -96,6 +96,13 @@ export interface CreateTournamentRequest {
   prizes: TournamentPrizeInput[];
 }
 
+/**
+ * Corpo de `PATCH /tournaments/:id` (ADMIN). Espelha `CreateTournamentRequest`
+ * campo a campo, TODOS opcionais — ausente não muda, presente é o novo valor.
+ * O backend só aceita a edição antes da 1ª inscrição (400 depois disso).
+ */
+export type UpdateTournamentRequest = Partial<CreateTournamentRequest>;
+
 /** Corpo de `POST /tournaments/:id/entries/:entryId/eliminate` (ADMIN). */
 export interface EliminateEntryRequest {
   finalPosition?: number;

@@ -10,6 +10,7 @@ import { tournamentApi } from '@/lib/api/tournament';
 import { Badge, Button, Card, ErrorState, Input, Skeleton, TextLink, Toast } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
 import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
+import { EditTournamentForm } from './edit-tournament-form';
 
 const STATUS_VARIANT: Record<TournamentStatus, BadgeVariant> = {
   [TournamentStatus.DRAFT]: 'warning',
@@ -60,6 +61,7 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [wantsStaffBonus, setWantsStaffBonus] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [eliminating, setEliminating] = useState<string | null>(null);
   const [finalPosition, setFinalPosition] = useState('');
 
@@ -146,11 +148,21 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const canFinish =
     tournament.status === TournamentStatus.REGISTERING ||
     tournament.status === TournamentStatus.RUNNING;
+  // Mesma condição do backend (`TournamentService.updateTournament`): só dá
+  // para editar antes da 1ª inscrição — depois disso a config trava.
+  const canEdit =
+    isAdmin &&
+    tournament.status === TournamentStatus.REGISTERING &&
+    tournament.registeredPlayers === 0;
 
   const entryGroups = STATUS_ORDER.map((status) => ({
     status,
     entries: tournament.entries.filter((entry) => entry.status === status),
   })).filter((group) => group.entries.length > 0);
+
+  if (isEditing) {
+    return <EditTournamentForm tournament={tournament} onClose={() => setIsEditing(false)} />;
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -165,7 +177,14 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
               {formatDateTimeSafe(tournament.startsAt)}
             </p>
           </div>
-          <Badge variant={STATUS_VARIANT[tournament.status]}>{tournament.status}</Badge>
+          <div className="flex items-center gap-2">
+            {canEdit && (
+              <Button variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
+                Editar
+              </Button>
+            )}
+            <Badge variant={STATUS_VARIANT[tournament.status]}>{tournament.status}</Badge>
+          </div>
         </div>
         <p className="mt-2 text-sm text-muted">
           {tournament.registeredPlayers}/{tournament.maxPlayers} inscritos

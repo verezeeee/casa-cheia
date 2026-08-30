@@ -31,6 +31,7 @@ import { EliminateEntryDto } from './dto/eliminate-entry.dto';
 import { ListTournamentsQueryDto } from './dto/list-tournaments-query.dto';
 import { RegisterEntryDto } from './dto/register-entry.dto';
 import { UpdateBlindLevelDto } from './dto/update-blind-level.dto';
+import { UpdateTournamentDto } from './dto/update-tournament.dto';
 import { TournamentClockService } from './tournament-clock.service';
 import { TournamentService } from './tournament.service';
 
@@ -58,6 +59,18 @@ export class TournamentController {
     @Body() dto: CreateTournamentDto,
   ): Promise<TournamentSummaryDto> {
     return this.tournamentService.createTournament(user.id, clubeId, dto);
+  }
+
+  /** Só antes da 1ª inscrição — ver docblock de `TournamentService.updateTournament`. */
+  @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async updateTournament(
+    @Param('clubeId') clubeId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateTournamentDto,
+  ): Promise<TournamentSummaryDto> {
+    return this.tournamentService.updateTournament(clubeId, id, dto);
   }
 
   @Get()

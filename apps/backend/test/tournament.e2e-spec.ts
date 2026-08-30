@@ -825,4 +825,79 @@ describe('Tournaments (e2e)', () => {
       .send({ staffBonus: true })
       .expect(400);
   });
+
+  it('editar torneio: funciona antes da 1ª inscrição, trava depois', async () => {
+    const admin = await registerAndLogin(app, { admin: true });
+    const player = await registerAndLogin(app);
+    await creditWallet(player.userId, '200.00');
+
+    const createRes = await request(app.getHttpServer())
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        name: 'Rascunho',
+        buyIn: '50.00',
+        fee: '5.00',
+        startingStack: 5000,
+        maxPlayers: 9,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        prizes: [{ position: 1, percentage: '100.00' }],
+      })
+      .expect(201);
+    const tournamentId = createRes.body.id as string;
+
+    // PLAYER não pode editar.
+    await request(app.getHttpServer())
+      .patch(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
+      .set('Authorization', `Bearer ${player.accessToken}`)
+      .send({ name: 'Hackeado' })
+      .expect(403);
+
+    // ADMIN edita nome, buy-in e a grade de premiação inteira.
+    await request(app.getHttpServer())
+      .patch(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        name: 'Sunday Major (editado)',
+        buyIn: '90.00',
+        prizes: [
+          { position: 1, percentage: '70.00' },
+          { position: 2, percentage: '30.00' },
+        ],
+      })
+      .expect(200)
+      .expect((res) => {
+        if (res.body.name !== 'Sunday Major (editado)')
+          throw new Error('nome não mudou');
+        if (res.body.buyIn !== '90.00') throw new Error('buyIn não mudou');
+      });
+
+    const detailRes = await request(app.getHttpServer())
+      .get(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .expect(200);
+    expect(detailRes.body.prizes).toEqual([
+      { position: 1, percentage: '70.00' },
+      { position: 2, percentage: '30.00' },
+    ]);
+    // Campos que só existem no detalhe (não na listagem) também vieram.
+    expect(detailRes.body).toMatchObject({
+      startingStack: 5000,
+      tableCapacity: 9,
+      allowReentry: false,
+    });
+
+    // Primeira inscrição — a partir daqui a configuração trava.
+    await request(app.getHttpServer())
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
+      .set('Authorization', `Bearer ${player.accessToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({ name: 'Tarde demais' })
+      .expect(400);
+  });
 });
