@@ -77,7 +77,36 @@ describe('TournamentDetail', () => {
 
     fireEvent.click(screen.getByText('Inscrever-se'));
     await waitFor(() =>
-      expect(tournamentApi.registerEntry).toHaveBeenCalledWith('trn-1', expect.any(String)),
+      expect(tournamentApi.registerEntry).toHaveBeenCalledWith('trn-1', expect.any(String), {
+        staffBonus: false,
+      }),
+    );
+  });
+
+  it('mostra o checkbox de bônus de staff quando o torneio oferece, e repassa a opção', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.PLAYER,
+      user: { id: 'me', email: 'me@x.dev', name: 'Eu' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      staffBonusCost: '5.00',
+      staffBonusChips: 2_500,
+    });
+    (tournamentApi.registerEntry as jest.Mock).mockResolvedValue({});
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    const checkbox = await screen.findByRole('checkbox', { name: /bônus de staff/i });
+
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByText('Inscrever-se'));
+    await waitFor(() =>
+      expect(tournamentApi.registerEntry).toHaveBeenCalledWith('trn-1', expect.any(String), {
+        staffBonus: true,
+      }),
     );
   });
 

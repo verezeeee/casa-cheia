@@ -99,6 +99,25 @@ export class CreateTournamentDto {
   reentryUntilLevel?: number;
 
   /**
+   * Bônus de staff (staff add-on). OPCIONAL por jogador na inscrição — quem
+   * paga leva `staffBonusChips` fichas extras; o valor bypassa o prize pool
+   * como `fee`. Precisa vir junto de `staffBonusChips` (validado no service,
+   * `assertCoherentStaffBonusConfig`) — ausente = torneio não oferece.
+   */
+  @IsOptional()
+  @Matches(DECIMAL_PATTERN, {
+    message: 'staffBonusCost deve ser um decimal monetário, ex: "5.00".',
+  })
+  staffBonusCost?: string;
+
+  /** Fichas extras concedidas a quem paga o bônus de staff. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  staffBonusChips?: number;
+
+  /**
    * Grade de premiação completa. A soma dos `percentage` precisa fechar
    * exatamente 100.00 — validado no service (regra sobre o CONJUNTO de
    * linhas, um `@Matches` de campo único não expressa isso).

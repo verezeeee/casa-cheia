@@ -71,6 +71,13 @@ describe('api/tournament', () => {
     expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('idem-1');
   });
 
+  it('registerEntry com staffBonus: true envia o corpo', async () => {
+    mockJsonResponse({ id: 'entry-1', staffBonusPaid: true });
+    await tournamentApi.registerEntry('trn-1', 'idem-1', { staffBonus: true });
+    const [, init] = lastCall();
+    expect(init.body).toBe(JSON.stringify({ staffBonus: true }));
+  });
+
   it('eliminateEntry faz POST em .../eliminate com o corpo informado', async () => {
     mockJsonResponse({ id: 'entry-1' });
     await tournamentApi.eliminateEntry('trn-1', 'entry-1', { finalPosition: 3 });

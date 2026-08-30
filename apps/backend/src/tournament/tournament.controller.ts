@@ -29,6 +29,7 @@ import { requireIdempotencyKey } from '../common/http/require-idempotency-key';
 import { CreateTournamentDto } from './dto/create-tournament.dto';
 import { EliminateEntryDto } from './dto/eliminate-entry.dto';
 import { ListTournamentsQueryDto } from './dto/list-tournaments-query.dto';
+import { RegisterEntryDto } from './dto/register-entry.dto';
 import { UpdateBlindLevelDto } from './dto/update-blind-level.dto';
 import { TournamentClockService } from './tournament-clock.service';
 import { TournamentService } from './tournament.service';
@@ -85,6 +86,7 @@ export class TournamentController {
     @Param('clubeId') clubeId: string,
     @Param('id') tournamentId: string,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Body() dto: RegisterEntryDto,
   ): Promise<TournamentEntryDto> {
     requireIdempotencyKey(idempotencyKey);
     return this.tournamentService.registerEntry(
@@ -92,6 +94,7 @@ export class TournamentController {
       clubeId,
       tournamentId,
       idempotencyKey,
+      dto.staffBonus ?? false,
     );
   }
 

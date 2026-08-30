@@ -53,6 +53,13 @@
 // `Decimal(14,2)` (dinheiro) — o contraste de tipos é deliberado e torna
 // impossível somar acidentalmente fichas com reais.
 //
+// BÔNUS DE STAFF (staff add-on)
+// Mesma dobradiça do `fee`: `Tournament.staffBonusCost`, quando o jogador
+// opta, é debitado JUNTO do buy-in e bypassa o prize pool (vira receita da
+// equipe/casa, não prêmio). A diferença para `fee` é que ninguém é obrigado —
+// é opt-in por inscrição (`TournamentEntry.staffBonusPaid`) — e dá
+// `Tournament.staffBonusChips` de FICHAS extras em vez de só ser cobrado.
+//
 // ============================================================================
 
 /// Torneio (MTT / SNG). Agrega a configuração, a grade de premiação e as
@@ -119,6 +126,16 @@ model Tournament {
   /// Garantido do torneio. Se o prize pool arrecadado ficar abaixo deste valor,
   /// a diferença (overlay) é coberta pela casa. Nulo em torneios sem garantia.
   guaranteedPrize Decimal? @map("guaranteed_prize") @db.Decimal(14, 2)
+
+  /// BÔNUS DE STAFF (staff add-on). Taxa OPCIONAL por jogador, cobrada junto
+  /// do buy-in só quando o jogador aceita: bypassa o prize pool exatamente
+  /// como `fee` (é receita da equipe/casa, não prêmio), mas ao contrário da
+  /// `fee` ninguém é obrigado a pagar. `null` nos dois = torneio não oferece
+  /// bônus de staff (comportamento de sempre). CHECK
+  /// `tournaments_staff_bonus_coherent` garante que os dois andam juntos — não
+  /// faz sentido ter custo sem fichas ou fichas sem custo.
+  staffBonusCost  Decimal? @map("staff_bonus_cost") @db.Decimal(14, 2)
+  staffBonusChips Int?     @map("staff_bonus_chips")
 
   /// Preset de blinds que ORIGINOU a grade deste torneio (MT-DB-03). É só a
   /// procedência: os níveis efetivamente usados foram COPIADOS para
@@ -259,10 +276,16 @@ model TournamentEntry {
   status TournamentEntryStatus @default(REGISTERED)
 
   /// FICHAS DE TORNEIO em posse do jogador — NÃO é valor monetário. Inicia em
-  /// `Tournament.startingStack` e vai a 0 na eliminação. `Int` de propósito:
-  /// ficha de torneio não tem casas decimais nem lastro em reais (contraste
+  /// `Tournament.startingStack` (+ `Tournament.staffBonusChips` se
+  /// `staffBonusPaid`) e vai a 0 na eliminação. `Int` de propósito: ficha de
+  /// torneio não tem casas decimais nem lastro em reais (contraste
   /// deliberado com `prizeAmount`, que é `Decimal(14,2)`).
   chipStack Int @map("chip_stack")
+
+  /// Se ESTA inscrição pagou o bônus de staff (`Tournament.staffBonusCost`).
+  /// Por inscrição, não por jogador: numa reentrada o jogador escolhe de novo
+  /// — cada entry é um buy-in independente, com seu próprio chipStack.
+  staffBonusPaid Boolean @default(false) @map("staff_bonus_paid")
 
   /// Colocação final. Nula enquanto o jogador não é eliminado / o torneio não
   /// termina.

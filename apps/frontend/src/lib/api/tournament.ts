@@ -12,6 +12,7 @@ import { getCurrentClubeId } from './club-context';
 import type {
   CreateTournamentRequest,
   EliminateEntryRequest,
+  RegisterEntryRequest,
   UpdateBlindLevelRequest,
 } from './types';
 
@@ -53,8 +54,17 @@ export function getTournament(id: string): Promise<TournamentDetailResponse> {
   return httpClient.get<TournamentDetailResponse>(TOURNAMENT_PATHS.detail(id));
 }
 
-export function registerEntry(id: string, idempotencyKey: string): Promise<TournamentEntryDto> {
-  return httpClient.post<TournamentEntryDto>(TOURNAMENT_PATHS.register(id), undefined, {
+export function registerEntry(
+  id: string,
+  idempotencyKey: string,
+  input: RegisterEntryRequest = {},
+): Promise<TournamentEntryDto> {
+  // Sem corpo quando não há nada a dizer (contrato de antes do bônus de
+  // staff, preservado): só manda `{ staffBonus: true }` quando o jogador
+  // realmente optou — o backend trata os dois casos da mesma forma
+  // (`dto.staffBonus ?? false`), isto é só para não mandar `"{}"` à toa.
+  const body = input.staffBonus === undefined ? undefined : input;
+  return httpClient.post<TournamentEntryDto>(TOURNAMENT_PATHS.register(id), body, {
     headers: { 'Idempotency-Key': idempotencyKey },
   });
 }

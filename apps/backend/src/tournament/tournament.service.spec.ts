@@ -15,6 +15,8 @@ const TOURNAMENT = {
   name: 'Sunday Major',
   buyIn: new Prisma.Decimal('90.00'),
   fee: new Prisma.Decimal('10.00'),
+  staffBonusCost: null,
+  staffBonusChips: null,
   startingStack: 10_000,
   maxPlayers: 4,
   tableCapacity: 9,
@@ -337,6 +339,46 @@ describe('TournamentService', () => {
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
+
+    it('rejeita staffBonusCost sem staffBonusChips', async () => {
+      const { service } = buildService();
+      await expect(
+        service.createTournament('admin-1', CLUBE_ID, {
+          ...validDto([{ position: 1, percentage: '100.00' }]),
+          staffBonusCost: '5.00',
+        }),
+      ).rejects.toThrow(/staffBonusCost e staffBonusChips/);
+    });
+
+    it('rejeita staffBonusChips sem staffBonusCost', async () => {
+      const { service } = buildService();
+      await expect(
+        service.createTournament('admin-1', CLUBE_ID, {
+          ...validDto([{ position: 1, percentage: '100.00' }]),
+          staffBonusChips: 2_500,
+        }),
+      ).rejects.toThrow(/staffBonusCost e staffBonusChips/);
+    });
+
+    it('aceita staffBonusCost + staffBonusChips juntos', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.create.mockResolvedValue(TOURNAMENT);
+
+      await service.createTournament('admin-1', CLUBE_ID, {
+        ...validDto([{ position: 1, percentage: '100.00' }]),
+        staffBonusCost: '5.00',
+        staffBonusChips: 2_500,
+      });
+
+      expect(prisma.tournament.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            staffBonusCost: '5.00',
+            staffBonusChips: 2_500,
+          }),
+        }),
+      );
+    });
   });
 
   describe('getTournament', () => {
@@ -432,6 +474,76 @@ describe('TournamentService', () => {
           }),
         }),
       );
+    });
+
+    describe('bônus de staff (staff add-on)', () => {
+      const WITH_STAFF_BONUS = {
+        ...TOURNAMENT,
+        staffBonusCost: new Prisma.Decimal('5.00'),
+        staffBonusChips: 2_500,
+      };
+
+      it('staffBonus: true debita buyIn+fee+staffBonusCost e credita fichas extras', async () => {
+        const { service, prisma, walletService } = buildService();
+        primeRegister(prisma, walletService, WITH_STAFF_BONUS);
+
+        await service.registerEntry(
+          'user-1',
+          CLUBE_ID,
+          'trn-1',
+          'idem-1',
+          true,
+        );
+
+        const [, , ledgerInput] = walletService.applyLedgerEntry.mock
+          .calls[0] as [unknown, unknown, { amount: Prisma.Decimal }];
+        expect(ledgerInput.amount.toFixed(2)).toBe('-105.00'); // 90 + 10 + 5
+        expect(prisma.tx.tournamentEntry.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              chipStack: TOURNAMENT.startingStack + 2_500,
+              staffBonusPaid: true,
+            }),
+          }),
+        );
+        // O prize pool NUNCA vê o bônus de staff — só o buyIn, como sempre.
+        expect(prisma.tx.tournament.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              prizePool: { increment: WITH_STAFF_BONUS.buyIn },
+            }),
+          }),
+        );
+      });
+
+      it('sem staffBonus (padrão), debita só buyIn+fee e NÃO credita fichas extras', async () => {
+        const { service, prisma, walletService } = buildService();
+        primeRegister(prisma, walletService, WITH_STAFF_BONUS);
+
+        await service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1');
+
+        const [, , ledgerInput] = walletService.applyLedgerEntry.mock
+          .calls[0] as [unknown, unknown, { amount: Prisma.Decimal }];
+        expect(ledgerInput.amount.toFixed(2)).toBe('-100.00'); // 90 + 10
+        expect(prisma.tx.tournamentEntry.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              chipStack: TOURNAMENT.startingStack,
+              staffBonusPaid: false,
+            }),
+          }),
+        );
+      });
+
+      it('staffBonus: true num torneio SEM bônus configurado rejeita com 400', async () => {
+        const { service, prisma, walletService } = buildService();
+        primeRegister(prisma, walletService, TOURNAMENT); // staffBonusCost: null
+
+        await expect(
+          service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1', true),
+        ).rejects.toThrow(/não oferece bônus de staff/);
+        expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
+      });
     });
 
     // MT-BE-04: assento na MESMA transação (o `tx` do ledger), mesa 1 aberta

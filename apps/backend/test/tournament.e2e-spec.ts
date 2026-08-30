@@ -731,4 +731,98 @@ describe('Tournaments (e2e)', () => {
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .expect(400);
   });
+
+  it('bônus de staff: opt-in debita mais e credita fichas extras; sem optar, fica no buy-in normal', async () => {
+    const admin = await registerAndLogin(app, { admin: true });
+    const withBonus = await registerAndLogin(app);
+    const withoutBonus = await registerAndLogin(app);
+    await Promise.all(
+      [withBonus, withoutBonus].map((p) => creditWallet(p.userId, '200.00')),
+    );
+
+    const createRes = await request(app.getHttpServer())
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        name: 'Staff Bonus Open',
+        buyIn: '90.00',
+        fee: '10.00',
+        staffBonusCost: '5.00',
+        staffBonusChips: 2500,
+        startingStack: 10000,
+        maxPlayers: 4,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        prizes: [{ position: 1, percentage: '100.00' }],
+      })
+      .expect(201);
+    expect(createRes.body).toMatchObject({
+      staffBonusCost: '5.00',
+      staffBonusChips: 2500,
+    });
+    const tournamentId = createRes.body.id as string;
+
+    const bonusEntryRes = await request(app.getHttpServer())
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
+      .set('Authorization', `Bearer ${withBonus.accessToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ staffBonus: true })
+      .expect(201);
+    expect(bonusEntryRes.body).toMatchObject({
+      chipStack: 12500, // 10000 + 2500
+      staffBonusPaid: true,
+    });
+
+    const plainEntryRes = await request(app.getHttpServer())
+      .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
+      .set('Authorization', `Bearer ${withoutBonus.accessToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .expect(201);
+    expect(plainEntryRes.body).toMatchObject({
+      chipStack: 10000,
+      staffBonusPaid: false,
+    });
+
+    // 200 - (90 + 10 + 5) = 95 para quem pagou o bônus; 200 - 100 = 100 para quem não pagou.
+    const bonusBalance = await request(app.getHttpServer())
+      .get(`/api/clubes/${CLUBE_ID}/carteira/balance`)
+      .set('Authorization', `Bearer ${withBonus.accessToken}`)
+      .expect(200);
+    expect(bonusBalance.body.balance).toBe('95.00');
+
+    const plainBalance = await request(app.getHttpServer())
+      .get(`/api/clubes/${CLUBE_ID}/carteira/balance`)
+      .set('Authorization', `Bearer ${withoutBonus.accessToken}`)
+      .expect(200);
+    expect(plainBalance.body.balance).toBe('100.00');
+
+    // O prize pool só viu os dois buy-ins (90 x 2) — o bônus de staff nunca entra nele.
+    const detailRes = await request(app.getHttpServer())
+      .get(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .expect(200);
+    expect(detailRes.body.entries).toHaveLength(2);
+
+    // Torneio sem bônus configurado recusa staffBonus: true.
+    const noBonusCreateRes = await request(app.getHttpServer())
+      .post(`/api/clubes/${CLUBE_ID}/torneios`)
+      .set('Authorization', `Bearer ${admin.accessToken}`)
+      .send({
+        name: 'Sem Bônus',
+        buyIn: '10.00',
+        fee: '1.00',
+        startingStack: 1000,
+        maxPlayers: 2,
+        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+        prizes: [{ position: 1, percentage: '100.00' }],
+      })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(
+        `/api/clubes/${CLUBE_ID}/torneios/${noBonusCreateRes.body.id}/register`,
+      )
+      .set('Authorization', `Bearer ${withBonus.accessToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ staffBonus: true })
+      .expect(400);
+  });
 });

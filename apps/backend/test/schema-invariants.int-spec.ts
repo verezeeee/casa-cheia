@@ -560,6 +560,44 @@ describe('Invariantes de schema (Postgres real)', () => {
       });
     });
 
+    describe('CHECK tournaments_staff_bonus_coherent (staff add-on)', () => {
+      it('rejeita staff_bonus_cost preenchido sem staff_bonus_chips', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        await expect(
+          prisma.$executeRaw`UPDATE tournaments SET staff_bonus_cost = 5.00 WHERE id = ${tournament.id}`,
+        ).rejects.toThrow(/constraint|check/i);
+      });
+
+      it('rejeita staff_bonus_chips preenchido sem staff_bonus_cost', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        await expect(
+          prisma.$executeRaw`UPDATE tournaments SET staff_bonus_chips = 2500 WHERE id = ${tournament.id}`,
+        ).rejects.toThrow(/constraint|check/i);
+      });
+
+      it('aceita os dois preenchidos juntos', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        await expect(
+          prisma.$executeRaw`UPDATE tournaments SET staff_bonus_cost = 5.00, staff_bonus_chips = 2500 WHERE id = ${tournament.id}`,
+        ).resolves.toBe(1);
+      });
+
+      it('aceita os dois nulos (torneio sem bônus de staff, o padrão)', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        await expect(
+          prisma.$executeRaw`UPDATE tournaments SET staff_bonus_cost = NULL, staff_bonus_chips = NULL WHERE id = ${tournament.id}`,
+        ).resolves.toBe(1);
+      });
+    });
+
     describe('UNIQUE parcial tournament_entries_active_user_unique (reentry, MT-DB-06)', () => {
       it('rejeita duas inscrições vivas do mesmo jogador no mesmo torneio', async () => {
         const admin = await createUser();

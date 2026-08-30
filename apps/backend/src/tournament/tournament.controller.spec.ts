@@ -26,6 +26,7 @@ const ENTRY = {
   userName: 'Jogador',
   status: TournamentEntryStatus.REGISTERED,
   chipStack: 10_000,
+  staffBonusPaid: false,
   finalPosition: null,
   prizeAmount: null,
   tableNumber: null,
@@ -88,6 +89,8 @@ describe('TournamentController', () => {
       name: 'Sunday Major',
       buyIn: '90.00',
       fee: '10.00',
+      staffBonusCost: null,
+      staffBonusChips: null,
       maxPlayers: 100,
       registeredPlayers: 0,
       status: TournamentStatus.REGISTERING,
@@ -125,6 +128,8 @@ describe('TournamentController', () => {
       name: 'Sunday Major',
       buyIn: '90.00',
       fee: '10.00',
+      staffBonusCost: null,
+      staffBonusChips: null,
       maxPlayers: 100,
       registeredPlayers: 1,
       status: TournamentStatus.REGISTERING,
@@ -144,7 +149,7 @@ describe('TournamentController', () => {
     it('exige Idempotency-Key', async () => {
       const { controller } = buildController();
       await expect(
-        controller.register(PLAYER, CLUBE_ID, 'trn-1', undefined),
+        controller.register(PLAYER, CLUBE_ID, 'trn-1', undefined, {}),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -152,12 +157,32 @@ describe('TournamentController', () => {
       const { controller, tournamentService } = buildController();
       tournamentService.registerEntry.mockResolvedValue(ENTRY);
 
-      await controller.register(PLAYER, CLUBE_ID, 'trn-1', 'idem-1');
+      await controller.register(PLAYER, CLUBE_ID, 'trn-1', 'idem-1', {});
       expect(tournamentService.registerEntry).toHaveBeenCalledWith(
         PLAYER.id,
         CLUBE_ID,
         'trn-1',
         'idem-1',
+        false,
+      );
+    });
+
+    it('repassa staffBonus: true ao service', async () => {
+      const { controller, tournamentService } = buildController();
+      tournamentService.registerEntry.mockResolvedValue({
+        ...ENTRY,
+        staffBonusPaid: true,
+      });
+
+      await controller.register(PLAYER, CLUBE_ID, 'trn-1', 'idem-1', {
+        staffBonus: true,
+      });
+      expect(tournamentService.registerEntry).toHaveBeenCalledWith(
+        PLAYER.id,
+        CLUBE_ID,
+        'trn-1',
+        'idem-1',
+        true,
       );
     });
   });
@@ -186,6 +211,8 @@ describe('TournamentController', () => {
       name: 'Sunday Major',
       buyIn: '90.00',
       fee: '10.00',
+      staffBonusCost: null,
+      staffBonusChips: null,
       maxPlayers: 100,
       registeredPlayers: 1,
       status: TournamentStatus.FINISHED,

@@ -59,6 +59,7 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const { user, clubeRole } = useSession();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  const [wantsStaffBonus, setWantsStaffBonus] = useState(false);
   const [eliminating, setEliminating] = useState<string | null>(null);
   const [finalPosition, setFinalPosition] = useState('');
 
@@ -78,7 +79,10 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   }
 
   const registerMutation = useMutation({
-    mutationFn: () => tournamentApi.registerEntry(tournamentId, crypto.randomUUID()),
+    mutationFn: () =>
+      tournamentApi.registerEntry(tournamentId, crypto.randomUUID(), {
+        staffBonus: wantsStaffBonus,
+      }),
     onSuccess: () => {
       setError(null);
       invalidate();
@@ -181,14 +185,32 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
         </div>
 
         {canRegister && (
-          <Button
-            className="mt-3"
-            fullWidth
-            loading={registerMutation.isPending}
-            onClick={() => registerMutation.mutate()}
-          >
-            Inscrever-se
-          </Button>
+          <>
+            {/* Bônus de staff (staff add-on): OPCIONAL, só aparece quando o
+                torneio oferece (`staffBonusCost` não nulo). Vai para a
+                equipe, não para o prize pool — mesma ideia da fee, mas
+                ninguém é obrigado. */}
+            {tournament.staffBonusCost && (
+              <label className="mt-3 flex items-center gap-2 text-sm font-medium text-foreground">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-[var(--accent)]"
+                  checked={wantsStaffBonus}
+                  onChange={(e) => setWantsStaffBonus(e.target.checked)}
+                />
+                Pagar bônus de staff ({formatMoneySafe(tournament.staffBonusCost)} → +
+                {tournament.staffBonusChips} fichas)
+              </label>
+            )}
+            <Button
+              className="mt-3"
+              fullWidth
+              loading={registerMutation.isPending}
+              onClick={() => registerMutation.mutate()}
+            >
+              Inscrever-se
+            </Button>
+          </>
         )}
         {myEntry &&
           (myTicket ? (

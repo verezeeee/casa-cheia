@@ -32,6 +32,10 @@ export function toTournamentSummaryDto(
     name: tournament.name,
     buyIn: toMoney(tournament.buyIn),
     fee: toMoney(tournament.fee),
+    staffBonusCost: tournament.staffBonusCost
+      ? toMoney(tournament.staffBonusCost)
+      : null,
+    staffBonusChips: tournament.staffBonusChips,
     maxPlayers: tournament.maxPlayers,
     registeredPlayers: tournament._count.entries,
     // Mesmos literais em Prisma e @poker-system/shared (ver base.prisma).
@@ -64,6 +68,7 @@ export function toTournamentEntryDto(
     userName: entry.user.name,
     status: entry.status as unknown as SharedTournamentEntryStatus,
     chipStack: entry.chipStack,
+    staffBonusPaid: entry.staffBonusPaid,
     finalPosition: entry.finalPosition,
     prizeAmount: entry.prizeAmount ? toMoney(entry.prizeAmount) : null,
     tableNumber: activeSeat?.tournamentTable.tableNumber ?? null,

@@ -27,6 +27,10 @@ export function CreateTournamentForm() {
   const [allowReentry, setAllowReentry] = useState(false);
   const [maxReentries, setMaxReentries] = useState('');
   const [reentryUntilLevel, setReentryUntilLevel] = useState('');
+  /** Custo e fichas do bônus de staff só viajam juntos — um checkbox só, como `allowReentry`. */
+  const [offersStaffBonus, setOffersStaffBonus] = useState(false);
+  const [staffBonusCost, setStaffBonusCost] = useState('');
+  const [staffBonusChips, setStaffBonusChips] = useState('');
   // Grade de premiação: índice 0 = 1º lugar, índice 1 = 2º lugar, e assim por
   // diante — a colocação é sempre a posição no array, então não há campo de
   // posição separado para o admin preencher.
@@ -58,6 +62,8 @@ export function CreateTournamentForm() {
         maxReentries: allowReentry && maxReentries ? Number(maxReentries) : undefined,
         reentryUntilLevel:
           allowReentry && reentryUntilLevel ? Number(reentryUntilLevel) : undefined,
+        staffBonusCost: offersStaffBonus ? staffBonusCost : undefined,
+        staffBonusChips: offersStaffBonus ? Number(staffBonusChips) : undefined,
         prizes: prizePercentages.map((percentage, index) => ({
           position: index + 1,
           percentage,
@@ -224,6 +230,45 @@ export function CreateTournamentForm() {
                   min={1}
                   value={reentryUntilLevel}
                   onChange={(e) => setReentryUntilLevel(e.target.value)}
+                />
+              </FormField>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-3 sm:col-span-2">
+          <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <input
+              type="checkbox"
+              className="size-4 accent-[var(--accent)]"
+              checked={offersStaffBonus}
+              onChange={(e) => setOffersStaffBonus(e.target.checked)}
+            />
+            Oferece bônus de staff (staff add-on)
+          </label>
+
+          {/* Taxa OPCIONAL por jogador que vai para a equipe (não entra no
+              prize pool, como a fee) — quem paga leva fichas extras. */}
+          {offersStaffBonus && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <FormField label="Custo do bônus" htmlFor="trn-staff-bonus-cost">
+                <Input
+                  id="trn-staff-bonus-cost"
+                  inputMode="decimal"
+                  placeholder="5.00"
+                  required
+                  value={staffBonusCost}
+                  onChange={(e) => setStaffBonusCost(e.target.value)}
+                />
+              </FormField>
+              <FormField label="Fichas extras" htmlFor="trn-staff-bonus-chips">
+                <Input
+                  id="trn-staff-bonus-chips"
+                  type="number"
+                  min={1}
+                  required
+                  value={staffBonusChips}
+                  onChange={(e) => setStaffBonusChips(e.target.value)}
                 />
               </FormField>
             </div>

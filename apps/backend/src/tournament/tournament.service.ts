@@ -123,6 +123,7 @@ export class TournamentService {
 
     const levels = await this.copyBlindLevels(dto.blindStructureId);
     assertCoherentReentryConfig(dto, levels.length);
+    assertCoherentStaffBonusConfig(dto);
 
     const tournament = await this.prisma.tournament.create({
       data: {
@@ -130,6 +131,8 @@ export class TournamentService {
         name: dto.name,
         buyIn: dto.buyIn,
         fee: dto.fee,
+        staffBonusCost: dto.staffBonusCost,
+        staffBonusChips: dto.staffBonusChips,
         startingStack: dto.startingStack,
         maxPlayers: dto.maxPlayers,
         tableCapacity: dto.tableCapacity ?? DEFAULT_TABLE_CAPACITY,
@@ -262,6 +265,7 @@ export class TournamentService {
     clubeId: string,
     tournamentId: string,
     idempotencyKey: string,
+    staffBonus = false,
   ): Promise<TournamentEntryDto> {
     const ledgerKey = `tournament-buyin:${idempotencyKey}`;
 
@@ -302,11 +306,6 @@ export class TournamentService {
         // recentemente — sem isto, o corte de `reentryUntilLevel` abaixo
         // deixaria passar uma reentrada tardia só porque a coluna no banco
         // ainda não tinha sido atualizada por um `next()` manual.
-        // Nível EFETIVO (não o gravado): o relógio anda sozinho por tempo de
-        // parede (`advanceClockToNow`) e ninguém pode ter mexido nele
-        // recentemente — sem isto, o corte de `reentryUntilLevel` abaixo
-        // deixaria passar uma reentrada tardia só porque a coluna no banco
-        // ainda não tinha sido atualizada por um `next()` manual.
         const currentLevelNumber = advanceClockToNow(
           tournament,
           tournament.blindLevels,
@@ -325,6 +324,20 @@ export class TournamentService {
           throw new BadRequestException('Torneio lotado.');
         }
 
+        // Bônus de staff (staff add-on): OPCIONAL por jogador, bypassa o
+        // prize pool como `fee` — ver docblock de `Tournament.staffBonusCost`
+        // (tournament.prisma). `staffBonus: true` num torneio que não
+        // oferece o bônus (`staffBonusCost` nulo) é 400, não um no-op
+        // silencioso: o jogador achou que ia pagar por fichas extras.
+        if (staffBonus && tournament.staffBonusCost === null) {
+          throw new BadRequestException(
+            'Este torneio não oferece bônus de staff.',
+          );
+        }
+        const chipStack =
+          tournament.startingStack +
+          (staffBonus ? (tournament.staffBonusChips ?? 0) : 0);
+
         const created = await tx.tournamentEntry.create({
           data: {
             // `clubeId` explícito aqui só para o TYPESCRIPT: o `tx` tipado é
@@ -337,20 +350,26 @@ export class TournamentService {
             tournamentId,
             userId,
             status: 'REGISTERED',
-            chipStack: tournament.startingStack,
+            chipStack,
+            staffBonusPaid: staffBonus,
           },
         });
+
+        let debit = new Prisma.Decimal(tournament.buyIn).add(tournament.fee);
+        let description = 'Inscrição em torneio';
+        if (staffBonus) {
+          debit = debit.add(tournament.staffBonusCost ?? 0);
+          description += ' (+ bônus de staff)';
+        }
 
         const walletTxn = await this.walletService.applyLedgerEntry(
           tx,
           wallet.id,
           {
             type: 'TOURNAMENT_BUY_IN',
-            amount: new Prisma.Decimal(tournament.buyIn)
-              .add(tournament.fee)
-              .negated(),
+            amount: debit.negated(),
             idempotencyKey: ledgerKey,
-            description: 'Inscrição em torneio',
+            description,
             tournamentEntryId: created.id,
           },
         );
@@ -1009,6 +1028,21 @@ function assertCoherentReentryConfig(
   ) {
     throw new BadRequestException(
       `reentryUntilLevel (${dto.reentryUntilLevel}) está fora da estrutura de blinds, que tem ${levelCount} níveis.`,
+    );
+  }
+}
+
+/**
+ * Espelha o CHECK `tournaments_staff_bonus_coherent` (migration
+ * `add_staff_bonus`) com uma mensagem amigável: custo e fichas do bônus de
+ * staff andam juntos, um sem o outro não faz sentido.
+ */
+function assertCoherentStaffBonusConfig(dto: CreateTournamentDto): void {
+  const hasCost = dto.staffBonusCost !== undefined;
+  const hasChips = dto.staffBonusChips !== undefined;
+  if (hasCost !== hasChips) {
+    throw new BadRequestException(
+      'staffBonusCost e staffBonusChips precisam vir juntos, ou nenhum dos dois.',
     );
   }
 }

@@ -19,8 +19,11 @@ export interface TournamentEntryDto {
 
   status: TournamentEntryStatus;
 
-  /** Fichas de torneio (sem valor monetário). */
+  /** Fichas de torneio (sem valor monetário). Já inclui o bônus de staff, se pago. */
   chipStack: number;
+
+  /** Se esta inscrição pagou o bônus de staff (`Tournament.staffBonusCost`). */
+  staffBonusPaid: boolean;
 
   /** Colocação final (1-based); `null` enquanto o jogador não for eliminado. */
   finalPosition: number | null;

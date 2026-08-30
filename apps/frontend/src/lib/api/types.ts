@@ -86,12 +86,25 @@ export interface CreateTournamentRequest {
   maxReentries?: number;
   /** Último nível em que se pode reentrar. Ausente = sem corte. */
   reentryUntilLevel?: number;
+  /**
+   * Bônus de staff (staff add-on), OPCIONAL por jogador na inscrição. Precisa
+   * vir junto de `staffBonusChips` — um sem o outro é 400 no backend.
+   */
+  staffBonusCost?: string;
+  /** Fichas extras concedidas a quem paga o bônus de staff. */
+  staffBonusChips?: number;
   prizes: TournamentPrizeInput[];
 }
 
 /** Corpo de `POST /tournaments/:id/entries/:entryId/eliminate` (ADMIN). */
 export interface EliminateEntryRequest {
   finalPosition?: number;
+}
+
+/** Corpo de `POST /tournaments/:id/register`. */
+export interface RegisterEntryRequest {
+  /** Opção pelo bônus de staff. Ausente/`false` = não paga. */
+  staffBonus?: boolean;
 }
 
 /**
