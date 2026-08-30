@@ -39,12 +39,12 @@ export function TableList() {
   }
 
   return (
-    <Reveal className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface">
+    <Reveal className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-surface lg:grid lg:grid-cols-2 lg:gap-3 lg:divide-y-0 lg:overflow-visible lg:rounded-none lg:border-none lg:bg-transparent xl:grid-cols-3">
       {tables.map((table) => (
         <RevealItem key={table.id}>
           <Link
             href={`/tables/${table.id}`}
-            className="flex items-start justify-between gap-3 p-4 transition-all duration-200 hover:bg-surface-hover active:scale-[0.99]"
+            className="flex items-start justify-between gap-3 p-4 transition-all duration-200 hover:bg-surface-hover active:scale-[0.99] lg:rounded-lg lg:border lg:border-border lg:bg-surface"
           >
             <div className="min-w-0">
               <p className="font-display font-semibold">{table.name}</p>

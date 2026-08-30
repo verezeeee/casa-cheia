@@ -10,13 +10,14 @@ import { Logo } from './logo';
  * Cabeçalho mínimo das páginas autenticadas: identidade (wordmark + sessão)
  * e a única ação que não é "ir para uma seção" (sair). Navegação entre
  * seções vive no `BottomNav` — este cabeçalho não duplica esses links, só
- * teria que quebrar linha numa tela de 375px.
+ * teria que quebrar linha numa tela de 375px. Some em `lg:` — a `Sidebar`
+ * assume identidade/sessão/sair a partir daí, senão apareceriam duplicados.
  */
 export function TopBar() {
   const { user, logout } = useSession();
 
   return (
-    <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+    <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 lg:hidden">
       <Link href="/lobby" className="transition-opacity duration-200 hover:opacity-80">
         <Logo className="text-base" />
       </Link>

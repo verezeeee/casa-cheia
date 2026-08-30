@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { useSession } from '@/components/providers/session-provider';
 import { BottomNav } from '@/components/layout/bottom-nav';
+import { Sidebar } from '@/components/layout/sidebar';
 import { TopBar } from '@/components/layout/top-bar';
 import { Spinner } from '@/components/ui';
 
@@ -15,8 +16,13 @@ import { Spinner } from '@/components/ui';
  * `SessionProvider`), então "loading" é sempre transitório, nunca final.
  *
  * Também é o único lugar (todas as páginas protegidas passam por aqui) que
- * monta o chrome de navegação (`TopBar`/`BottomNav`) — cada página só
- * precisa cuidar do próprio conteúdo, nunca da casca.
+ * monta o chrome de navegação (`Sidebar`/`TopBar`/`BottomNav`) — cada página
+ * só precisa cuidar do próprio conteúdo, nunca da casca.
+ *
+ * Abaixo de `lg`: intocado, coluna única com `TopBar` em cima e `BottomNav`
+ * fixo embaixo. A partir de `lg`: `Sidebar` fixa à esquerda assume
+ * identidade/navegação/sair, e `TopBar`/`BottomNav` somem (`lg:hidden` em
+ * cada um) — sem isso apareceriam duplicados.
  *
  * A entrada animada fica só no conteúdo, não no chrome: `TopBar`/`BottomNav`
  * remontam a cada navegação (cada `page.tsx` monta seu próprio
@@ -43,17 +49,20 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex flex-1 flex-col">
-      <TopBar />
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-        className="flex-1 pb-20"
-      >
-        {children}
-      </motion.div>
-      <BottomNav />
+    <div className="flex min-h-[100dvh] flex-1 flex-col lg:flex-row">
+      <Sidebar />
+      <div className="flex flex-1 flex-col lg:min-w-0">
+        <TopBar />
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+          className="flex-1 pb-20 lg:pb-0"
+        >
+          {children}
+        </motion.div>
+        <BottomNav />
+      </div>
     </div>
   );
 }
