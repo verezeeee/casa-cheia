@@ -40,13 +40,13 @@ describe('envValidationSchema', () => {
     expect(error?.message).toMatch(/JWT_SECRET/);
   });
 
-  it('rejeita quando ABACATEPAY_WEBHOOK_SECRET está ausente', () => {
+  it('aceita ABACATEPAY_API_KEY/ABACATEPAY_WEBHOOK_SECRET ausentes — gateway em standby', () => {
     const rest: Partial<typeof validEnv> = { ...validEnv };
+    delete rest.ABACATEPAY_API_KEY;
     delete rest.ABACATEPAY_WEBHOOK_SECRET;
     const { error } = envValidationSchema.validate(rest);
 
-    expect(error).toBeDefined();
-    expect(error?.message).toContain('ABACATEPAY_WEBHOOK_SECRET');
+    expect(error).toBeUndefined();
   });
 
   it('rejeita NODE_ENV com valor fora do enum permitido', () => {

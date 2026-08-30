@@ -1,8 +1,6 @@
 import { RequireAuth } from '@/components/auth/require-auth';
 import { BalanceCard } from '@/components/wallet/balance-card';
-import { DepositForm } from '@/components/wallet/deposit-form';
 import { TransactionList } from '@/components/wallet/transaction-list';
-import { WithdrawalForm } from '@/components/wallet/withdrawal-form';
 
 export default function WalletPage() {
   return (
@@ -12,10 +10,12 @@ export default function WalletPage() {
         <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[1fr_1.3fr] lg:items-start">
           <div className="flex flex-col gap-6">
             <BalanceCard />
-            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-1">
-              <DepositForm />
-              <WithdrawalForm />
-            </div>
+            {/* Depósito/saque via PIX (DepositForm/WithdrawalForm) removidos
+                daqui por enquanto — gateway (AbacatePay) em standby, ver
+                docblock de WalletService.createDeposit no backend. */}
+            <p className="text-sm text-muted">
+              Depósitos e saques via PIX estão temporariamente indisponíveis.
+            </p>
           </div>
           <TransactionList />
         </div>

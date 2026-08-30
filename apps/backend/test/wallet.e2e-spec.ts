@@ -41,7 +41,12 @@ function webhookBody(event: string, resource: string, dataId: string): string {
 
 const WEBHOOK_SECRET = process.env.ABACATEPAY_WEBHOOK_SECRET ?? '';
 
-describe('Wallet + webhook AbacatePay (e2e)', () => {
+// EM STANDBY: exercita o fluxo real de depósito/saque/webhook via
+// `overrideProvider(AbacatePayClient, fakeClient)`. O gateway foi
+// desconectado do módulo (ver docblock de `WalletService.createDeposit`) —
+// `createDeposit`/`requestWithdrawal`/`handleWebhook` agora sempre recusam,
+// então este cenário não se aplica mais. Reativar junto da integração real.
+describe.skip('Wallet + webhook AbacatePay (e2e)', () => {
   let app: INestApplication<App>;
   let accessToken: string;
   let userId: string;

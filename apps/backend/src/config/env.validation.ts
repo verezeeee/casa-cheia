@@ -60,21 +60,15 @@ export const envValidationSchema = Joi.object({
   }),
   JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
 
-  ABACATEPAY_API_KEY: Joi.string().required().messages({
-    'any.required':
-      'ABACATEPAY_API_KEY é obrigatória para integração PIX (AbacatePay).',
-  }),
+  // Opcionais: o gateway (AbacatePay) está em standby — `WalletService`
+  // não injeta mais `AbacatePayClient` nem lê estas credenciais (ver
+  // docblock de `WalletService.createDeposit`). Ficam aqui só para quando
+  // a integração voltar.
+  ABACATEPAY_API_KEY: Joi.string().optional(),
   ABACATEPAY_BASE_URL: Joi.string()
     .uri()
     .default('https://api.abacatepay.com/v2'),
-  // Comparado direto (constant-time) contra o header `X-Webhook-Secret` (ou
-  // a query string `webhookSecret`) que o AbacatePay manda em todo webhook —
-  // ver `WalletService.verifyWebhookSecret`. Não é um segredo de HMAC: o
-  // provedor manda o valor em texto puro, então esta é toda a verificação.
-  ABACATEPAY_WEBHOOK_SECRET: Joi.string().required().messages({
-    'any.required':
-      'ABACATEPAY_WEBHOOK_SECRET é obrigatória para validar a origem dos webhooks PIX.',
-  }),
+  ABACATEPAY_WEBHOOK_SECRET: Joi.string().optional(),
 
   // ---------------------------------------------------------------------------
   // Sessão / cookies / CORS
