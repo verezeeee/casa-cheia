@@ -9,8 +9,11 @@ import type { PrismaService } from '../prisma/prisma.service';
 import type { WalletService } from '../wallet/wallet.service';
 import { TableService } from './table.service';
 
+const CLUBE_ID = 'clube-1';
+
 const TABLE = {
   id: 'table-1',
+  clubeId: CLUBE_ID,
   name: 'NL Holdem 1/2',
   type: 'CASH_GAME',
   smallBlind: new Prisma.Decimal('1.00'),
@@ -25,10 +28,11 @@ const TABLE = {
   updatedAt: new Date('2026-01-01T00:00:00.000Z'),
 };
 
-const WALLET = { id: 'wallet-1', userId: 'user-1' };
+const WALLET = { id: 'wallet-1', userId: 'user-1', clubeId: CLUBE_ID };
 
 function buildPrisma() {
   const tx = {
+    table: { create: jest.fn() },
     tableSession: {
       create: jest.fn(),
       update: jest.fn(),
@@ -53,7 +57,9 @@ function buildPrisma() {
     stackMovement: { create: jest.fn() },
     wallet: { findUniqueOrThrow: jest.fn() },
     walletTransaction: { findUnique: jest.fn() },
-    $transaction: jest.fn((cb: (t: typeof tx) => unknown) => cb(tx)),
+    withClube: jest.fn((_clubeId: string, cb: (t: typeof tx) => unknown) =>
+      cb(tx),
+    ),
   };
 }
 
@@ -75,7 +81,7 @@ describe('TableService', () => {
     it('rejeita minBuyIn > maxBuyIn', async () => {
       const { service } = buildService();
       await expect(
-        service.createTable('admin-1', {
+        service.createTable('admin-1', CLUBE_ID, {
           name: 'Mesa',
           type: 'CASH_GAME',
           smallBlind: '1.00',
@@ -87,11 +93,11 @@ describe('TableService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('cria a mesa com occupiedSeats 0', async () => {
+    it('cria a mesa (via withClube) com occupiedSeats 0', async () => {
       const { service, prisma } = buildService();
-      prisma.table.create.mockResolvedValue(TABLE);
+      prisma.tx.table.create.mockResolvedValue(TABLE);
 
-      const result = await service.createTable('admin-1', {
+      const result = await service.createTable('admin-1', CLUBE_ID, {
         name: 'Mesa',
         type: 'CASH_GAME',
         smallBlind: '1.00',
@@ -101,6 +107,10 @@ describe('TableService', () => {
         maxSeats: 6,
       } as never);
 
+      expect(prisma.withClube).toHaveBeenCalledWith(
+        CLUBE_ID,
+        expect.any(Function),
+      );
       expect(result.occupiedSeats).toBe(0);
       expect(result.maxSeats).toBe(6);
     });
@@ -110,9 +120,20 @@ describe('TableService', () => {
     it('lança 404 se a mesa não existe', async () => {
       const { service, prisma } = buildService();
       prisma.table.findUnique.mockResolvedValue(null);
-      await expect(service.getSeats('inexistente')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await expect(
+        service.getSeats(CLUBE_ID, 'inexistente'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('lança 404 se a mesa é de outro clube', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        clubeId: 'outro-clube',
+      });
+      await expect(
+        service.getSeats(CLUBE_ID, 'table-1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('monta a grade completa (ocupados + vagos)', async () => {
@@ -126,7 +147,7 @@ describe('TableService', () => {
         },
       ]);
 
-      const seats = await service.getSeats('table-1');
+      const seats = await service.getSeats(CLUBE_ID, 'table-1');
 
       expect(seats).toHaveLength(6);
       expect(seats[1]).toMatchObject({
@@ -150,11 +171,30 @@ describe('TableService', () => {
       await expect(
         service.sitAtTable(
           'user-1',
+          CLUBE_ID,
           'table-1',
           { seatNumber: 1, buyInAmount: '50.00' },
           'idem-1',
         ),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejeita mesa de outro clube (404)', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        clubeId: 'outro-clube',
+      });
+
+      await expect(
+        service.sitAtTable(
+          'user-1',
+          CLUBE_ID,
+          'table-1',
+          { seatNumber: 1, buyInAmount: '50.00' },
+          'idem-1',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('rejeita buy-in fora da faixa da mesa', async () => {
@@ -165,6 +205,7 @@ describe('TableService', () => {
       await expect(
         service.sitAtTable(
           'user-1',
+          CLUBE_ID,
           'table-1',
           { seatNumber: 1, buyInAmount: '5.00' },
           'idem-1',
@@ -187,11 +228,15 @@ describe('TableService', () => {
 
       const seat = await service.sitAtTable(
         'user-1',
+        CLUBE_ID,
         'table-1',
         { seatNumber: 1, buyInAmount: '50.00' },
         'idem-1',
       );
 
+      expect(prisma.wallet.findUniqueOrThrow).toHaveBeenCalledWith({
+        where: { userId_clubeId: { userId: 'user-1', clubeId: CLUBE_ID } },
+      });
       expect(walletService.applyLedgerEntry).toHaveBeenCalledWith(
         prisma.tx,
         WALLET.id,
@@ -220,7 +265,7 @@ describe('TableService', () => {
       prisma.table.findUnique.mockResolvedValue(TABLE);
       prisma.walletTransaction.findUnique.mockResolvedValue(null);
       prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
-      (prisma.$transaction as jest.Mock).mockRejectedValue(
+      (prisma.withClube as jest.Mock).mockRejectedValue(
         new Prisma.PrismaClientKnownRequestError('duplicate', {
           code: 'P2002',
           clientVersion: '6.19.3',
@@ -230,6 +275,7 @@ describe('TableService', () => {
       await expect(
         service.sitAtTable(
           'user-1',
+          CLUBE_ID,
           'table-1',
           { seatNumber: 1, buyInAmount: '50.00' },
           'idem-1',
@@ -246,6 +292,7 @@ describe('TableService', () => {
       prisma.tableSession.findUnique.mockResolvedValue({
         id: 'session-1',
         tableId: 'table-1',
+        clubeId: CLUBE_ID,
         userId: 'outro-usuario',
         status: 'ACTIVE',
         seatNumber: 1,
@@ -255,8 +302,27 @@ describe('TableService', () => {
       });
 
       await expect(
-        service.cashOut('user-1', 'table-1', 'session-1', 'idem-2'),
+        service.cashOut('user-1', CLUBE_ID, 'table-1', 'session-1', 'idem-2'),
       ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('rejeita sessão de outro clube (404)', async () => {
+      const { service, prisma } = buildService();
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        clubeId: 'outro-clube',
+        userId: 'user-1',
+        status: 'ACTIVE',
+        seatNumber: 1,
+        currentStack: new Prisma.Decimal('80.00'),
+        version: 0,
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+
+      await expect(
+        service.cashOut('user-1', CLUBE_ID, 'table-1', 'session-1', 'idem-2'),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('debita o stack inteiro, credita a wallet e libera o assento', async () => {
@@ -266,6 +332,7 @@ describe('TableService', () => {
       prisma.tableSession.findUnique.mockResolvedValue({
         id: 'session-1',
         tableId: 'table-1',
+        clubeId: CLUBE_ID,
         userId: 'user-1',
         status: 'ACTIVE',
         seatNumber: 3,
@@ -278,11 +345,15 @@ describe('TableService', () => {
 
       const seat = await service.cashOut(
         'user-1',
+        CLUBE_ID,
         'table-1',
         'session-1',
         'idem-2',
       );
 
+      expect(prisma.wallet.findUniqueOrThrow).toHaveBeenCalledWith({
+        where: { userId_clubeId: { userId: 'user-1', clubeId: CLUBE_ID } },
+      });
       expect(walletService.applyLedgerEntry).toHaveBeenCalledWith(
         prisma.tx,
         WALLET.id,
@@ -308,6 +379,7 @@ describe('TableService', () => {
       prisma.tableSession.findUnique.mockResolvedValue({
         id: 'session-1',
         tableId: 'table-1',
+        clubeId: CLUBE_ID,
         userId: 'user-1',
         status: 'ACTIVE',
         seatNumber: 3,
@@ -318,7 +390,7 @@ describe('TableService', () => {
       walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-3' });
       prisma.tx.tableSession.updateMany.mockResolvedValue({ count: 1 });
 
-      const result = await service.closeTable('table-1');
+      const result = await service.closeTable(CLUBE_ID, 'table-1');
 
       expect(prisma.tableSession.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -337,6 +409,18 @@ describe('TableService', () => {
       expect(result.status).toBe('CLOSED');
     });
 
+    it('lança 404 se a mesa é de outro clube', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        clubeId: 'outro-clube',
+      });
+
+      await expect(
+        service.closeTable(CLUBE_ID, 'table-1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
     it('é idempotente: mesa já fechada não refaz cash-out', async () => {
       const { service, prisma, walletService } = buildService();
       prisma.table.findUnique.mockResolvedValue({
@@ -344,7 +428,7 @@ describe('TableService', () => {
         status: 'CLOSED',
       });
 
-      const result = await service.closeTable('table-1');
+      const result = await service.closeTable(CLUBE_ID, 'table-1');
 
       expect(prisma.tableSession.findMany).not.toHaveBeenCalled();
       expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
@@ -359,6 +443,7 @@ describe('TableService', () => {
       prisma.tableSession.findUnique.mockResolvedValue({
         id: 'session-1',
         tableId: 'table-1',
+        clubeId: CLUBE_ID,
         userId: 'user-1',
         status: 'ACTIVE',
         seatNumber: 1,
@@ -368,11 +453,33 @@ describe('TableService', () => {
       });
 
       await expect(
-        service.recordMovement('admin-1', 'table-1', 'session-1', {
+        service.recordMovement('admin-1', CLUBE_ID, 'table-1', 'session-1', {
           amount: '-50.00',
           reason: 'HAND_RESULT',
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('lança 404 se a sessão é de outro clube', async () => {
+      const { service, prisma } = buildService();
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        clubeId: 'outro-clube',
+        userId: 'user-1',
+        status: 'ACTIVE',
+        seatNumber: 1,
+        currentStack: new Prisma.Decimal('10.00'),
+        version: 0,
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+
+      await expect(
+        service.recordMovement('admin-1', CLUBE_ID, 'table-1', 'session-1', {
+          amount: '20.00',
+          reason: 'HAND_RESULT',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('aplica o ajuste e registra o StackMovement sem tocar a wallet', async () => {
@@ -380,6 +487,7 @@ describe('TableService', () => {
       prisma.tableSession.findUnique.mockResolvedValue({
         id: 'session-1',
         tableId: 'table-1',
+        clubeId: CLUBE_ID,
         userId: 'user-1',
         status: 'ACTIVE',
         seatNumber: 1,
@@ -391,6 +499,7 @@ describe('TableService', () => {
 
       const seat = await service.recordMovement(
         'admin-1',
+        CLUBE_ID,
         'table-1',
         'session-1',
         {

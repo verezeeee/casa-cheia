@@ -8,14 +8,32 @@ import type { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { AbacatePayClient } from './../src/integrations/abacatepay';
 
-/**
- * Não há endpoint de "promover a ADMIN" no MVP (fora de escopo) — o teste
- * eleva o papel direto no banco, como já faz `schema-invariants.int-spec.ts`.
- */
+/** Cliente direto ao Postgres: monta clube/vínculo sem passar pela API (não há `POST /clubes`, ADR-0003). */
 const prismaDirect = new PrismaClient();
 
+/** Ids criados pela suíte, para o teardown (vínculo antes do clube: FK Restrict). */
+const createdClubeIds: string[] = [];
+
+async function createClube(): Promise<string> {
+  const clube = await prismaDirect.clube.create({
+    data: {
+      name: 'Clube Mesas E2E',
+      document: randomUUID().replace(/-/g, ''),
+    },
+  });
+  createdClubeIds.push(clube.id);
+  return clube.id;
+}
+
+/**
+ * Não há endpoint de "promover a ADMIN" no MVP (fora de escopo) — o teste
+ * cria o vínculo `ClubeMembership` direto no banco, como já faz
+ * `tenant-isolation.int-spec.ts` (papel agora vive na aresta usuário↔clube,
+ * não mais em `User.role` — ver `club.prisma`).
+ */
 async function registerAndLogin(
   app: INestApplication<App>,
+  clubeId: string,
   opts: { admin?: boolean } = {},
 ): Promise<{ accessToken: string; userId: string }> {
   const email = `${randomUUID()}@table-e2e.test`;
@@ -24,12 +42,14 @@ async function registerAndLogin(
     .send({ email, password: 'senha-forte-123', name: 'Jogador Mesa' })
     .expect(201);
 
-  if (opts.admin) {
-    await prismaDirect.user.update({
-      where: { id: registerRes.body.id },
-      data: { role: 'ADMIN' },
-    });
-  }
+  await prismaDirect.clubeMembership.create({
+    data: {
+      clubeId,
+      userId: registerRes.body.id as string,
+      role: opts.admin ? 'ADMIN' : 'PLAYER',
+      status: 'ACTIVE',
+    },
+  });
 
   const loginRes = await request(app.getHttpServer())
     .post('/api/auth/login')
@@ -42,9 +62,15 @@ async function registerAndLogin(
   };
 }
 
-async function creditWallet(userId: string, amount: string): Promise<void> {
-  const wallet = await prismaDirect.wallet.findUniqueOrThrow({
-    where: { userId },
+async function creditWallet(
+  userId: string,
+  clubeId: string,
+  amount: string,
+): Promise<void> {
+  const wallet = await prismaDirect.wallet.upsert({
+    where: { userId_clubeId: { userId, clubeId } },
+    create: { userId, clubeId, balance: '0.00' },
+    update: {},
   });
   await prismaDirect.$transaction([
     prismaDirect.walletTransaction.create({
@@ -63,6 +89,14 @@ async function creditWallet(userId: string, amount: string): Promise<void> {
       data: { balance: amount },
     }),
   ]);
+}
+
+/** Lê o saldo direto do banco — `GET /api/wallet/balance` está 501 até CL-BE-07 migrar a rota de carteira. */
+async function getBalance(userId: string, clubeId: string): Promise<string> {
+  const wallet = await prismaDirect.wallet.findUniqueOrThrow({
+    where: { userId_clubeId: { userId, clubeId } },
+  });
+  return wallet.balance.toFixed(2);
 }
 
 describe('Tables (e2e)', () => {
@@ -90,15 +124,39 @@ describe('Tables (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Ordem de FK Restrict (filho antes do pai): StackMovement ->
+    // WalletTransaction -> TableSession/Wallet -> Table -> Membership -> Clube.
+    await prismaDirect.stackMovement.deleteMany({
+      where: { tableSession: { clubeId: { in: createdClubeIds } } },
+    });
+    await prismaDirect.walletTransaction.deleteMany({
+      where: { wallet: { clubeId: { in: createdClubeIds } } },
+    });
+    await prismaDirect.tableSession.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
+    await prismaDirect.wallet.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
+    await prismaDirect.table.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
+    await prismaDirect.clubeMembership.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
+    await prismaDirect.clube.deleteMany({
+      where: { id: { in: createdClubeIds } },
+    });
     await app.close();
     await prismaDirect.$disconnect();
   });
 
   it('PLAYER não pode criar mesa (403)', async () => {
-    const { accessToken } = await registerAndLogin(app);
+    const clubeId = await createClube();
+    const { accessToken } = await registerAndLogin(app, clubeId);
 
     await request(app.getHttpServer())
-      .post('/api/tables')
+      .post(`/api/clubes/${clubeId}/mesas`)
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
         name: 'Mesa proibida',
@@ -112,13 +170,25 @@ describe('Tables (e2e)', () => {
       .expect(403);
   });
 
+  it('quem não é membro do clube recebe 404 (não 403)', async () => {
+    const clubeId = await createClube();
+    const estranhoClubeId = await createClube();
+    const { accessToken } = await registerAndLogin(app, estranhoClubeId);
+
+    await request(app.getHttpServer())
+      .get(`/api/clubes/${clubeId}/mesas`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .expect(404);
+  });
+
   it('fluxo completo: ADMIN cria mesa -> PLAYER senta (buy-in) -> ADMIN registra resultado -> PLAYER cash-out', async () => {
-    const admin = await registerAndLogin(app, { admin: true });
-    const player = await registerAndLogin(app);
-    await creditWallet(player.userId, '500.00');
+    const clubeId = await createClube();
+    const admin = await registerAndLogin(app, clubeId, { admin: true });
+    const player = await registerAndLogin(app, clubeId);
+    await creditWallet(player.userId, clubeId, '500.00');
 
     const createRes = await request(app.getHttpServer())
-      .post('/api/tables')
+      .post(`/api/clubes/${clubeId}/mesas`)
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({
         name: 'NL Holdem 1/2',
@@ -135,7 +205,7 @@ describe('Tables (e2e)', () => {
 
     // Mesa aparece no lobby.
     const lobbyRes = await request(app.getHttpServer())
-      .get('/api/tables')
+      .get(`/api/clubes/${clubeId}/mesas`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .expect(200);
     expect(
@@ -144,7 +214,7 @@ describe('Tables (e2e)', () => {
 
     // Assentos vazios inicialmente.
     const emptySeats = await request(app.getHttpServer())
-      .get(`/api/tables/${tableId}/seats`)
+      .get(`/api/clubes/${clubeId}/mesas/${tableId}/seats`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .expect(200);
     expect(emptySeats.body).toHaveLength(6);
@@ -154,7 +224,7 @@ describe('Tables (e2e)', () => {
 
     // PLAYER senta com buy-in de 100.
     const sitRes = await request(app.getHttpServer())
-      .post(`/api/tables/${tableId}/sit`)
+      .post(`/api/clubes/${clubeId}/mesas/${tableId}/sit`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .set('Idempotency-Key', randomUUID())
       .send({ seatNumber: 2, buyInAmount: '100.00' })
@@ -165,17 +235,13 @@ describe('Tables (e2e)', () => {
     });
 
     // Saldo da wallet foi debitado.
-    const balanceAfterSit = await request(app.getHttpServer())
-      .get('/api/wallet/balance')
-      .set('Authorization', `Bearer ${player.accessToken}`)
-      .expect(200);
-    expect(balanceAfterSit.body.balance).toBe('400.00');
+    expect(await getBalance(player.userId, clubeId)).toBe('400.00');
 
     // Sentar de novo no mesmo assento é rejeitado (índice único parcial).
-    const other = await registerAndLogin(app);
-    await creditWallet(other.userId, '500.00');
+    const other = await registerAndLogin(app, clubeId);
+    await creditWallet(other.userId, clubeId, '500.00');
     await request(app.getHttpServer())
-      .post(`/api/tables/${tableId}/sit`)
+      .post(`/api/clubes/${clubeId}/mesas/${tableId}/sit`)
       .set('Authorization', `Bearer ${other.accessToken}`)
       .set('Idempotency-Key', randomUUID())
       .send({ seatNumber: 2, buyInAmount: '100.00' })
@@ -183,7 +249,7 @@ describe('Tables (e2e)', () => {
 
     // Descobre o id da sessão via /seats (não é devolvido em outro lugar).
     const seatsRes = await request(app.getHttpServer())
-      .get(`/api/tables/${tableId}/seats`)
+      .get(`/api/clubes/${clubeId}/mesas/${tableId}/seats`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .expect(200);
     expect(seatsRes.body[1]).toMatchObject({
@@ -197,14 +263,18 @@ describe('Tables (e2e)', () => {
 
     // PLAYER não pode registrar resultado de mão (só ADMIN).
     await request(app.getHttpServer())
-      .post(`/api/tables/${tableId}/sessions/${session.id}/movements`)
+      .post(
+        `/api/clubes/${clubeId}/mesas/${tableId}/sessions/${session.id}/movements`,
+      )
       .set('Authorization', `Bearer ${player.accessToken}`)
       .send({ amount: '50.00', reason: 'HAND_RESULT' })
       .expect(403);
 
     // ADMIN registra uma mão ganha de +50.
     const movementRes = await request(app.getHttpServer())
-      .post(`/api/tables/${tableId}/sessions/${session.id}/movements`)
+      .post(
+        `/api/clubes/${clubeId}/mesas/${tableId}/sessions/${session.id}/movements`,
+      )
       .set('Authorization', `Bearer ${admin.accessToken}`)
       .send({ amount: '50.00', reason: 'HAND_RESULT' })
       .expect(201);
@@ -212,7 +282,9 @@ describe('Tables (e2e)', () => {
 
     // PLAYER faz cash-out do stack inteiro (150).
     const cashOutRes = await request(app.getHttpServer())
-      .post(`/api/tables/${tableId}/sessions/${session.id}/cash-out`)
+      .post(
+        `/api/clubes/${clubeId}/mesas/${tableId}/sessions/${session.id}/cash-out`,
+      )
       .set('Authorization', `Bearer ${player.accessToken}`)
       .set('Idempotency-Key', randomUUID())
       .expect(201);
@@ -225,15 +297,11 @@ describe('Tables (e2e)', () => {
     });
 
     // Saldo final: 400 (após buy-in) + 150 (cash-out) = 550.
-    const finalBalance = await request(app.getHttpServer())
-      .get('/api/wallet/balance')
-      .set('Authorization', `Bearer ${player.accessToken}`)
-      .expect(200);
-    expect(finalBalance.body.balance).toBe('550.00');
+    expect(await getBalance(player.userId, clubeId)).toBe('550.00');
 
     // Assento voltou a ficar livre — outro jogador pode sentar nele.
     const finalSeats = await request(app.getHttpServer())
-      .get(`/api/tables/${tableId}/seats`)
+      .get(`/api/clubes/${clubeId}/mesas/${tableId}/seats`)
       .set('Authorization', `Bearer ${player.accessToken}`)
       .expect(200);
     expect(finalSeats.body[1]).toMatchObject({ seatNumber: 2, userId: null });

@@ -18,6 +18,9 @@ import { AbacatePayClient } from './../src/integrations/abacatepay';
  */
 const prismaDirect = new PrismaClient();
 
+/** Ids criados pela suíte, para o teardown (vínculo antes do clube: FK Restrict). */
+const createdClubeIds: string[] = [];
+
 const fakeAbacatePayClient = {
   createPixCharge: jest.fn(),
   requestPixWithdrawal: jest.fn(),
@@ -63,6 +66,29 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
   });
 
   afterAll(async () => {
+    // Ordem de FK Restrict (filho antes do pai): StackMovement ->
+    // WalletTransaction -> TableSession/Wallet -> Table -> Membership -> Clube.
+    await prismaDirect.stackMovement.deleteMany({
+      where: { tableSession: { clubeId: { in: createdClubeIds } } },
+    });
+    await prismaDirect.walletTransaction.deleteMany({
+      where: { wallet: { clubeId: { in: createdClubeIds } } },
+    });
+    await prismaDirect.tableSession.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
+    await prismaDirect.wallet.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
+    await prismaDirect.table.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
+    await prismaDirect.clubeMembership.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
+    await prismaDirect.clube.deleteMany({
+      where: { id: { in: createdClubeIds } },
+    });
     await app.close();
     await prismaDirect.$disconnect();
   });
@@ -70,10 +96,11 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
   it('percorre o ciclo completo de dinheiro de um jogador', async () => {
     // 1. Registro + login.
     const email = `${randomUUID()}@smoke-e2e.test`;
-    await request(app.getHttpServer())
+    const registerRes = await request(app.getHttpServer())
       .post('/api/auth/register')
       .send({ email, password: 'senha-forte-123', name: 'Jogador Fumaça' })
       .expect(201);
+    const playerUserId = registerRes.body.id as string;
 
     const loginRes = await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -115,8 +142,26 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
       .expect(204);
     expect((await balance().expect(200)).body.balance).toBe('300.00');
 
-    // 3. Uma mesa precisa existir — criada por um segundo usuário promovido a
-    // ADMIN direto no banco (não há endpoint de promoção no MVP).
+    // 3. Uma mesa precisa existir num clube — o clube e o vínculo ADMIN são
+    // montados direto no banco (não há `POST /clubes` nem endpoint de
+    // promoção no MVP, ver ADR-0003 e `club.prisma`). O papel agora vive na
+    // aresta usuário↔clube (`ClubeMembership.role`), não mais em `User.role`.
+    const clube = await prismaDirect.clube.create({
+      data: { name: 'Clube Fumaça', document: randomUUID().replace(/-/g, '') },
+    });
+    createdClubeIds.push(clube.id);
+
+    // O jogador da fumaça também precisa de vínculo ACTIVE no clube — a rota
+    // de mesa agora exige `ClubeMembershipGuard` (CL-BE-05).
+    await prismaDirect.clubeMembership.create({
+      data: {
+        clubeId: clube.id,
+        userId: playerUserId,
+        role: 'PLAYER',
+        status: 'ACTIVE',
+      },
+    });
+
     const adminEmail = `${randomUUID()}@smoke-e2e.test`;
     const adminRegisterRes = await request(app.getHttpServer())
       .post('/api/auth/register')
@@ -126,9 +171,13 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
         name: 'Admin Fumaça',
       })
       .expect(201);
-    await prismaDirect.user.update({
-      where: { id: adminRegisterRes.body.id as string },
-      data: { role: 'ADMIN' },
+    await prismaDirect.clubeMembership.create({
+      data: {
+        clubeId: clube.id,
+        userId: adminRegisterRes.body.id as string,
+        role: 'ADMIN',
+        status: 'ACTIVE',
+      },
     });
     const adminLoginRes = await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -137,7 +186,7 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
     const adminAccessToken = adminLoginRes.body.accessToken as string;
 
     const tableRes = await request(app.getHttpServer())
-      .post('/api/tables')
+      .post(`/api/clubes/${clube.id}/mesas`)
       .set('Authorization', `Bearer ${adminAccessToken}`)
       .send({
         name: 'Mesa Fumaça',
@@ -153,7 +202,7 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
 
     // 4. Senta com buy-in de 100.00 — debita a wallet.
     const sitRes = await request(app.getHttpServer())
-      .post(`/api/tables/${tableId}/sit`)
+      .post(`/api/clubes/${clube.id}/mesas/${tableId}/sit`)
       .set('Authorization', `Bearer ${accessToken}`)
       .set('Idempotency-Key', randomUUID())
       .send({ seatNumber: 1, buyInAmount: '100.00' })
@@ -163,7 +212,9 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
 
     // 5. Cash-out — credita o stack de volta na wallet.
     await request(app.getHttpServer())
-      .post(`/api/tables/${tableId}/sessions/${sessionId}/cash-out`)
+      .post(
+        `/api/clubes/${clube.id}/mesas/${tableId}/sessions/${sessionId}/cash-out`,
+      )
       .set('Authorization', `Bearer ${accessToken}`)
       .set('Idempotency-Key', randomUUID())
       .expect(201);

@@ -35,8 +35,10 @@ export class TableService {
     private readonly walletService: WalletService,
   ) {}
 
+  /** `Table` é model escopado por `withClube` — `clubeId` é carimbado no `data` automaticamente. */
   async createTable(
     adminId: string,
+    clubeId: string,
     dto: CreateTableDto,
   ): Promise<TableSummaryDto> {
     const minBuyIn = new Prisma.Decimal(dto.minBuyIn);
@@ -47,25 +49,29 @@ export class TableService {
       );
     }
 
-    const table = await this.prisma.table.create({
-      data: {
-        name: dto.name,
-        type: dto.type,
-        smallBlind: dto.smallBlind,
-        bigBlind: dto.bigBlind,
-        minBuyIn,
-        maxBuyIn,
-        maxSeats: dto.maxSeats,
-        rakePercent: dto.rakePercent,
-        status: 'OPEN',
-        createdById: adminId,
-      },
-    });
+    const table = await this.prisma.withClube(clubeId, (tx) =>
+      tx.table.create({
+        data: {
+          clubeId,
+          name: dto.name,
+          type: dto.type,
+          smallBlind: dto.smallBlind,
+          bigBlind: dto.bigBlind,
+          minBuyIn,
+          maxBuyIn,
+          maxSeats: dto.maxSeats,
+          rakePercent: dto.rakePercent,
+          status: 'OPEN',
+          createdById: adminId,
+        },
+      }),
+    );
 
     return toTableSummaryDto({ ...table, _count: { sessions: 0 } });
   }
 
   async listTables(
+    clubeId: string,
     cursor: string | undefined,
     limit: number | undefined,
   ): Promise<PaginatedResponse<TableSummaryDto>> {
@@ -73,14 +79,17 @@ export class TableService {
     const after = cursor ? decodeCursor(cursor) : null;
 
     const rows = await this.prisma.table.findMany({
-      where: after
-        ? {
-            OR: [
-              { createdAt: { lt: after.createdAt } },
-              { createdAt: after.createdAt, id: { lt: after.id } },
-            ],
-          }
-        : {},
+      where: {
+        clubeId,
+        ...(after
+          ? {
+              OR: [
+                { createdAt: { lt: after.createdAt } },
+                { createdAt: after.createdAt, id: { lt: after.id } },
+              ],
+            }
+          : {}),
+      },
       include: {
         _count: { select: { sessions: { where: { status: 'ACTIVE' } } } },
       },
@@ -98,11 +107,13 @@ export class TableService {
     };
   }
 
-  async getSeats(tableId: string): Promise<TableSeatDto[]> {
+  async getSeats(clubeId: string, tableId: string): Promise<TableSeatDto[]> {
     const table = await this.prisma.table.findUnique({
       where: { id: tableId },
     });
-    if (!table) throw new NotFoundException('Mesa não encontrada.');
+    if (!table || table.clubeId !== clubeId) {
+      throw new NotFoundException('Mesa não encontrada.');
+    }
 
     const activeSessions = await this.prisma.tableSession.findMany({
       where: { tableId, status: 'ACTIVE' },
@@ -123,6 +134,7 @@ export class TableService {
    */
   async sitAtTable(
     userId: string,
+    clubeId: string,
     tableId: string,
     dto: SitAtTableDto,
     idempotencyKey: string,
@@ -130,7 +142,9 @@ export class TableService {
     const table = await this.prisma.table.findUnique({
       where: { id: tableId },
     });
-    if (!table) throw new NotFoundException('Mesa não encontrada.');
+    if (!table || table.clubeId !== clubeId) {
+      throw new NotFoundException('Mesa não encontrada.');
+    }
     if (table.status !== 'OPEN') {
       throw new BadRequestException(
         'Mesa não está aberta para novos jogadores.',
@@ -156,17 +170,20 @@ export class TableService {
         where: { id: existingTxn.tableSessionId },
         include: { user: { select: { id: true, name: true } } },
       });
-      if (existingSession) return toSeatDto(existingSession);
+      if (existingSession && existingSession.clubeId === clubeId) {
+        return toSeatDto(existingSession);
+      }
     }
 
     const wallet = await this.prisma.wallet.findUniqueOrThrow({
-      where: { userId },
+      where: { userId_clubeId: { userId, clubeId } },
     });
 
     try {
-      const session = await this.prisma.$transaction(async (tx) => {
+      const session = await this.prisma.withClube(clubeId, async (tx) => {
         const created = await tx.tableSession.create({
           data: {
+            clubeId,
             tableId,
             userId,
             seatNumber: dto.seatNumber,
@@ -227,21 +244,28 @@ export class TableService {
    */
   async cashOut(
     userId: string,
+    clubeId: string,
     tableId: string,
     sessionId: string,
     idempotencyKey: string,
   ): Promise<TableSeatDto> {
-    const session = await this.mustGetSession(tableId, sessionId);
+    const session = await this.mustGetSession(clubeId, tableId, sessionId);
     if (session.userId !== userId) {
       throw new ForbiddenException(
         'Você só pode fazer cash-out da sua própria sessão.',
       );
     }
-    return this.doCashOut(tableId, sessionId, `cashout:${idempotencyKey}`);
+    return this.doCashOut(
+      clubeId,
+      tableId,
+      sessionId,
+      `cashout:${idempotencyKey}`,
+    );
   }
 
   /** Núcleo do cash-out, sem checagem de dono — reaproveitado pelo fechamento de mesa pelo admin. */
   private async doCashOut(
+    clubeId: string,
     tableId: string,
     sessionId: string,
     ledgerKey: string,
@@ -251,23 +275,23 @@ export class TableService {
     });
     if (existingTxn) {
       return EMPTY_SEAT(
-        (await this.mustGetSession(tableId, sessionId)).seatNumber,
+        (await this.mustGetSession(clubeId, tableId, sessionId)).seatNumber,
       );
     }
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const fresh = await this.mustGetSession(tableId, sessionId);
+      const fresh = await this.mustGetSession(clubeId, tableId, sessionId);
       if (fresh.status !== 'ACTIVE') {
         throw new BadRequestException('Sessão já encerrada.');
       }
 
       const wallet = await this.prisma.wallet.findUniqueOrThrow({
-        where: { userId: fresh.userId },
+        where: { userId_clubeId: { userId: fresh.userId, clubeId } },
       });
       const amount = fresh.currentStack;
 
       try {
-        const result = await this.prisma.$transaction(async (tx) => {
+        const result = await this.prisma.withClube(clubeId, async (tx) => {
           const walletTxn = await this.walletService.applyLedgerEntry(
             tx,
             wallet.id,
@@ -325,11 +349,13 @@ export class TableService {
    * para a wallet de cada jogador, mesmo lançamento usado no cash-out normal)
    * e marca a mesa como CLOSED. Idempotente — mesa já fechada só retorna.
    */
-  async closeTable(tableId: string): Promise<TableSummaryDto> {
+  async closeTable(clubeId: string, tableId: string): Promise<TableSummaryDto> {
     const table = await this.prisma.table.findUnique({
       where: { id: tableId },
     });
-    if (!table) throw new NotFoundException('Mesa não encontrada.');
+    if (!table || table.clubeId !== clubeId) {
+      throw new NotFoundException('Mesa não encontrada.');
+    }
 
     if (table.status !== 'CLOSED') {
       const activeSessions = await this.prisma.tableSession.findMany({
@@ -337,7 +363,12 @@ export class TableService {
         select: { id: true },
       });
       for (const { id: sessionId } of activeSessions) {
-        await this.doCashOut(tableId, sessionId, `close-table:${sessionId}`);
+        await this.doCashOut(
+          clubeId,
+          tableId,
+          sessionId,
+          `close-table:${sessionId}`,
+        );
       }
       await this.prisma.table.update({
         where: { id: tableId },
@@ -355,12 +386,13 @@ export class TableService {
   /** Registra HAND_RESULT/ADJUSTMENT — NUNCA cruza a wallet (ver StackMovementReason em table.prisma). */
   async recordMovement(
     adminId: string,
+    clubeId: string,
     tableId: string,
     sessionId: string,
     dto: RecordMovementDto,
   ): Promise<TableSeatDto> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const fresh = await this.mustGetSession(tableId, sessionId);
+      const fresh = await this.mustGetSession(clubeId, tableId, sessionId);
       if (fresh.status !== 'ACTIVE') {
         throw new BadRequestException('Sessão já encerrada.');
       }
@@ -400,12 +432,27 @@ export class TableService {
     );
   }
 
-  private async mustGetSession(tableId: string, sessionId: string) {
+  /**
+   * Busca a sessão por id e confirma que pertence à mesa E ao clube da
+   * requisição — mesma checagem de posse que já existia para `tableId`,
+   * estendida a `clubeId` (CL-BE-05). `TableSession` é model escopado
+   * (`CLUBE_SCOPED_MODELS`), mas esta leitura roda fora de `withClube`, então
+   * o filtro é manual aqui.
+   */
+  private async mustGetSession(
+    clubeId: string,
+    tableId: string,
+    sessionId: string,
+  ) {
     const session = await this.prisma.tableSession.findUnique({
       where: { id: sessionId },
       include: { user: { select: { id: true, name: true } } },
     });
-    if (!session || session.tableId !== tableId) {
+    if (
+      !session ||
+      session.tableId !== tableId ||
+      session.clubeId !== clubeId
+    ) {
       throw new NotFoundException('Sessão de mesa não encontrada.');
     }
     return { ...session, userName: session.user.name };
