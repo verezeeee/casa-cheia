@@ -627,7 +627,7 @@ describe('Tournaments (e2e)', () => {
     // Saldo debitado (500 - 100 = 400) para os três.
     for (const player of [playerA, playerB, playerC]) {
       const balanceRes = await request(app.getHttpServer())
-        .get('/api/wallet/balance')
+        .get(`/api/clubes/${CLUBE_ID}/carteira/balance`)
         .set('Authorization', `Bearer ${player.accessToken}`)
         .expect(200);
       expect(balanceRes.body.balance).toBe('400.00');
@@ -685,19 +685,19 @@ describe('Tournaments (e2e)', () => {
     expect(finishRes.body.status).toBe('FINISHED');
 
     const finalA = await request(app.getHttpServer())
-      .get('/api/wallet/balance')
+      .get(`/api/clubes/${CLUBE_ID}/carteira/balance`)
       .set('Authorization', `Bearer ${playerA.accessToken}`)
       .expect(200);
     expect(finalA.body.balance).toBe('589.00'); // 400 + 189
 
     const finalB = await request(app.getHttpServer())
-      .get('/api/wallet/balance')
+      .get(`/api/clubes/${CLUBE_ID}/carteira/balance`)
       .set('Authorization', `Bearer ${playerB.accessToken}`)
       .expect(200);
     expect(finalB.body.balance).toBe('481.00'); // 400 + 81
 
     const finalC = await request(app.getHttpServer())
-      .get('/api/wallet/balance')
+      .get(`/api/clubes/${CLUBE_ID}/carteira/balance`)
       .set('Authorization', `Bearer ${playerC.accessToken}`)
       .expect(200);
     expect(finalC.body.balance).toBe('400.00'); // sem prêmio (3º lugar)

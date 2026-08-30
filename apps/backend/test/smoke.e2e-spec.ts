@@ -66,10 +66,17 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
   });
 
   afterAll(async () => {
-    // Ordem de FK Restrict (filho antes do pai): StackMovement ->
-    // WalletTransaction -> TableSession/Wallet -> Table -> Membership -> Clube.
+    // Ordem de FK Restrict (filho antes do pai): StackMovement/PixCharge/
+    // PixWithdrawal -> WalletTransaction -> TableSession/Wallet -> Table ->
+    // Membership -> Clube.
     await prismaDirect.stackMovement.deleteMany({
       where: { tableSession: { clubeId: { in: createdClubeIds } } },
+    });
+    await prismaDirect.pixCharge.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
+    });
+    await prismaDirect.pixWithdrawal.deleteMany({
+      where: { clubeId: { in: createdClubeIds } },
     });
     await prismaDirect.walletTransaction.deleteMany({
       where: { wallet: { clubeId: { in: createdClubeIds } } },
@@ -108,13 +115,38 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
       .expect(200);
     const accessToken = loginRes.body.accessToken as string;
 
+    // 2. Uma carteira só existe dentro de um clube (`Wallet` é por
+    // `(userId, clubeId)`, CL-BE-04) — o clube, o vínculo do jogador e a
+    // carteira em si são montados direto no banco (não há `POST /clubes`
+    // nem endpoint de auto-provisionamento de carteira no MVP, ver
+    // ADR-0003, `club.prisma` e `wallet.e2e-spec.ts`). O papel agora vive na
+    // aresta usuário↔clube (`ClubeMembership.role`), não mais em `User.role`.
+    const clube = await prismaDirect.clube.create({
+      data: { name: 'Clube Fumaça', document: randomUUID().replace(/-/g, '') },
+    });
+    createdClubeIds.push(clube.id);
+
+    // O jogador da fumaça precisa de vínculo ACTIVE no clube — as rotas de
+    // mesa e carteira agora exigem `ClubeMembershipGuard` (CL-BE-05/CL-BE-07).
+    await prismaDirect.clubeMembership.create({
+      data: {
+        clubeId: clube.id,
+        userId: playerUserId,
+        role: 'PLAYER',
+        status: 'ACTIVE',
+      },
+    });
+    await prismaDirect.wallet.create({
+      data: { userId: playerUserId, clubeId: clube.id, balance: 0 },
+    });
+
     const balance = () =>
       request(app.getHttpServer())
-        .get('/api/wallet/balance')
+        .get(`/api/clubes/${clube.id}/carteira/balance`)
         .set('Authorization', `Bearer ${accessToken}`);
     expect((await balance().expect(200)).body.balance).toBe('0.00');
 
-    // 2. Depósito PIX confirmado via webhook.
+    // 3. Depósito PIX confirmado via webhook.
     const chargeExternalId = `chg-${randomUUID()}`;
     fakeAbacatePayClient.createPixCharge.mockResolvedValue({
       externalId: chargeExternalId,
@@ -126,7 +158,7 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
       createdAt: new Date().toISOString(),
     });
     await request(app.getHttpServer())
-      .post('/api/wallet/deposits')
+      .post(`/api/clubes/${clube.id}/carteira/deposits`)
       .set('Authorization', `Bearer ${accessToken}`)
       .set('Idempotency-Key', randomUUID())
       .send({ amount: '300.00' })
@@ -141,26 +173,6 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
       )
       .expect(204);
     expect((await balance().expect(200)).body.balance).toBe('300.00');
-
-    // 3. Uma mesa precisa existir num clube — o clube e o vínculo ADMIN são
-    // montados direto no banco (não há `POST /clubes` nem endpoint de
-    // promoção no MVP, ver ADR-0003 e `club.prisma`). O papel agora vive na
-    // aresta usuário↔clube (`ClubeMembership.role`), não mais em `User.role`.
-    const clube = await prismaDirect.clube.create({
-      data: { name: 'Clube Fumaça', document: randomUUID().replace(/-/g, '') },
-    });
-    createdClubeIds.push(clube.id);
-
-    // O jogador da fumaça também precisa de vínculo ACTIVE no clube — a rota
-    // de mesa agora exige `ClubeMembershipGuard` (CL-BE-05).
-    await prismaDirect.clubeMembership.create({
-      data: {
-        clubeId: clube.id,
-        userId: playerUserId,
-        role: 'PLAYER',
-        status: 'ACTIVE',
-      },
-    });
 
     const adminEmail = `${randomUUID()}@smoke-e2e.test`;
     const adminRegisterRes = await request(app.getHttpServer())
@@ -229,7 +241,7 @@ describe('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e2e)',
       createdAt: new Date().toISOString(),
     });
     await request(app.getHttpServer())
-      .post('/api/wallet/withdrawals')
+      .post(`/api/clubes/${clube.id}/carteira/withdrawals`)
       .set('Authorization', `Bearer ${accessToken}`)
       .set('Idempotency-Key', randomUUID())
       .send({
