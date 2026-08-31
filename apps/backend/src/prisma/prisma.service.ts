@@ -129,7 +129,29 @@ export class PrismaService
   private readonly logger = new Logger(PrismaService.name);
 
   async onModuleInit(): Promise<void> {
-    await this.$connect();
+    // Timeout explícito: sem isso, um host inalcançável (rede, firewall,
+    // connection string errada) trava o `$connect()` pra sempre — a function
+    // serverless come os 300s de timeout inteiros sem log nenhum de erro.
+    // Com o timeout, ao menos aparece a causa no log em vez de silêncio total.
+    const CONNECT_TIMEOUT_MS = 10_000;
+    let timer: NodeJS.Timeout;
+    await Promise.race([
+      this.$connect().finally(() => clearTimeout(timer)),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `PrismaService: $connect() não respondeu em ${CONNECT_TIMEOUT_MS}ms`,
+              ),
+            ),
+          CONNECT_TIMEOUT_MS,
+        );
+      }),
+    ]).catch((error: unknown) => {
+      this.logger.error('Falha ao conectar no PostgreSQL (Prisma).', error);
+      throw error;
+    });
     this.logger.log('Conexão com o PostgreSQL (Prisma) estabelecida.');
   }
 
