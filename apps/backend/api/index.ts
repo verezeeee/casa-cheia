@@ -6,18 +6,27 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 
 // A integração Vercel<->Neon cria `DATABASE_URL` travada pra edição manual no
-// dashboard (gerenciada pela integração) e, nessa loja, ela não vem com os
-// parâmetros que o Prisma precisa pra falar com o pooler (PgBouncer,
-// transaction mode): `pgbouncer=true` (desliga prepared statements, que o
-// pooler não suporta) e `connect_timeout`. Sem isso o `$connect()` passa mas
-// uma query real fica pendurada esperando conexão em vez de dar erro.
-// `POSTGRES_PRISMA_URL`, também criada pela integração, já vem com esses
-// parâmetros — só precisa ser lida antes de qualquer PrismaClient existir,
-// já que o client lê `process.env.DATABASE_URL` (via `env()` no schema) no
-// momento em que é instanciado, não no build. Local/CI não têm
-// POSTGRES_PRISMA_URL — no-op, continua a DATABASE_URL do .env normal.
-if (process.env.POSTGRES_PRISMA_URL) {
-  process.env.DATABASE_URL = process.env.POSTGRES_PRISMA_URL;
+// dashboard (gerenciada pela integração). Confirmado em produção: `$connect()`
+// funciona (handshake leve com o pooler), mas uma query real
+// (`SELECT 1` do health check) fica pendurada os 300s inteiros — sintoma
+// clássico de PgBouncer (transaction mode) recebendo prepared statements
+// (protocolo estendido) que ele não sabe proxied direito sem `pgbouncer=true`.
+// Em vez de confiar que a env var já vem com os parâmetros certos, força os
+// dois que o Prisma precisa pra falar com um pooler: `pgbouncer=true`
+// (desliga prepared statements) e `connect_timeout` (falha rápido em vez de
+// pendurar). `POSTGRES_PRISMA_URL` (criada pela integração) é a base — só
+// precisa ser lida antes de qualquer PrismaClient existir, já que o client lê
+// `process.env.DATABASE_URL` (via `env()` no schema) no momento em que é
+// instanciado, não no build. Local/CI não têm POSTGRES_PRISMA_URL — no-op,
+// continua a DATABASE_URL do .env normal.
+const pooledUrl = process.env.POSTGRES_PRISMA_URL;
+if (pooledUrl) {
+  const url = new URL(pooledUrl);
+  url.searchParams.set('pgbouncer', 'true');
+  if (!url.searchParams.has('connect_timeout')) {
+    url.searchParams.set('connect_timeout', '15');
+  }
+  process.env.DATABASE_URL = url.toString();
 }
 
 console.log(
