@@ -175,7 +175,19 @@ export class PrismaService
    * está respondendo (sem depender de nenhuma tabela de domínio existir).
    */
   async isHealthy(): Promise<boolean> {
-    await this.withTimeout(() => this.$queryRaw`SELECT 1`, '$queryRaw', 8_000);
+    console.log('[boot] isHealthy: chamando $queryRaw...');
+    try {
+      await this.withTimeout(
+        () => this.$queryRaw`SELECT 1`,
+        '$queryRaw',
+        8_000,
+      );
+    } catch (error) {
+      console.error('[boot] isHealthy: $queryRaw falhou/timeout:', error);
+      throw error;
+    }
+
+    console.log('[boot] isHealthy: $queryRaw retornou.');
     return true;
   }
 
