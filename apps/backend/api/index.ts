@@ -55,6 +55,21 @@ export default async function handler(
       handlerPromise = undefined;
     });
   }
-  const serverlessHandler = await handlerPromise;
+  let serverlessHandler: Awaited<typeof handlerPromise>;
+  try {
+    serverlessHandler = await handlerPromise;
+  } catch (error) {
+    // Sem isso, uma falha no boot (timeout de conexão, env inválida) nunca
+    // escreve na `res` — a function fica pendurada até estourar os 300s de
+    // timeout em vez de devolver o erro na hora.
+
+    console.error('Falha ao inicializar a app Nest:', error);
+    res.statusCode = 500;
+    res.setHeader('content-type', 'application/json');
+    res.end(
+      JSON.stringify({ statusCode: 500, message: 'Internal Server Error' }),
+    );
+    return;
+  }
   await serverlessHandler(req, res);
 }
