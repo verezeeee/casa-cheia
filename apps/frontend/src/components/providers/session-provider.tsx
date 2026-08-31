@@ -1,36 +1,69 @@
 'use client';
 
-import type { ClubeRole, SessionUser } from '@poker-system/shared';
+import type { ClubeRole, ClubeSummaryDto, SessionUser } from '@poker-system/shared';
+import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { authApi } from '@/lib/api/auth';
 import { clubApi, setCurrentClubeId } from '@/lib/api/club-context';
 import type { LoginRequest } from '@/lib/api/types';
 import { setAccessToken, setUnauthorizedHandler } from '@/lib/http-client';
 
+/** Onde a escolha de clube do usuário sobrevive a um reload da página. */
+const CURRENT_CLUBE_STORAGE_KEY = 'casa-cheia:currentClubeId';
+
+function readStoredClubeId(): string | null {
+  try {
+    return localStorage.getItem(CURRENT_CLUBE_STORAGE_KEY);
+  } catch {
+    return null; // Privado/bloqueado: cai no default (primeiro clube da lista).
+  }
+}
+
+function storeClubeId(clubeId: string | null): void {
+  try {
+    if (clubeId) localStorage.setItem(CURRENT_CLUBE_STORAGE_KEY, clubeId);
+    else localStorage.removeItem(CURRENT_CLUBE_STORAGE_KEY);
+  } catch {
+    // Sem storage disponível: a escolha só dura a aba atual, sem quebrar nada.
+  }
+}
+
 /**
- * Resolve o clube "atual" da sessão (MVP de clube único — ver `club-context.ts`)
- * assim que sabemos quem é o usuário, junto do papel dele NESTE clube
- * (`ClubeMembership.role` não existe mais em `SessionUser` — ver seu
- * docblock). Uma conta sem nenhum clube (ainda não convidada) fica com
- * `currentClubeId`/`clubeRole` nulos: as chamadas a mesa/torneio/carteira vão
- * falhar explicitamente em vez de usar um clube errado.
+ * Busca os clubes do usuário e decide qual é o "atual": o salvo em
+ * `localStorage` SE ele ainda estiver na lista (clube revogado/saído não
+ * conta), senão o primeiro (`clubes[0]`, mesmo critério de antes de existir
+ * seletor). Uma conta sem clube nenhum (recém-cadastrada, ou ainda não
+ * convidada) fica com `currentClubeId` nulo — `RequireAuth` mostra a tela de
+ * "sem clube" nesse caso em vez de deixar as chamadas de mesa/torneio/
+ * carteira falharem tentando usar um clube que não existe.
  */
-async function resolveCurrentClube(): Promise<ClubeRole | null> {
+async function resolveClubes(): Promise<{
+  clubes: ClubeSummaryDto[];
+  currentClubeId: string | null;
+}> {
   const clubes = await clubApi.listMyClubes();
-  const current = clubes[0] ?? null;
+  const stored = readStoredClubeId();
+  const current = clubes.find((c) => c.id === stored) ?? clubes[0] ?? null;
   setCurrentClubeId(current?.id ?? null);
-  return current?.role ?? null;
+  return { clubes, currentClubeId: current?.id ?? null };
 }
 
 type SessionStatus = 'loading' | 'authenticated' | 'unauthenticated';
 
 interface SessionContextValue {
   user: SessionUser | null;
-  /** Papel do usuário no clube atual (`ClubeSummaryDto.role`) — `null` fora de `authenticated` ou sem clube. */
+  /** Papel do usuário no clube atual — `null` fora de `authenticated` ou sem clube. */
   clubeRole: ClubeRole | null;
+  /** Todos os clubes ativos do usuário — alimenta o seletor da sidebar. */
+  clubes: ClubeSummaryDto[];
+  currentClubeId: string | null;
   status: SessionStatus;
   login: (input: LoginRequest) => Promise<void>;
   logout: () => Promise<void>;
+  /** Troca o clube atual (seletor da sidebar). Refaz toda query club-scoped. */
+  switchClube: (clubeId: string) => void;
+  /** Re-busca a lista de clubes — usado depois de criar/entrar num clube pela UI. */
+  refreshClubes: () => Promise<void>;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -47,15 +80,34 @@ const SessionContext = createContext<SessionContextValue | null>(null);
  * e o `httpClient` reexecuta `me()` automaticamente (ver `lib/http-client.ts`).
  */
 export function SessionProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<SessionUser | null>(null);
-  const [clubeRole, setClubeRole] = useState<ClubeRole | null>(null);
+  const [clubes, setClubes] = useState<ClubeSummaryDto[]>([]);
+  const [currentClubeId, setCurrentClubeIdState] = useState<string | null>(null);
   const [status, setStatus] = useState<SessionStatus>('loading');
+
+  // Derivado, não estado próprio: papel do usuário no clube atual. Guardar
+  // separado arriscaria os dois dessincronizarem (ex. trocar de clube e
+  // esquecer de atualizar o papel junto).
+  const clubeRole = useMemo(
+    () => clubes.find((c) => c.id === currentClubeId)?.role ?? null,
+    [clubes, currentClubeId],
+  );
+
+  const applyClubes = useCallback(
+    (resolved: { clubes: ClubeSummaryDto[]; currentClubeId: string | null }) => {
+      setClubes(resolved.clubes);
+      setCurrentClubeIdState(resolved.currentClubeId);
+    },
+    [],
+  );
 
   const clearSession = useCallback(() => {
     setAccessToken(null);
     setCurrentClubeId(null);
     setUser(null);
-    setClubeRole(null);
+    setClubes([]);
+    setCurrentClubeIdState(null);
     setStatus('unauthenticated');
   }, []);
 
@@ -77,7 +129,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     authApi
       .me()
       .then(async (sessionUser) => {
-        setClubeRole(await resolveCurrentClube());
+        applyClubes(await resolveClubes());
         setUser(sessionUser);
         setStatus('authenticated');
       })
@@ -88,25 +140,56 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       });
 
     return () => setUnauthorizedHandler(null);
-  }, [clearSession]);
+  }, [applyClubes, clearSession]);
 
-  const login = useCallback(async (input: LoginRequest) => {
-    const { accessToken } = await authApi.login(input);
-    setAccessToken(accessToken);
-    const sessionUser = await authApi.me();
-    setClubeRole(await resolveCurrentClube());
-    setUser(sessionUser);
-    setStatus('authenticated');
-  }, []);
+  const login = useCallback(
+    async (input: LoginRequest) => {
+      const { accessToken } = await authApi.login(input);
+      setAccessToken(accessToken);
+      const sessionUser = await authApi.me();
+      applyClubes(await resolveClubes());
+      setUser(sessionUser);
+      setStatus('authenticated');
+    },
+    [applyClubes],
+  );
 
   const logout = useCallback(async () => {
     await authApi.logout().catch(() => undefined);
     clearSession();
   }, [clearSession]);
 
+  const switchClube = useCallback(
+    (clubeId: string) => {
+      setCurrentClubeId(clubeId);
+      setCurrentClubeIdState(clubeId);
+      storeClubeId(clubeId);
+      // As query keys hoje (`['tables']`, `['tournaments']`, ...) não levam
+      // `clubeId` — invalidar tudo é o jeito simples de garantir que nenhuma
+      // tela fique mostrando dado do clube anterior. Trocar de clube é ação
+      // rara, não precisa ser cirúrgico.
+      void queryClient.invalidateQueries();
+    },
+    [queryClient],
+  );
+
+  const refreshClubes = useCallback(async () => {
+    applyClubes(await resolveClubes());
+  }, [applyClubes]);
+
   const value = useMemo(
-    () => ({ user, clubeRole, status, login, logout }),
-    [user, clubeRole, status, login, logout],
+    () => ({
+      user,
+      clubeRole,
+      clubes,
+      currentClubeId,
+      status,
+      login,
+      logout,
+      switchClube,
+      refreshClubes,
+    }),
+    [user, clubeRole, clubes, currentClubeId, status, login, logout, switchClube, refreshClubes],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

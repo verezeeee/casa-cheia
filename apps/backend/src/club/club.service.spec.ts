@@ -28,10 +28,12 @@ const MEMBERSHIP = {
 function buildService() {
   const tx = {
     user: { create: jest.fn() },
-    clubeMembership: { create: jest.fn() },
-    wallet: { create: jest.fn() },
+    clube: { create: jest.fn() },
+    clubeMembership: { create: jest.fn(), upsert: jest.fn() },
+    wallet: { create: jest.fn(), upsert: jest.fn() },
   };
   const prisma = {
+    clube: { findUnique: jest.fn() },
     clubeMembership: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
@@ -80,6 +82,142 @@ describe('ClubService', () => {
 
       const [clube] = await service.listMyClubes('user-1');
       expect(clube).toMatchObject({ status: 'SUSPENDED', role: 'PLAYER' });
+    });
+
+    it('não inclui joinCode pra quem não é ADMIN', async () => {
+      const { service, prisma } = buildService();
+      prisma.clubeMembership.findMany.mockResolvedValue([
+        { ...MEMBERSHIP, role: 'PLAYER', clube: CLUBE },
+      ]);
+
+      const [clube] = await service.listMyClubes('user-1');
+      expect(clube).not.toHaveProperty('joinCode');
+    });
+  });
+
+  describe('createClube', () => {
+    it('cria clube + vínculo ADMIN + carteira numa transação, com joinCode', async () => {
+      const { service, prisma, tx } = buildService();
+      tx.clube.create.mockResolvedValue({ ...CLUBE, joinCode: '123456' });
+      tx.clubeMembership.create.mockResolvedValue(MEMBERSHIP);
+
+      const result = await service.createClube('user-1', {
+        name: CLUBE.name,
+        document: CLUBE.document,
+      });
+
+      expect(tx.clube.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          name: CLUBE.name,
+          document: CLUBE.document,
+          joinCode: expect.stringMatching(/^\d{6}$/) as unknown,
+        }),
+      });
+      expect(tx.clubeMembership.create).toHaveBeenCalledWith({
+        data: {
+          clubeId: CLUBE.id,
+          userId: 'user-1',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+        },
+      });
+      expect(tx.wallet.create).toHaveBeenCalledWith({
+        data: { userId: 'user-1', clubeId: CLUBE.id },
+      });
+      expect(result).toMatchObject({
+        id: CLUBE.id,
+        role: 'ADMIN',
+        joinCode: '123456',
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('colisão de joinCode (auto-gerado) regenera e tenta de novo, sem vazar erro', async () => {
+      const { service, prisma, tx } = buildService();
+      const { Prisma } = jest.requireActual('../generated/prisma');
+      tx.clube.create.mockResolvedValue({ ...CLUBE, joinCode: '654321' });
+      tx.clubeMembership.create.mockResolvedValue(MEMBERSHIP);
+
+      prisma.$transaction
+        .mockImplementationOnce(() => {
+          throw new Prisma.PrismaClientKnownRequestError('duplicate', {
+            code: 'P2002',
+            clientVersion: '6.19.3',
+            meta: { target: ['join_code'] },
+          });
+        })
+        .mockImplementation((cb: (t: typeof tx) => unknown) => cb(tx));
+
+      await expect(
+        service.createClube('user-1', {
+          name: CLUBE.name,
+          document: CLUBE.document,
+        }),
+      ).resolves.toMatchObject({ id: CLUBE.id });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    });
+
+    it('documento já cadastrado (input do usuário) mapeia pra 409, sem retry', async () => {
+      const { service, prisma } = buildService();
+      const { Prisma } = jest.requireActual('../generated/prisma');
+      prisma.$transaction.mockImplementation(() => {
+        throw new Prisma.PrismaClientKnownRequestError('duplicate', {
+          code: 'P2002',
+          clientVersion: '6.19.3',
+          meta: { target: ['document'] },
+        });
+      });
+
+      await expect(
+        service.createClube('user-1', {
+          name: CLUBE.name,
+          document: CLUBE.document,
+        }),
+      ).rejects.toThrow('Documento já cadastrado.');
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('joinByCode', () => {
+    it('código inexistente responde 404', async () => {
+      const { service, prisma } = buildService();
+      prisma.clube.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.joinByCode('user-1', { code: '999999' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('código válido cria vínculo PLAYER ativo + carteira (upsert, idempotente)', async () => {
+      const { service, prisma, tx } = buildService();
+      prisma.clube.findUnique.mockResolvedValue({
+        ...CLUBE,
+        joinCode: '123456',
+      });
+      tx.clubeMembership.upsert.mockResolvedValue({
+        ...MEMBERSHIP,
+        role: 'PLAYER',
+      });
+
+      const result = await service.joinByCode('user-2', { code: '123456' });
+
+      expect(tx.clubeMembership.upsert).toHaveBeenCalledWith({
+        where: { clubeId_userId: { clubeId: CLUBE.id, userId: 'user-2' } },
+        create: {
+          clubeId: CLUBE.id,
+          userId: 'user-2',
+          role: 'PLAYER',
+          status: 'ACTIVE',
+        },
+        update: { status: 'ACTIVE' },
+      });
+      expect(tx.wallet.upsert).toHaveBeenCalledWith({
+        where: { userId_clubeId: { userId: 'user-2', clubeId: CLUBE.id } },
+        create: { userId: 'user-2', clubeId: CLUBE.id },
+        update: {},
+      });
+      expect(result).toMatchObject({ id: CLUBE.id, role: 'PLAYER' });
+      expect(result).not.toHaveProperty('joinCode');
     });
   });
 

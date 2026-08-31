@@ -10,10 +10,17 @@ function buildController() {
   const clubService: jest.Mocked<
     Pick<
       ClubService,
-      'listMyClubes' | 'getClube' | 'listMembers' | 'upsertMember'
+      | 'listMyClubes'
+      | 'createClube'
+      | 'joinByCode'
+      | 'getClube'
+      | 'listMembers'
+      | 'upsertMember'
     >
   > = {
     listMyClubes: jest.fn(),
+    createClube: jest.fn(),
+    joinByCode: jest.fn(),
     getClube: jest.fn(),
     listMembers: jest.fn(),
     upsertMember: jest.fn(),
@@ -29,6 +36,22 @@ describe('ClubController', () => {
 
     await expect(controller.listMyClubes(USER)).resolves.toEqual([]);
     expect(clubService.listMyClubes).toHaveBeenCalledWith('user-1');
+  });
+
+  it('createClube repassa usuário e corpo validado', async () => {
+    const { controller, clubService } = buildController();
+    const dto = { name: 'Casa Cheia', document: '12345678000199' };
+
+    await controller.createClube(USER, dto);
+    expect(clubService.createClube).toHaveBeenCalledWith('user-1', dto);
+  });
+
+  it('joinByCode repassa usuário e código', async () => {
+    const { controller, clubService } = buildController();
+    const dto = { code: '123456' };
+
+    await controller.joinByCode(USER, dto);
+    expect(clubService.joinByCode).toHaveBeenCalledWith('user-1', dto);
   });
 
   it('getClube repassa usuário e clubeId', async () => {

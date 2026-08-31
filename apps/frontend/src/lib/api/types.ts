@@ -163,3 +163,16 @@ export type UpsertMemberRequest = {
 } & (
   { userId: string; email?: never; name?: never } | { userId?: never; email: string; name: string }
 );
+
+/** Corpo de `POST /clubes` — quem cria vira ADMIN do clube na hora. */
+export interface CreateClubeRequest {
+  name: string;
+  /** CPF (11 dígitos) ou CNPJ (14 dígitos), somente dígitos. */
+  document: string;
+}
+
+/** Corpo de `POST /clubes/entrar` — ingresso imediato como PLAYER. */
+export interface JoinClubeRequest {
+  /** 6 dígitos, gerado na criação do clube. */
+  code: string;
+}

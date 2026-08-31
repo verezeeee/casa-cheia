@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSession } from '@/components/providers/session-provider';
 import { cn } from '@/components/ui';
+import { ClubSwitcher } from './club-switcher';
 import { Logo } from './logo';
 import { isNavTabActive, NAV_TABS } from './nav-tabs';
 
@@ -42,7 +43,11 @@ export function Sidebar() {
         <Logo className="text-lg" />
       </Link>
 
-      <nav aria-label="Navegação principal" className="mt-8 flex flex-col gap-1">
+      <div className="mt-6">
+        <ClubSwitcher />
+      </div>
+
+      <nav aria-label="Navegação principal" className="mt-6 flex flex-col gap-1">
         {NAV_TABS.map((tab) => {
           const active = isNavTabActive(pathname, tab.matches);
           return (

@@ -30,6 +30,8 @@ const prisma = new PrismaClient();
  */
 const SEED_CLUBE_NAME = process.env.SEED_CLUBE_NAME ?? 'Clube Casa Cheia (dev)';
 const SEED_CLUBE_DOCUMENT = process.env.SEED_CLUBE_DOCUMENT ?? '00000000000191';
+/** 6 dígitos, mesmo formato de `ClubService.generateJoinCode` — fixo aqui só pra previsibilidade em dev. */
+const SEED_CLUBE_JOIN_CODE = process.env.SEED_CLUBE_JOIN_CODE ?? '100000';
 const SEED_ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@casacheia.dev';
 const SEED_ADMIN_NAME = process.env.SEED_ADMIN_NAME ?? 'Administrador do Clube';
 const SEED_ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'admin123';
@@ -41,6 +43,7 @@ async function main(): Promise<void> {
     create: {
       name: SEED_CLUBE_NAME,
       document: SEED_CLUBE_DOCUMENT,
+      joinCode: SEED_CLUBE_JOIN_CODE,
     },
   });
 

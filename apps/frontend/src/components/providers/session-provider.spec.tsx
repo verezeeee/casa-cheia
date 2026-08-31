@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { SessionUser } from '@poker-system/shared';
 import type { ReactNode } from 'react';
 import { authApi } from '@/lib/api/auth';
@@ -32,7 +33,12 @@ const sessionUser: SessionUser = {
 };
 
 function wrapper({ children }: { children: ReactNode }) {
-  return <SessionProvider>{children}</SessionProvider>;
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return (
+    <QueryClientProvider client={queryClient}>
+      <SessionProvider>{children}</SessionProvider>
+    </QueryClientProvider>
+  );
 }
 
 describe('SessionProvider / useSession', () => {
@@ -89,6 +95,37 @@ describe('SessionProvider / useSession', () => {
     });
     expect(result.current.status).toBe('authenticated');
     expect(result.current.user).toEqual(sessionUser);
+  });
+
+  it('expõe os clubes do usuário e o clube atual (primeiro da lista)', async () => {
+    mockedAuthApi.me.mockResolvedValue(sessionUser);
+    mockedClubApi.listMyClubes.mockResolvedValue([
+      { id: 'clube-1', name: 'Casa Cheia', status: 'ACTIVE', role: 'ADMIN' } as never,
+      { id: 'clube-2', name: 'Outro Clube', status: 'ACTIVE', role: 'PLAYER' } as never,
+    ]);
+
+    const { result } = renderHook(() => useSession(), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe('authenticated'));
+
+    expect(result.current.clubes).toHaveLength(2);
+    expect(result.current.currentClubeId).toBe('clube-1');
+    expect(result.current.clubeRole).toBe('ADMIN');
+  });
+
+  it('switchClube troca o clube atual e o papel derivado', async () => {
+    mockedAuthApi.me.mockResolvedValue(sessionUser);
+    mockedClubApi.listMyClubes.mockResolvedValue([
+      { id: 'clube-1', name: 'Casa Cheia', status: 'ACTIVE', role: 'ADMIN' } as never,
+      { id: 'clube-2', name: 'Outro Clube', status: 'ACTIVE', role: 'PLAYER' } as never,
+    ]);
+
+    const { result } = renderHook(() => useSession(), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe('authenticated'));
+
+    act(() => result.current.switchClube('clube-2'));
+
+    expect(result.current.currentClubeId).toBe('clube-2');
+    expect(result.current.clubeRole).toBe('PLAYER');
   });
 
   it('logout() limpa a sessão mesmo que a chamada ao backend falhe', async () => {

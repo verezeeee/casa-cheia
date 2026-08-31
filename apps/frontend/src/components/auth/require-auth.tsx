@@ -7,7 +7,8 @@ import { useSession } from '@/components/providers/session-provider';
 import { BottomNav } from '@/components/layout/bottom-nav';
 import { Sidebar } from '@/components/layout/sidebar';
 import { TopBar } from '@/components/layout/top-bar';
-import { Spinner } from '@/components/ui';
+import { ClubActions } from '@/components/club/club-actions';
+import { EmptyState, Spinner } from '@/components/ui';
 
 /**
  * Wrapper de rota protegida. Enquanto a sessão hidrata (`status ===
@@ -31,7 +32,7 @@ import { Spinner } from '@/components/ui';
  * cada troca de aba em vez de só o miolo trocar.
  */
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { status } = useSession();
+  const { status, clubes } = useSession();
   const router = useRouter();
 
   useEffect(() => {
@@ -59,7 +60,20 @@ export function RequireAuth({ children }: { children: ReactNode }) {
           transition={{ type: 'spring', stiffness: 300, damping: 30 }}
           className="flex-1 pb-20 lg:pb-0"
         >
-          {children}
+          {/* Sem clube nenhum, o conteúdo da página (mesas/torneios/entradas)
+              chamaria `getCurrentClubeId()` e quebraria com throw — troca por
+              uma tela dedicada em vez de deixar cada página lidar com isso. */}
+          {clubes.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center p-8">
+              <EmptyState
+                title="Você ainda não faz parte de nenhum clube"
+                description="Crie um clube ou entre num já existente com o código de convite."
+                action={<ClubActions />}
+              />
+            </div>
+          ) : (
+            children
+          )}
         </motion.div>
         <BottomNav />
       </div>

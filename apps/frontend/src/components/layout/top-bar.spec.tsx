@@ -20,6 +20,10 @@ describe('TopBar', () => {
       clubeRole: null,
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
 
     render(<TopBar />);
@@ -36,6 +40,10 @@ describe('TopBar', () => {
       clubeRole: null,
       login: jest.fn(),
       logout,
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
 
     render(<TopBar />);

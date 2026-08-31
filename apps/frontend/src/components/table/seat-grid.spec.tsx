@@ -59,6 +59,10 @@ describe('SeatGrid', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tableApi.getSeats as jest.Mock).mockResolvedValue([VACANT]);
     (tableApi.sitAtTable as jest.Mock).mockResolvedValue({ ...VACANT, userId: 'me' });
@@ -88,6 +92,10 @@ describe('SeatGrid', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tableApi.getSeats as jest.Mock).mockResolvedValue([MINE, OTHER]);
     (tableApi.cashOut as jest.Mock).mockResolvedValue({ ...MINE, userId: null, sessionId: null });
@@ -117,6 +125,10 @@ describe('SeatGrid', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tableApi.getSeats as jest.Mock).mockResolvedValue([OTHER]);
     (tableApi.recordMovement as jest.Mock).mockResolvedValue({ ...OTHER, currentStack: '75.00' });
@@ -150,6 +162,10 @@ describe('SeatGrid', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tableApi.getSeats as jest.Mock).mockResolvedValue([VACANT]);
     (tableApi.sitAtTable as jest.Mock).mockRejectedValue(new Error('saldo insuficiente'));
@@ -174,6 +190,10 @@ describe('SeatGrid', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tableApi.getSeats as jest.Mock).mockResolvedValue([VACANT]);
     (tableApi.closeTable as jest.Mock).mockResolvedValue({});
@@ -195,6 +215,10 @@ describe('SeatGrid', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tableApi.getSeats as jest.Mock).mockResolvedValue([VACANT]);
 

@@ -28,6 +28,10 @@ function asPlayer() {
     status: 'authenticated',
     login: jest.fn(),
     logout: jest.fn(),
+    clubes: [],
+    currentClubeId: null,
+    switchClube: jest.fn(),
+    refreshClubes: jest.fn(),
   });
 }
 
@@ -118,6 +122,10 @@ describe('EntryHistoryList', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (entriesApi.listEntries as jest.Mock).mockResolvedValue({
       items: [TOURNAMENT_ITEM],

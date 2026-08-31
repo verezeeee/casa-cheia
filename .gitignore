@@ -40,3 +40,5 @@ Thumbs.db
 
 # docker volumes (host bind mounts, if any)
 pgdata/
+.vercel
+.env*

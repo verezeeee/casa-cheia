@@ -18,8 +18,12 @@ describe('AuthStatus', () => {
       status: 'loading',
       user: null,
       clubeRole: null,
+      clubes: [],
+      currentClubeId: null,
       login: jest.fn(),
       logout: jest.fn(),
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
 
     render(<AuthStatus />);
@@ -31,8 +35,12 @@ describe('AuthStatus', () => {
       status: 'unauthenticated',
       user: null,
       clubeRole: null,
+      clubes: [],
+      currentClubeId: null,
       login: jest.fn(),
       logout: jest.fn(),
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
 
     render(<AuthStatus />);
@@ -46,8 +54,12 @@ describe('AuthStatus', () => {
       status: 'authenticated',
       user: { id: '1', email: 'a@b.dev', name: 'Ana' },
       clubeRole: null,
+      clubes: [],
+      currentClubeId: null,
       login: jest.fn(),
       logout,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
 
     render(<AuthStatus />);

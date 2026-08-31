@@ -14,9 +14,13 @@
 // Security será construída (CL-DB-02, role `poker_app` NOSUPERUSER/NOBYPASSRLS
 // já provisionado em docker/postgres/init/01-app-role.sql).
 //
-// Nenhum staff de plataforma existe no modelo de dados (ADR-0003): o
-// onboarding de clube é curadoria manual, feita fora do produto. Por isso
+// Nenhum staff de plataforma existe no modelo de dados (ADR-0003). Por isso
 // `ClubeRole` não tem um papel "superadmin" — quem opera o clube é membro dele.
+// ATUALIZAÇÃO: a curadoria manual de CRIAÇÃO de clube (ex-ADR-0003) foi
+// revertida — qualquer usuário autenticado cria um clube pela própria API
+// (`POST /clubes`, `ClubService.createClube`) e vira ADMIN dele na hora. O
+// que continua sem staff de plataforma é a ADMINISTRAÇÃO do clube depois de
+// criado (sem superadmin, sem acesso cross-tenant) — só a criação mudou.
 //
 // ----------------------------------------------------------------------------
 // PAPEL NÃO É MAIS ATRIBUTO DO USUÁRIO
@@ -31,10 +35,13 @@
 
 /// Clube — o tenant. Raiz de escopo de todo dado de negócio do sistema.
 ///
-/// Criado por curadoria manual (ADR-0003): não há auto-cadastro, e por isso
-/// não há aqui nenhum campo de fluxo de aprovação de clube — o que passa por
-/// aprovação é a CONTA DE RECEBIMENTO (ver `ClubePaymentAccount`), que depende
-/// do gateway e não de nós.
+/// Criado por qualquer usuário autenticado via `POST /clubes`
+/// (`ClubService.createClube`), que vira `ADMIN` do clube na mesma
+/// transação. Não há aqui nenhum campo de fluxo de aprovação de CLUBE — o
+/// que passa por aprovação é a CONTA DE RECEBIMENTO (ver
+/// `ClubePaymentAccount`), que depende do gateway e não de nós. Ingresso de
+/// um MEMBRO num clube já criado é imediato via `joinCode` (sem aprovação
+/// por enquanto — ver docblock do campo).
 model Clube {
   id String @id @default(uuid())
 
@@ -44,6 +51,13 @@ model Clube {
   /// o mesmo estabelecimento de existir duas vezes — e a âncora de
   /// reconciliação com o cadastro do gateway.
   document String @unique
+
+  /// Código curto de ingresso (6 dígitos, só números, sem zero à esquerda —
+  /// gerado por `ClubService.generateJoinCode`). Quem tem o código entra
+  /// como `PLAYER` na hora via `POST /clubes/entrar` (`ClubService.joinByCode`)
+  /// — sem aprovação de um ADMIN por enquanto. Só é exposto na resposta da
+  /// API pra quem é `ADMIN` do clube (ver `ClubeSummaryDto.joinCode`).
+  joinCode String @unique @map("join_code")
 
   /// `SUSPENDED` e `CANCELLED` são bloqueio operacional, NÃO delete: as mesas,
   /// torneios e carteiras do clube continuam existindo (trilha financeira), só

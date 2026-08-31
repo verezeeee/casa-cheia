@@ -11,6 +11,7 @@ import type {
   ClubeStatus as SharedClubeStatus,
   ClubeSummaryDto,
 } from '@poker-system/shared';
+import { Prisma } from '../generated/prisma';
 import type {
   Clube,
   ClubeMembership,
@@ -20,6 +21,8 @@ import { randomBytes } from 'node:crypto';
 import { mapUniqueConstraintError, normalizeEmail } from '../auth/auth.service';
 import { PasswordHasherService } from '../common/crypto/password-hasher.service';
 import { PrismaService } from '../prisma/prisma.service';
+import type { CreateClubeDto } from './dto/create-clube.dto';
+import type { JoinClubeDto } from './dto/join-clube.dto';
 import type { UpsertClubeMembershipDto } from './dto/upsert-clube-membership.dto';
 
 /**
@@ -33,15 +36,33 @@ function generateTemporaryPassword(): string {
   return randomBytes(9).toString('base64url');
 }
 
-/** Mesmos literais em Prisma e @poker-system/shared (ver base.prisma). */
+/**
+ * Código de ingresso do clube: 6 dígitos, primeiro dígito 1-9 (sem zero à
+ * esquerda — mais simples de digitar/falar). Não é segredo forte (só
+ * ~900 mil combinações) — a rota que o consome (`joinByCode`) é
+ * throttled propositalmente (ver `club.controller.ts`), e a aprovação de um
+ * ADMIN antes do ingresso virar definitivo fica pra quando essa flag existir
+ * (ver docblock de `joinByCode`).
+ */
+function generateJoinCode(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+/**
+ * Mesmos literais em Prisma e @poker-system/shared (ver base.prisma).
+ * `joinCode` só é preenchido pra quem é `ADMIN` do clube — é a credencial de
+ * convite, não deve vazar pra um `PLAYER` olhando a própria lista de clubes.
+ */
 function toClubeSummary(
   membership: Pick<ClubeMembership, 'role'> & { clube: Clube },
 ): ClubeSummaryDto {
+  const isAdmin = membership.role === 'ADMIN';
   return {
     id: membership.clube.id,
     name: membership.clube.name,
     status: membership.clube.status as unknown as SharedClubeStatus,
     role: membership.role as unknown as SharedClubeRole,
+    ...(isAdmin ? { joinCode: membership.clube.joinCode } : {}),
   };
 }
 
@@ -98,6 +119,107 @@ export class ClubService {
     });
 
     return memberships.map(toClubeSummary);
+  }
+
+  /**
+   * Cria um clube por autoatendimento — qualquer usuário autenticado pode
+   * chamar. Clube, vínculo `ADMIN` e carteira nascem juntos na mesma
+   * transação, mesmo padrão de `createMemberWithNewUser`. O `joinCode` é
+   * gerado pelo servidor; como ele é auto-gerado (não input do usuário),
+   * uma colisão de unicidade (estatisticamente rara, ~1 em 900 mil) NUNCA
+   * deve virar erro pro chamador — regenera e tenta de novo.
+   */
+  async createClube(
+    userId: string,
+    dto: CreateClubeDto,
+  ): Promise<ClubeSummaryDto> {
+    const MAX_JOIN_CODE_ATTEMPTS = 5;
+
+    for (let attempt = 1; attempt <= MAX_JOIN_CODE_ATTEMPTS; attempt++) {
+      const joinCode = generateJoinCode();
+
+      try {
+        const membership = await this.prisma.$transaction(async (tx) => {
+          const clube = await tx.clube.create({
+            data: { name: dto.name, document: dto.document, joinCode },
+          });
+          const membership = await tx.clubeMembership.create({
+            data: {
+              clubeId: clube.id,
+              userId,
+              role: 'ADMIN',
+              status: 'ACTIVE',
+            },
+          });
+          await tx.wallet.create({ data: { userId, clubeId: clube.id } });
+          return { ...membership, clube };
+        });
+
+        return toClubeSummary(membership);
+      } catch (error) {
+        const target =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+            ? ((error.meta?.target as string[] | undefined) ?? [])
+            : undefined;
+
+        // Colisão só no join_code (gerado por nós): regenera e tenta de
+        // novo, silenciosamente. Qualquer outro conflito (ex.: `document`
+        // duplicado, informado pelo usuário) é erro de verdade — propaga.
+        const isJoinCodeCollision =
+          target?.includes('join_code') && !target.includes('document');
+        if (!isJoinCodeCollision || attempt === MAX_JOIN_CODE_ATTEMPTS) {
+          throw mapUniqueConstraintError(error);
+        }
+      }
+    }
+
+    // Inalcançável (o loop sempre retorna ou lança), só satisfaz o compilador.
+    throw new Error('Não foi possível gerar um código de clube único.');
+  }
+
+  /**
+   * Ingresso imediato num clube existente via código — sem aprovação de um
+   * ADMIN por enquanto (TODO: um toggle "exigir aprovação" nas
+   * configurações do clube deve virar um `if` aqui no dia em que existir,
+   * criando o vínculo como pendente em vez de `ACTIVE`).
+   *
+   * `upsert`, não `create`: reentrar com o mesmo código idempotentemente
+   * REATIVA um vínculo `REVOKED` em vez de dar conflito. A carteira também é
+   * `upsert` com `update: {}` — nunca sobrescreve saldo de uma carteira que
+   * já existe (mesma regra do seed, ver `prisma/seed.ts`).
+   *
+   * 404 (não "código inválido" de outra forma) pra código inexistente: não
+   * dá pra distinguir "código nunca existiu" de "clube foi desativado" sem
+   * abrir uma pista de enumeração, mesmo padrão anti-enumeração do resto do
+   * módulo.
+   */
+  async joinByCode(
+    userId: string,
+    dto: JoinClubeDto,
+  ): Promise<ClubeSummaryDto> {
+    const clube = await this.prisma.clube.findUnique({
+      where: { joinCode: dto.code },
+    });
+    if (!clube) {
+      throw new NotFoundException('Código inválido.');
+    }
+
+    const membership = await this.prisma.$transaction(async (tx) => {
+      const membership = await tx.clubeMembership.upsert({
+        where: { clubeId_userId: { clubeId: clube.id, userId } },
+        create: { clubeId: clube.id, userId, role: 'PLAYER', status: 'ACTIVE' },
+        update: { status: 'ACTIVE' },
+      });
+      await tx.wallet.upsert({
+        where: { userId_clubeId: { userId, clubeId: clube.id } },
+        create: { userId, clubeId: clube.id },
+        update: {},
+      });
+      return membership;
+    });
+
+    return toClubeSummary({ ...membership, clube });
   }
 
   /**

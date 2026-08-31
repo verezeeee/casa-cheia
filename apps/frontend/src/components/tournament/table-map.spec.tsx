@@ -32,6 +32,10 @@ function session(clubeRole: ClubeRole) {
     status: 'authenticated',
     login: jest.fn(),
     logout: jest.fn(),
+    clubes: [],
+    currentClubeId: null,
+    switchClube: jest.fn(),
+    refreshClubes: jest.fn(),
   });
 }
 

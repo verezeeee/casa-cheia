@@ -83,6 +83,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
     (tournamentApi.registerEntry as jest.Mock).mockResolvedValue({});
@@ -105,6 +109,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
       ...TOURNAMENT,
@@ -132,6 +140,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
 
@@ -151,6 +163,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
       ...TOURNAMENT,
@@ -170,6 +186,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
     (tournamentApi.unregisterEntry as jest.Mock).mockResolvedValue({});
@@ -190,6 +210,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
       ...TOURNAMENT,
@@ -210,6 +234,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT_SEATED);
 
@@ -227,6 +255,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
 
@@ -246,6 +278,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
     (tournamentApi.eliminateEntry as jest.Mock).mockResolvedValue({});
@@ -276,6 +312,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
     (tournamentApi.unregisterEntryForUser as jest.Mock).mockResolvedValue({});
@@ -300,6 +340,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
       ...TOURNAMENT,
@@ -318,6 +362,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
 
@@ -343,6 +391,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
       ...TOURNAMENT,
@@ -367,6 +419,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT); // registeredPlayers: 1
 
@@ -383,6 +439,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
       ...TOURNAMENT,
@@ -403,6 +463,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
       ...TOURNAMENT,
@@ -465,6 +529,10 @@ describe('TournamentDetail', () => {
       status: 'authenticated',
       login: jest.fn(),
       logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
     });
     (tournamentApi.getTournament as jest.Mock).mockRejectedValue(new Error('falhou'));
 

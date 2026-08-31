@@ -22,4 +22,11 @@ export interface ClubeSummaryDto {
 
   /** Papel do usuário autenticado NESTE clube. */
   role: ClubeRole;
+
+  /**
+   * Código de ingresso (6 dígitos) — só presente quando `role === ADMIN`.
+   * É a credencial de convite do clube; um `PLAYER` olhando a própria lista
+   * de clubes nunca recebe o código de um clube que não administra.
+   */
+  joinCode?: string;
 }

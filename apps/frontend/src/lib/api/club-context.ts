@@ -1,13 +1,15 @@
 import type { ClubeSummaryDto } from '@poker-system/shared';
 import { httpClient } from '../http-client';
+import type { CreateClubeRequest, JoinClubeRequest } from './types';
 
 /**
- * Clube "atual" da sessão. MVP de clube único (mesmo padrão das fixtures de
- * teste do backend — ver `tournament-helpers.ts`): ainda não existe seletor
- * de clube na UI (CL-FE-01), então a sessão assume o primeiro clube retornado
- * por `GET /clubes`. Guardado em memória, no mesmo espírito do access token
- * (`http-client.ts`) — resolvido uma vez no boot da sessão/login
- * (`SessionProvider`) e limpo no logout.
+ * Clube "atual" da sessão. Guardado em memória, no mesmo espírito do access
+ * token (`http-client.ts`) — é o que todo `getCurrentClubeId()` (chamado de
+ * dentro dos módulos `wallet.ts`/`table.ts`/`tournament.ts`, fora de
+ * qualquer componente React) lê de forma síncrona. `SessionProvider` é quem
+ * decide o valor (via `resolveClubes`) e replica pro próprio estado React —
+ * ver docblock lá para a lógica de qual clube vira o "atual" quando o
+ * usuário pertence a mais de um.
  */
 let currentClubeId: string | null = null;
 
@@ -15,7 +17,7 @@ export function setCurrentClubeId(clubeId: string | null): void {
   currentClubeId = clubeId;
 }
 
-/** Lançado se chamado antes da sessão resolver o clube (ver `SessionProvider`). */
+/** Lançado se chamado antes da sessão resolver um clube (ver `SessionProvider`). */
 export function getCurrentClubeId(): string {
   if (!currentClubeId) {
     throw new Error('Nenhum clube ativo na sessão.');
@@ -23,8 +25,18 @@ export function getCurrentClubeId(): string {
   return currentClubeId;
 }
 
-export function listMyClubes(): Promise<ClubeSummaryDto[]> {
+function listMyClubes(): Promise<ClubeSummaryDto[]> {
   return httpClient.get<ClubeSummaryDto[]>('/clubes');
 }
 
-export const clubApi = { listMyClubes };
+/** Cria um clube; o chamador vira ADMIN dele na hora. */
+function createClube(input: CreateClubeRequest): Promise<ClubeSummaryDto> {
+  return httpClient.post<ClubeSummaryDto>('/clubes', input);
+}
+
+/** Entra num clube existente pelo código de 6 dígitos; ingresso imediato como PLAYER. */
+function joinClube(input: JoinClubeRequest): Promise<ClubeSummaryDto> {
+  return httpClient.post<ClubeSummaryDto>('/clubes/entrar', input);
+}
+
+export const clubApi = { listMyClubes, createClube, joinClube };
