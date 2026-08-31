@@ -261,6 +261,10 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const memberQuery = memberSearch.trim().toLowerCase();
   const memberCandidates = (members ?? []).filter((member) => {
     if (member.status !== ClubeMembershipStatus.ACTIVE) return false;
+    // Convidado sem cadastro (`TableService.sitGuestAtTable`) tem e-mail
+    // sintético e nunca loga — não faz sentido aparecer pra inscrever em
+    // torneio.
+    if (member.isGuest) return false;
     if (registeredUserIds.has(member.userId)) return false;
     if (!memberQuery) return false;
     return (

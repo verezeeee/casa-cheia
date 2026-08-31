@@ -1,12 +1,13 @@
 'use client';
 
-import type { TableSeatDto } from '@poker-system/shared';
-import { ClubeRole } from '@poker-system/shared';
+import type { ClubeMembershipDto, TableSeatDto } from '@poker-system/shared';
+import { ClubeMembershipStatus, ClubeRole, TableStatus } from '@poker-system/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import { useState, type CSSProperties, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
+import { clubMembersApi } from '@/lib/api/club';
 import { tableApi } from '@/lib/api/table';
 import {
   Button,
@@ -48,6 +49,16 @@ export function SeatGrid({ tableId }: { tableId: string }) {
   const [buyInAmount, setBuyInAmount] = useState('');
   const [adjustAmount, setAdjustAmount] = useState('');
   const [confirmingClose, setConfirmingClose] = useState(false);
+  const [seatMode, setSeatMode] = useState<'self' | 'member' | 'guest'>('self');
+  const [memberSearch, setMemberSearch] = useState('');
+  const [guestName, setGuestName] = useState('');
+  const [guestPhone, setGuestPhone] = useState('');
+
+  // Só ADMIN pode sentar outro membro/convidado — o backend também recusa
+  // (403) pra quem não é, mas a query nem dispara pros outros papéis (mesmo
+  // padrão de `tournament-detail.tsx`). Calculado ANTES dos `return`
+  // antecipados de loading/erro abaixo — hook não pode vir depois deles.
+  const isAdmin = clubeRole === ClubeRole.ADMIN;
 
   const {
     data: seats,
@@ -61,6 +72,22 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     refetchInterval: POLL_INTERVAL_MS,
   });
 
+  // Só pra saber o `status` da mesa (ex: esconder "Fechar mesa" numa mesa já
+  // fechada — `getSeats` não carrega isso, só a grade de assentos). Mesma
+  // `queryKey` prefix de `['tables', tableId, 'seats']`, então `invalidate()`
+  // já pega essa query também (invalidação por prefixo).
+  const { data: table } = useQuery({
+    queryKey: ['tables', tableId],
+    queryFn: () => tableApi.getTable(tableId),
+    refetchInterval: POLL_INTERVAL_MS,
+  });
+
+  const { data: members } = useQuery({
+    queryKey: ['clube', 'members'],
+    queryFn: () => clubMembersApi.listMembers(),
+    enabled: isAdmin,
+  });
+
   // Deriva do resultado ao vivo da query em vez de guardar uma cópia do
   // assento no estado: depois de um ajuste de stack, o diálogo mostra o
   // valor atualizado assim que o poll seguinte chega, sem sincronizar nada
@@ -71,12 +98,17 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     void queryClient.invalidateQueries({ queryKey: ['tables', tableId, 'seats'] });
     void queryClient.invalidateQueries({ queryKey: ['tables'] });
     void queryClient.invalidateQueries({ queryKey: ['wallet', 'balance'] });
+    void queryClient.invalidateQueries({ queryKey: ['clube', 'members'] });
   }
 
   function closeSeatDialog() {
     setSelectedSeatNumber(null);
     setBuyInAmount('');
     setAdjustAmount('');
+    setSeatMode('self');
+    setMemberSearch('');
+    setGuestName('');
+    setGuestPhone('');
   }
 
   const sitMutation = useMutation({
@@ -92,6 +124,43 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     },
   });
 
+  const sitForUserMutation = useMutation({
+    mutationFn: (userId: string) =>
+      tableApi.sitAtTableForUser(
+        tableId,
+        userId,
+        { seatNumber: dialogSeat!.seatNumber, buyInAmount },
+        crypto.randomUUID(),
+      ),
+    onSuccess: () => {
+      setError(null);
+      closeSeatDialog();
+      invalidate();
+    },
+    onError: (caught: unknown) => {
+      setError(caught instanceof ApiError ? caught.message : 'Não foi possível sentar o jogador.');
+    },
+  });
+
+  const sitGuestMutation = useMutation({
+    mutationFn: () =>
+      tableApi.sitGuestAtTable(
+        tableId,
+        { seatNumber: dialogSeat!.seatNumber, buyInAmount, name: guestName, phone: guestPhone },
+        crypto.randomUUID(),
+      ),
+    onSuccess: () => {
+      setError(null);
+      closeSeatDialog();
+      invalidate();
+    },
+    onError: (caught: unknown) => {
+      setError(
+        caught instanceof ApiError ? caught.message : 'Não foi possível sentar o convidado.',
+      );
+    },
+  });
+
   const cashOutMutation = useMutation({
     mutationFn: (sessionId: string) => tableApi.cashOut(tableId, sessionId, crypto.randomUUID()),
     onSuccess: () => {
@@ -101,6 +170,19 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     },
     onError: (caught: unknown) => {
       setError(caught instanceof ApiError ? caught.message : 'Não foi possível fazer cash-out.');
+    },
+  });
+
+  const adminCashOutMutation = useMutation({
+    mutationFn: (sessionId: string) =>
+      tableApi.cashOutAsAdmin(tableId, sessionId, crypto.randomUUID()),
+    onSuccess: () => {
+      setError(null);
+      closeSeatDialog();
+      invalidate();
+    },
+    onError: (caught: unknown) => {
+      setError(caught instanceof ApiError ? caught.message : 'Não foi possível fazer o cash-out.');
     },
   });
 
@@ -142,6 +224,11 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     if (dialogSeat?.sessionId) adjustMutation.mutate(dialogSeat.sessionId);
   }
 
+  function handleGuestSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    sitGuestMutation.mutate();
+  }
+
   if (isLoading) {
     return (
       <div className="flex flex-col gap-2">
@@ -155,13 +242,31 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     return <ErrorState description="Não foi possível carregar os assentos." />;
   }
 
-  const isAdmin = clubeRole === ClubeRole.ADMIN;
+  // Convidados nunca podem ser sentados de novo por busca (não têm CPF/e-mail
+  // reais pra procurar) e quem já está sentado NESTA mesa some da lista —
+  // mesmo filtro de `tournament-detail.tsx` (`registeredUserIds`), adaptado
+  // pra "sentado nesta mesa" em vez de "inscrito no torneio".
+  const seatedUserIds = new Set(
+    seats.map((s) => s.userId).filter((id): id is string => id !== null),
+  );
+  const memberQuery = memberSearch.trim().toLowerCase();
+  const memberCandidates = (members ?? []).filter((member: ClubeMembershipDto) => {
+    if (member.status !== ClubeMembershipStatus.ACTIVE) return false;
+    if (member.isGuest) return false;
+    if (seatedUserIds.has(member.userId)) return false;
+    if (!memberQuery) return false;
+    return (
+      member.name.toLowerCase().includes(memberQuery) ||
+      member.email.toLowerCase().includes(memberQuery) ||
+      (member.document?.includes(memberQuery) ?? false)
+    );
+  });
 
   return (
     <div className="flex flex-col gap-4">
       {error && <Toast type="error" message={error} />}
 
-      {isAdmin && (
+      {isAdmin && table && table.status !== TableStatus.CLOSED && (
         <>
           <Button
             size="sm"
@@ -222,10 +327,27 @@ export function SeatGrid({ tableId }: { tableId: string }) {
             sitting={sitMutation.isPending}
             onCashOut={() => dialogSeat.sessionId && cashOutMutation.mutate(dialogSeat.sessionId)}
             cashingOut={cashOutMutation.isPending}
+            onAdminCashOut={() =>
+              dialogSeat.sessionId && adminCashOutMutation.mutate(dialogSeat.sessionId)
+            }
+            adminCashingOut={adminCashOutMutation.isPending}
             adjustAmount={adjustAmount}
             onAdjustAmountChange={setAdjustAmount}
             onSubmitAdjust={handleAdjustSubmit}
             adjusting={adjustMutation.isPending}
+            seatMode={seatMode}
+            onSeatModeChange={setSeatMode}
+            memberSearch={memberSearch}
+            onMemberSearchChange={setMemberSearch}
+            memberCandidates={memberCandidates}
+            onSitForUser={(userId) => sitForUserMutation.mutate(userId)}
+            sittingForUser={sitForUserMutation.isPending}
+            guestName={guestName}
+            onGuestNameChange={setGuestName}
+            guestPhone={guestPhone}
+            onGuestPhoneChange={setGuestPhone}
+            onSubmitGuest={handleGuestSubmit}
+            sittingGuest={sitGuestMutation.isPending}
           />
         )}
       </Dialog>
@@ -297,6 +419,14 @@ function SeatChip({ seat, isMine, onSelect, style, index }: SeatChipProps) {
   );
 }
 
+type SeatMode = 'self' | 'member' | 'guest';
+
+const SEAT_MODE_LABEL: Record<SeatMode, string> = {
+  self: 'Eu',
+  member: 'Membro do clube',
+  guest: 'Sem cadastro',
+};
+
 interface SeatDialogBodyProps {
   seat: TableSeatDto;
   isMine: boolean;
@@ -307,10 +437,25 @@ interface SeatDialogBodyProps {
   sitting: boolean;
   onCashOut: () => void;
   cashingOut: boolean;
+  onAdminCashOut: () => void;
+  adminCashingOut: boolean;
   adjustAmount: string;
   onAdjustAmountChange: (value: string) => void;
   onSubmitAdjust: (event: FormEvent<HTMLFormElement>) => void;
   adjusting: boolean;
+  seatMode: SeatMode;
+  onSeatModeChange: (mode: SeatMode) => void;
+  memberSearch: string;
+  onMemberSearchChange: (value: string) => void;
+  memberCandidates: ClubeMembershipDto[];
+  onSitForUser: (userId: string) => void;
+  sittingForUser: boolean;
+  guestName: string;
+  onGuestNameChange: (value: string) => void;
+  guestPhone: string;
+  onGuestPhoneChange: (value: string) => void;
+  onSubmitGuest: (event: FormEvent<HTMLFormElement>) => void;
+  sittingGuest: boolean;
 }
 
 function SeatDialogBody({
@@ -323,27 +468,152 @@ function SeatDialogBody({
   sitting,
   onCashOut,
   cashingOut,
+  onAdminCashOut,
+  adminCashingOut,
   adjustAmount,
   onAdjustAmountChange,
   onSubmitAdjust,
   adjusting,
+  seatMode,
+  onSeatModeChange,
+  memberSearch,
+  onMemberSearchChange,
+  memberCandidates,
+  onSitForUser,
+  sittingForUser,
+  guestName,
+  onGuestNameChange,
+  guestPhone,
+  onGuestPhoneChange,
+  onSubmitGuest,
+  sittingGuest,
 }: SeatDialogBodyProps) {
   const vacant = seat.userId === null;
 
   if (vacant) {
+    // Não-admin nunca vê o seletor — só pode sentar a si mesmo, exatamente
+    // como antes desta feature.
+    if (!isAdmin) {
+      return (
+        <form onSubmit={onSubmitSit} className="flex flex-col gap-3">
+          <Input
+            inputMode="decimal"
+            placeholder="Valor do buy-in"
+            required
+            value={buyInAmount}
+            onChange={(e) => onBuyInAmountChange(e.target.value)}
+          />
+          <Button type="submit" loading={sitting} fullWidth>
+            Confirmar
+          </Button>
+        </form>
+      );
+    }
+
     return (
-      <form onSubmit={onSubmitSit} className="flex flex-col gap-3">
-        <Input
-          inputMode="decimal"
-          placeholder="Valor do buy-in"
-          required
-          value={buyInAmount}
-          onChange={(e) => onBuyInAmountChange(e.target.value)}
-        />
-        <Button type="submit" loading={sitting} fullWidth>
-          Confirmar
-        </Button>
-      </form>
+      <div className="flex flex-col gap-3">
+        {/* Mesmo idioma visual do seletor de 3 modos de `app/register/page.tsx`. */}
+        <div className="flex flex-wrap gap-2">
+          {(Object.keys(SEAT_MODE_LABEL) as SeatMode[]).map((mode) => (
+            <Button
+              key={mode}
+              type="button"
+              size="sm"
+              variant={seatMode === mode ? 'secondary' : 'ghost'}
+              onClick={() => onSeatModeChange(mode)}
+            >
+              {SEAT_MODE_LABEL[mode]}
+            </Button>
+          ))}
+        </div>
+
+        {seatMode === 'self' && (
+          <form onSubmit={onSubmitSit} className="flex flex-col gap-3">
+            <Input
+              inputMode="decimal"
+              placeholder="Valor do buy-in"
+              required
+              value={buyInAmount}
+              onChange={(e) => onBuyInAmountChange(e.target.value)}
+            />
+            <Button type="submit" loading={sitting} fullWidth>
+              Confirmar
+            </Button>
+          </form>
+        )}
+
+        {seatMode === 'member' && (
+          <div className="flex flex-col gap-3">
+            <Input
+              inputMode="decimal"
+              placeholder="Valor do buy-in"
+              required
+              value={buyInAmount}
+              onChange={(e) => onBuyInAmountChange(e.target.value)}
+            />
+            <Input
+              placeholder="Nome, e-mail ou CPF"
+              value={memberSearch}
+              onChange={(e) => onMemberSearchChange(e.target.value)}
+            />
+            {memberSearch.trim() && (
+              <ul className="flex flex-col gap-2 divide-y divide-border">
+                {memberCandidates.length === 0 ? (
+                  <li className="pt-2 text-sm text-muted">Nenhum membro encontrado.</li>
+                ) : (
+                  memberCandidates.map((member) => (
+                    <li
+                      key={member.userId}
+                      className="flex items-center justify-between gap-2 pt-2 first:pt-0"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{member.name}</p>
+                        <p className="truncate text-xs text-muted">{member.email}</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        disabled={!buyInAmount}
+                        loading={sittingForUser}
+                        onClick={() => onSitForUser(member.userId)}
+                      >
+                        Sentar
+                      </Button>
+                    </li>
+                  ))
+                )}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {seatMode === 'guest' && (
+          <form onSubmit={onSubmitGuest} className="flex flex-col gap-3">
+            <Input
+              placeholder="Nome do jogador"
+              required
+              value={guestName}
+              onChange={(e) => onGuestNameChange(e.target.value)}
+            />
+            <Input
+              inputMode="numeric"
+              placeholder="Telefone (DDD + número)"
+              required
+              value={guestPhone}
+              onChange={(e) => onGuestPhoneChange(e.target.value.replace(/\D/g, ''))}
+            />
+            <Input
+              inputMode="decimal"
+              placeholder="Valor do buy-in"
+              required
+              value={buyInAmount}
+              onChange={(e) => onBuyInAmountChange(e.target.value)}
+            />
+            <Button type="submit" loading={sittingGuest} fullWidth>
+              Confirmar
+            </Button>
+          </form>
+        )}
+      </div>
     );
   }
 
@@ -364,19 +634,30 @@ function SeatDialogBody({
       )}
 
       {isAdmin && !isMine && (
-        <form onSubmit={onSubmitAdjust} className="flex flex-col gap-2 border-t border-border pt-3">
-          <p className="text-sm font-medium text-foreground">Ajustar stack (resultado de mão)</p>
-          <Input
-            inputMode="decimal"
-            placeholder="+25.00 ou -25.00"
-            required
-            value={adjustAmount}
-            onChange={(e) => onAdjustAmountChange(e.target.value)}
-          />
-          <Button type="submit" size="sm" loading={adjusting}>
-            Aplicar
+        <>
+          {/* Necessário pra jogador sem cadastro: ele nunca loga, então nunca
+              teria como fazer o próprio cash-out — sem isso ficaria travado
+              no assento até a mesa fechar inteira. */}
+          <Button variant="secondary" loading={adminCashingOut} onClick={onAdminCashOut} fullWidth>
+            Cash-out (admin)
           </Button>
-        </form>
+          <form
+            onSubmit={onSubmitAdjust}
+            className="flex flex-col gap-2 border-t border-border pt-3"
+          >
+            <p className="text-sm font-medium text-foreground">Ajustar stack (resultado de mão)</p>
+            <Input
+              inputMode="decimal"
+              placeholder="+25.00 ou -25.00"
+              required
+              value={adjustAmount}
+              onChange={(e) => onAdjustAmountChange(e.target.value)}
+            />
+            <Button type="submit" size="sm" loading={adjusting}>
+              Aplicar
+            </Button>
+          </form>
+        </>
       )}
     </div>
   );

@@ -10,14 +10,30 @@ import type {
   TableSeatDto,
   TableSummaryDto,
 } from '@poker-system/shared';
+import { randomBytes } from 'node:crypto';
 import { Prisma } from '../generated/prisma';
+import { mapUniqueConstraintError, normalizeEmail } from '../auth/auth.service';
 import { decodeCursor, encodeCursor } from '../common/pagination/cursor';
+import { PasswordHasherService } from '../common/crypto/password-hasher.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WalletService } from '../wallet/wallet.service';
 import type { CreateTableDto } from './dto/create-table.dto';
 import type { RecordMovementDto } from './dto/record-movement.dto';
 import type { SitAtTableDto } from './dto/sit-at-table.dto';
+import type { SitGuestAtTableDto } from './dto/sit-guest-at-table.dto';
 import { toSeatDto, toTableSeats, toTableSummaryDto } from './table.mappers';
+
+/** Senha descartável do convidado: nunca loga, só precisa satisfazer o hash. Mesmo formato de `ClubService.generateTemporaryPassword`. */
+function generateThrowawayPassword(): string {
+  return randomBytes(9).toString('base64url');
+}
+
+/** E-mail sintético do convidado — só existe pra satisfazer `User.email @unique`; nunca é entregável nem exibido como contato real. */
+function generateGuestEmail(): string {
+  return normalizeEmail(
+    `convidado+${randomBytes(12).toString('hex')}@guests.invalid`,
+  );
+}
 
 const DEFAULT_PAGE_SIZE = 20;
 const EMPTY_SEAT = (seatNumber: number): TableSeatDto => ({
@@ -33,6 +49,7 @@ export class TableService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
+    private readonly passwordHasher: PasswordHasherService,
   ) {}
 
   /** `Table` é model escopado por `withClube` — `clubeId` é carimbado no `data` automaticamente. */
@@ -105,6 +122,21 @@ export class TableService {
       items: page.map(toTableSummaryDto),
       nextCursor: hasMore && last ? encodeCursor(last) : null,
     };
+  }
+
+  /** Mesma forma de `listTables`, mas pra uma única mesa — usada pela tela de detalhes pra saber o `status` atual (ex: esconder "Fechar mesa" se já fechada). */
+  async getTable(clubeId: string, tableId: string): Promise<TableSummaryDto> {
+    const table = await this.prisma.table.findUnique({
+      where: { id: tableId },
+      include: {
+        _count: { select: { sessions: { where: { status: 'ACTIVE' } } } },
+      },
+    });
+    if (!table || table.clubeId !== clubeId) {
+      throw new NotFoundException('Mesa não encontrada.');
+    }
+
+    return toTableSummaryDto(table);
   }
 
   async getSeats(clubeId: string, tableId: string): Promise<TableSeatDto[]> {
@@ -238,6 +270,210 @@ export class TableService {
   }
 
   /**
+   * ADMIN sentando outro membro do clube (já cadastrado) — mesma regra de
+   * negócio e mesmo `sitAtTable`, só muda de qual carteira sai o buy-in
+   * (`userId` da rota, não `user.id` do token). Diferente do torneio
+   * (`TournamentService.registerEntry`), aqui confere explicitamente que o
+   * alvo tem vínculo `ACTIVE` neste clube ANTES de tocar a wallet dele —
+   * sem isso, um `userId` de outro clube ou já `REVOKED` só falharia (ou
+   * não) por acidente, dependendo de existir ou não uma `Wallet` sua aqui.
+   */
+  async sitAtTableForUser(
+    clubeId: string,
+    tableId: string,
+    userId: string,
+    dto: SitAtTableDto,
+    idempotencyKey: string,
+  ): Promise<TableSeatDto> {
+    await this.assertActiveMember(clubeId, userId);
+    return this.sitAtTable(userId, clubeId, tableId, dto, idempotencyKey);
+  }
+
+  /**
+   * ADMIN sentando um jogador SEM CADASTRO (walk-in) — só nome e telefone.
+   * Cria uma conta `User` mínima (e-mail sintético, `isGuest: true`) +
+   * `ClubeMembership` (`PLAYER`/`ACTIVE`) + `Wallet` (nasce zerada) e senta
+   * na mesma transação do buy-in — se qualquer passo falhar (ex.: assento
+   * já ocupado), NADA commita, então não sobra convidado órfão sem assento.
+   *
+   * DINHEIRO: o convidado nunca fez PIX, a wallet dele nasce zerada. O
+   * dinheiro físico entregue no balcão entra como um `ADJUSTMENT` explícito
+   * (crédito, `createdById: adminId`) imediatamente antes do débito
+   * `TABLE_BUY_IN` de sempre — dois lançamentos que se cancelam, mas deixam
+   * rastro de auditoria honesto ("entrada em espécie, lançada por este
+   * admin") e funcionam independente de `wallet.paymentsEnabled`. Não usar
+   * o fallback de "saldo insuficiente" do `WalletService.applyLedgerEntry`
+   * pra isso: aquele mecanismo é rotulado como dinheiro de TESTE (só existe
+   * enquanto o PIX está em standby) — usá-lo pra dinheiro real de um cliente
+   * quebraria silenciosamente no dia em que o PIX for religado.
+   */
+  async sitGuestAtTable(
+    adminId: string,
+    clubeId: string,
+    tableId: string,
+    dto: SitGuestAtTableDto,
+    idempotencyKey: string,
+  ): Promise<TableSeatDto> {
+    const table = await this.prisma.table.findUnique({
+      where: { id: tableId },
+    });
+    if (!table || table.clubeId !== clubeId) {
+      throw new NotFoundException('Mesa não encontrada.');
+    }
+    if (table.status !== 'OPEN') {
+      throw new BadRequestException(
+        'Mesa não está aberta para novos jogadores.',
+      );
+    }
+    if (dto.seatNumber > table.maxSeats) {
+      throw new BadRequestException(`Mesa só tem ${table.maxSeats} assentos.`);
+    }
+
+    const buyIn = new Prisma.Decimal(dto.buyInAmount);
+    if (buyIn.lessThan(table.minBuyIn) || buyIn.greaterThan(table.maxBuyIn)) {
+      throw new BadRequestException(
+        `Buy-in deve estar entre ${table.minBuyIn.toFixed(2)} e ${table.maxBuyIn.toFixed(2)}.`,
+      );
+    }
+
+    const ledgerKey = `buyin:${idempotencyKey}`;
+    const existingTxn = await this.prisma.walletTransaction.findUnique({
+      where: { idempotencyKey: ledgerKey },
+    });
+    if (existingTxn?.tableSessionId) {
+      const existingSession = await this.prisma.tableSession.findUnique({
+        where: { id: existingTxn.tableSessionId },
+        include: { user: { select: { id: true, name: true } } },
+      });
+      if (existingSession && existingSession.clubeId === clubeId) {
+        return toSeatDto(existingSession);
+      }
+    }
+
+    // Hash calculado ANTES da transação — não segurar a transação aberta
+    // durante um `await` de argon2id (mesmo cuidado de
+    // `ClubService.createMemberWithNewUser`).
+    const passwordHash = await this.passwordHasher.hash(
+      generateThrowawayPassword(),
+    );
+
+    try {
+      const session = await this.prisma.withClube(clubeId, async (tx) => {
+        const guest = await tx.user.create({
+          data: {
+            email: generateGuestEmail(),
+            passwordHash,
+            name: dto.name,
+            phone: dto.phone,
+            isGuest: true,
+          },
+        });
+
+        await tx.clubeMembership.create({
+          data: {
+            clubeId,
+            userId: guest.id,
+            role: 'PLAYER',
+            status: 'ACTIVE',
+          },
+        });
+
+        const wallet = await tx.wallet.create({
+          data: { userId: guest.id, clubeId },
+        });
+
+        // Entrada em espécie — crédito explícito, ver docblock do método.
+        await this.walletService.applyLedgerEntry(tx, wallet.id, {
+          type: 'ADJUSTMENT',
+          amount: buyIn,
+          idempotencyKey: `guest-cash-in:${idempotencyKey}`,
+          description: 'Entrada em dinheiro — jogador sem cadastro',
+          createdById: adminId,
+        });
+
+        const created = await tx.tableSession.create({
+          data: {
+            clubeId,
+            tableId,
+            userId: guest.id,
+            seatNumber: dto.seatNumber,
+            status: 'ACTIVE',
+            currentStack: 0,
+            totalBuyIn: 0,
+          },
+        });
+
+        const walletTxn = await this.walletService.applyLedgerEntry(
+          tx,
+          wallet.id,
+          {
+            type: 'TABLE_BUY_IN',
+            amount: buyIn.negated(),
+            idempotencyKey: ledgerKey,
+            description: 'Buy-in em mesa',
+            tableSessionId: created.id,
+          },
+        );
+
+        await tx.stackMovement.create({
+          data: {
+            tableSessionId: created.id,
+            amount: buyIn,
+            reason: 'BUY_IN',
+            stackAfter: buyIn,
+            walletTransactionId: walletTxn.id,
+            createdById: adminId,
+          },
+        });
+
+        return tx.tableSession.update({
+          where: { id: created.id },
+          data: {
+            currentStack: buyIn,
+            totalBuyIn: buyIn,
+            version: { increment: 1 },
+          },
+          include: { user: { select: { id: true, name: true } } },
+        });
+      });
+
+      return toSeatDto(session);
+    } catch (error) {
+      // P2002 de `users.email` (colisão do e-mail sintético — praticamente
+      // impossível, 24 chars hex aleatórios) tem mensagem específica;
+      // qualquer outro P2002 aqui só pode ser o índice único parcial de
+      // assento/usuário ativo (mesma checagem de `sitAtTable`).
+      const mapped = mapUniqueConstraintError(error);
+      if (mapped !== error) {
+        throw mapped;
+      }
+      if (isUniqueConstraintError(error)) {
+        throw new ConflictException(
+          'Assento já ocupado ou você já está sentado nesta mesa.',
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Confere que `userId` tem vínculo `ACTIVE` neste clube — ver docblock de
+   * `sitAtTableForUser`.
+   */
+  private async assertActiveMember(
+    clubeId: string,
+    userId: string,
+  ): Promise<void> {
+    const membership = await this.prisma.clubeMembership.findUnique({
+      where: { clubeId_userId: { clubeId, userId } },
+      select: { status: true },
+    });
+    if (!membership || membership.status !== 'ACTIVE') {
+      throw new NotFoundException('Membro não encontrado neste clube.');
+    }
+  }
+
+  /**
    * Cash-out do stack inteiro. Lock otimista via `version` (re-lê a sessão
    * DENTRO da transação — o valor lido antes de abrir a transação poderia
    * estar desatualizado se um `recordMovement` concorrente mudou o stack).
@@ -263,12 +499,37 @@ export class TableService {
     );
   }
 
+  /**
+   * ADMIN fazendo cash-out da sessão de OUTRO jogador — necessário porque um
+   * convidado (`sitGuestAtTable`) nunca loga e nunca poderia chamar o
+   * `cashOut` self-only; sem isso, ficaria travado no assento até a mesa
+   * fechar inteira. Também útil pra qualquer jogador que peça ao staff pra
+   * encerrar por ele. `createdById` fica registrado no `StackMovement` —
+   * mesmo padrão de `recordMovement` (actor ≠ subject).
+   */
+  async cashOutAsAdmin(
+    adminId: string,
+    clubeId: string,
+    tableId: string,
+    sessionId: string,
+    idempotencyKey: string,
+  ): Promise<TableSeatDto> {
+    return this.doCashOut(
+      clubeId,
+      tableId,
+      sessionId,
+      `admin-cashout:${idempotencyKey}`,
+      adminId,
+    );
+  }
+
   /** Núcleo do cash-out, sem checagem de dono — reaproveitado pelo fechamento de mesa pelo admin. */
   private async doCashOut(
     clubeId: string,
     tableId: string,
     sessionId: string,
     ledgerKey: string,
+    createdById?: string,
   ): Promise<TableSeatDto> {
     const existingTxn = await this.prisma.walletTransaction.findUnique({
       where: { idempotencyKey: ledgerKey },
@@ -326,6 +587,7 @@ export class TableService {
               reason: 'CASH_OUT',
               stackAfter: new Prisma.Decimal(0),
               walletTransactionId: walletTxn.id,
+              createdById,
             },
           });
 

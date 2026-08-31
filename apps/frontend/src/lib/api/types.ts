@@ -48,10 +48,19 @@ export interface CreateTableRequest {
   rakePercent?: string;
 }
 
-/** Corpo de `POST /tables/:id/sit`. */
+/** Corpo de `POST /tables/:id/sit` e `.../sit/:userId` (ADMIN, sentando outro membro). */
 export interface SitAtTableRequest {
   seatNumber: number;
   buyInAmount: string;
+}
+
+/** Corpo de `POST /tables/:id/sit-guest` (ADMIN). Jogador sem cadastro — só nome e telefone. */
+export interface SitGuestAtTableRequest {
+  seatNumber: number;
+  buyInAmount: string;
+  name: string;
+  /** Somente dígitos, DDD + número (10 ou 11 dígitos). */
+  phone: string;
 }
 
 /** Corpo de `POST /tables/:id/sessions/:sessionId/movements` (ADMIN). */

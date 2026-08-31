@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../generated/prisma';
+import type { PasswordHasherService } from '../common/crypto/password-hasher.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { WalletService } from '../wallet/wallet.service';
 import { TableService } from './table.service';
@@ -39,6 +40,9 @@ function buildPrisma() {
       updateMany: jest.fn(),
     },
     stackMovement: { create: jest.fn() },
+    user: { create: jest.fn() },
+    clubeMembership: { create: jest.fn() },
+    wallet: { create: jest.fn() },
   };
 
   return {
@@ -57,6 +61,7 @@ function buildPrisma() {
     stackMovement: { create: jest.fn() },
     wallet: { findUniqueOrThrow: jest.fn() },
     walletTransaction: { findUnique: jest.fn() },
+    clubeMembership: { findUnique: jest.fn() },
     withClube: jest.fn((_clubeId: string, cb: (t: typeof tx) => unknown) =>
       cb(tx),
     ),
@@ -67,13 +72,15 @@ function buildService(overrides?: { prisma?: ReturnType<typeof buildPrisma> }) {
   const prisma = overrides?.prisma ?? buildPrisma();
 
   const walletService = { applyLedgerEntry: jest.fn() };
+  const passwordHasher = { hash: jest.fn().mockResolvedValue('hashed') };
 
   const service = new TableService(
     prisma as unknown as PrismaService,
     walletService as unknown as WalletService,
+    passwordHasher as unknown as PasswordHasherService,
   );
 
-  return { service, prisma, walletService };
+  return { service, prisma, walletService, passwordHasher };
 }
 
 describe('TableService', () => {
@@ -113,6 +120,40 @@ describe('TableService', () => {
       );
       expect(result.occupiedSeats).toBe(0);
       expect(result.maxSeats).toBe(6);
+    });
+  });
+
+  describe('getTable', () => {
+    it('lança 404 se a mesa não existe', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue(null);
+      await expect(
+        service.getTable(CLUBE_ID, 'inexistente'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('lança 404 se a mesa é de outro clube', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        clubeId: 'outro-clube',
+      });
+      await expect(
+        service.getTable(CLUBE_ID, 'table-1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('retorna o status atual da mesa (ex: CLOSED, pra tela de detalhes esconder "Fechar mesa")', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        status: 'CLOSED',
+        _count: { sessions: 0 },
+      });
+
+      const result = await service.getTable(CLUBE_ID, 'table-1');
+
+      expect(result.status).toBe('CLOSED');
     });
   });
 
@@ -434,6 +475,240 @@ describe('TableService', () => {
       expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
       expect(prisma.table.update).not.toHaveBeenCalled();
       expect(result.status).toBe('CLOSED');
+    });
+  });
+
+  describe('sitAtTableForUser', () => {
+    it('rejeita usuário sem vínculo ACTIVE neste clube (404), sem tocar a wallet', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.clubeMembership.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.sitAtTableForUser(
+          CLUBE_ID,
+          'table-1',
+          'outro-usuario',
+          { seatNumber: 1, buyInAmount: '50.00' },
+          'idem-1',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.wallet.findUniqueOrThrow).not.toHaveBeenCalled();
+      expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
+    });
+
+    it('rejeita vínculo REVOKED neste clube (404)', async () => {
+      const { service, prisma } = buildService();
+      prisma.clubeMembership.findUnique.mockResolvedValue({
+        status: 'REVOKED',
+      });
+
+      await expect(
+        service.sitAtTableForUser(
+          CLUBE_ID,
+          'table-1',
+          'ex-membro',
+          { seatNumber: 1, buyInAmount: '50.00' },
+          'idem-1',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('membro ACTIVE: delega pro mesmo sitAtTable, debitando a wallet DELE', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.clubeMembership.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+      });
+      prisma.table.findUnique.mockResolvedValue(TABLE);
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.tx.tableSession.create.mockResolvedValue({ id: 'session-1' });
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-1' });
+      prisma.tx.tableSession.update.mockResolvedValue({
+        seatNumber: 1,
+        currentStack: new Prisma.Decimal('50.00'),
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+
+      const seat = await service.sitAtTableForUser(
+        CLUBE_ID,
+        'table-1',
+        'user-1',
+        { seatNumber: 1, buyInAmount: '50.00' },
+        'idem-1',
+      );
+
+      expect(prisma.clubeMembership.findUnique).toHaveBeenCalledWith({
+        where: { clubeId_userId: { clubeId: CLUBE_ID, userId: 'user-1' } },
+        select: { status: true },
+      });
+      expect(prisma.wallet.findUniqueOrThrow).toHaveBeenCalledWith({
+        where: { userId_clubeId: { userId: 'user-1', clubeId: CLUBE_ID } },
+      });
+      expect(seat).toMatchObject({ userId: 'user-1', currentStack: '50.00' });
+    });
+  });
+
+  describe('sitGuestAtTable', () => {
+    const GUEST_DTO = {
+      seatNumber: 1,
+      buyInAmount: '50.00',
+      name: 'Convidado da Silva',
+      phone: '11999998888',
+    };
+
+    it('cria User/Membership/Wallet do convidado, credita ADJUSTMENT e debita TABLE_BUY_IN', async () => {
+      const { service, prisma, walletService, passwordHasher } = buildService();
+      prisma.table.findUnique.mockResolvedValue(TABLE);
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.tx.user.create.mockResolvedValue({ id: 'guest-1' });
+      prisma.tx.wallet.create.mockResolvedValue({ id: 'wallet-guest-1' });
+      prisma.tx.tableSession.create.mockResolvedValue({ id: 'session-1' });
+      walletService.applyLedgerEntry
+        .mockResolvedValueOnce({ id: 'wtxn-adjustment' }) // crédito em espécie
+        .mockResolvedValueOnce({ id: 'wtxn-buyin' }); // débito do buy-in
+      prisma.tx.tableSession.update.mockResolvedValue({
+        seatNumber: 1,
+        currentStack: new Prisma.Decimal('50.00'),
+        user: { id: 'guest-1', name: 'Convidado da Silva' },
+      });
+
+      const seat = await service.sitGuestAtTable(
+        'admin-1',
+        CLUBE_ID,
+        'table-1',
+        GUEST_DTO,
+        'idem-guest-1',
+      );
+
+      expect(passwordHasher.hash).toHaveBeenCalled();
+      expect(prisma.tx.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            name: 'Convidado da Silva',
+            phone: '11999998888',
+            isGuest: true,
+          }),
+        }),
+      );
+      expect(prisma.tx.clubeMembership.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            clubeId: CLUBE_ID,
+            userId: 'guest-1',
+            role: 'PLAYER',
+            status: 'ACTIVE',
+          }),
+        }),
+      );
+      expect(walletService.applyLedgerEntry).toHaveBeenNthCalledWith(
+        1,
+        prisma.tx,
+        'wallet-guest-1',
+        expect.objectContaining({ type: 'ADJUSTMENT', createdById: 'admin-1' }),
+      );
+      expect(walletService.applyLedgerEntry).toHaveBeenNthCalledWith(
+        2,
+        prisma.tx,
+        'wallet-guest-1',
+        expect.objectContaining({
+          type: 'TABLE_BUY_IN',
+          tableSessionId: 'session-1',
+        }),
+      );
+      expect(prisma.tx.stackMovement.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            reason: 'BUY_IN',
+            walletTransactionId: 'wtxn-buyin',
+            createdById: 'admin-1',
+          }),
+        }),
+      );
+      expect(seat).toMatchObject({ userId: 'guest-1', currentStack: '50.00' });
+    });
+
+    it('replay pela mesma idempotency key não cria um segundo convidado', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue(TABLE);
+      prisma.walletTransaction.findUnique.mockResolvedValue({
+        tableSessionId: 'session-1',
+      });
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        clubeId: CLUBE_ID,
+        seatNumber: 1,
+        currentStack: new Prisma.Decimal('50.00'),
+        user: { id: 'guest-1', name: 'Convidado da Silva' },
+      });
+
+      const seat = await service.sitGuestAtTable(
+        'admin-1',
+        CLUBE_ID,
+        'table-1',
+        GUEST_DTO,
+        'idem-guest-1',
+      );
+
+      expect(prisma.tx.user.create).not.toHaveBeenCalled();
+      expect(seat).toMatchObject({ userId: 'guest-1' });
+    });
+
+    it('assento já ocupado (P2002) não deixa convidado órfão — nada commita', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue(TABLE);
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      (prisma.withClube as jest.Mock).mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('duplicate', {
+          code: 'P2002',
+          clientVersion: '6.19.3',
+        }),
+      );
+
+      await expect(
+        service.sitGuestAtTable(
+          'admin-1',
+          CLUBE_ID,
+          'table-1',
+          GUEST_DTO,
+          'idem-guest-2',
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+  });
+
+  describe('cashOutAsAdmin', () => {
+    it('faz cash-out da sessão de OUTRO usuário sem checar dono, registrando createdById', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        clubeId: CLUBE_ID,
+        userId: 'guest-1',
+        status: 'ACTIVE',
+        seatNumber: 3,
+        currentStack: new Prisma.Decimal('80.00'),
+        version: 0,
+        user: { id: 'guest-1', name: 'Convidado' },
+      });
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-4' });
+      prisma.tx.tableSession.updateMany.mockResolvedValue({ count: 1 });
+
+      const seat = await service.cashOutAsAdmin(
+        'admin-1',
+        CLUBE_ID,
+        'table-1',
+        'session-1',
+        'idem-3',
+      );
+
+      expect(prisma.tx.stackMovement.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ createdById: 'admin-1' }),
+        }),
+      );
+      expect(seat.sessionId).toBeNull();
     });
   });
 
