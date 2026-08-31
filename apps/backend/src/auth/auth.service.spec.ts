@@ -15,6 +15,7 @@ const USER: User = {
   name: 'Jogador',
   document: null,
   phone: null,
+  isGuest: false,
   isActive: true,
   emailVerifiedAt: null,
   createdAt: NOW,

@@ -1,17 +1,27 @@
 import type { PaginatedResponse, TableSeatDto, TableSummaryDto } from '@poker-system/shared';
 import { httpClient } from '../http-client';
 import { getCurrentClubeId } from './club-context';
-import type { CreateTableRequest, RecordMovementRequest, SitAtTableRequest } from './types';
+import type {
+  CreateTableRequest,
+  RecordMovementRequest,
+  SitAtTableRequest,
+  SitGuestAtTableRequest,
+} from './types';
 
 function base(): string {
   return `/clubes/${getCurrentClubeId()}/mesas`;
 }
 
 const TABLE_PATHS = {
+  detail: (tableId: string) => `${base()}/${tableId}`,
   seats: (tableId: string) => `${base()}/${tableId}/seats`,
   sit: (tableId: string) => `${base()}/${tableId}/sit`,
+  sitForUser: (tableId: string, userId: string) => `${base()}/${tableId}/sit/${userId}`,
+  sitGuest: (tableId: string) => `${base()}/${tableId}/sit-guest`,
   cashOut: (tableId: string, sessionId: string) =>
     `${base()}/${tableId}/sessions/${sessionId}/cash-out`,
+  adminCashOut: (tableId: string, sessionId: string) =>
+    `${base()}/${tableId}/sessions/${sessionId}/admin-cash-out`,
   movements: (tableId: string, sessionId: string) =>
     `${base()}/${tableId}/sessions/${sessionId}/movements`,
   close: (tableId: string) => `${base()}/${tableId}/close`,
@@ -25,6 +35,10 @@ export function listTables(cursor?: string): Promise<PaginatedResponse<TableSumm
 /** ADMIN. */
 export function createTable(input: CreateTableRequest): Promise<TableSummaryDto> {
   return httpClient.post<TableSummaryDto>(base(), input);
+}
+
+export function getTable(tableId: string): Promise<TableSummaryDto> {
+  return httpClient.get<TableSummaryDto>(TABLE_PATHS.detail(tableId));
 }
 
 export function getSeats(tableId: string): Promise<TableSeatDto[]> {
@@ -51,6 +65,40 @@ export function cashOut(
   });
 }
 
+/** ADMIN. Senta outro membro do clube (já cadastrado) — o buy-in sai da carteira dele, não da de quem chama. */
+export function sitAtTableForUser(
+  tableId: string,
+  userId: string,
+  input: SitAtTableRequest,
+  idempotencyKey: string,
+): Promise<TableSeatDto> {
+  return httpClient.post<TableSeatDto>(TABLE_PATHS.sitForUser(tableId, userId), input, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+}
+
+/** ADMIN. Senta um jogador sem cadastro — só nome e telefone. */
+export function sitGuestAtTable(
+  tableId: string,
+  input: SitGuestAtTableRequest,
+  idempotencyKey: string,
+): Promise<TableSeatDto> {
+  return httpClient.post<TableSeatDto>(TABLE_PATHS.sitGuest(tableId), input, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+}
+
+/** ADMIN. Cash-out da sessão de outro jogador — necessário pra encerrar a sessão de um convidado, que nunca loga. */
+export function cashOutAsAdmin(
+  tableId: string,
+  sessionId: string,
+  idempotencyKey: string,
+): Promise<TableSeatDto> {
+  return httpClient.post<TableSeatDto>(TABLE_PATHS.adminCashOut(tableId, sessionId), undefined, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+}
+
 /** ADMIN. */
 export function recordMovement(
   tableId: string,
@@ -68,9 +116,13 @@ export function closeTable(tableId: string): Promise<TableSummaryDto> {
 export const tableApi = {
   listTables,
   createTable,
+  getTable,
   getSeats,
   sitAtTable,
+  sitAtTableForUser,
+  sitGuestAtTable,
   cashOut,
+  cashOutAsAdmin,
   recordMovement,
   closeTable,
 };

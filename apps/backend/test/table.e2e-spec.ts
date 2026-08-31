@@ -14,11 +14,17 @@ const prismaDirect = new PrismaClient();
 /** Ids criados pela suíte, para o teardown (vínculo antes do clube: FK Restrict). */
 const createdClubeIds: string[] = [];
 
+/** 6 dígitos, primeiro dígito 1-9 — mesmo formato de `ClubService.generateJoinCode`. */
+function randomJoinCode(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
 async function createClube(): Promise<string> {
   const clube = await prismaDirect.clube.create({
     data: {
       name: 'Clube Mesas E2E',
       document: randomUUID().replace(/-/g, ''),
+      joinCode: randomJoinCode(),
     },
   });
   createdClubeIds.push(clube.id);
@@ -305,5 +311,156 @@ describe('Tables (e2e)', () => {
       .set('Authorization', `Bearer ${player.accessToken}`)
       .expect(200);
     expect(finalSeats.body[1]).toMatchObject({ seatNumber: 2, userId: null });
+  });
+
+  describe('ADMIN senta outro jogador', () => {
+    async function createOpenTable(
+      admin: { accessToken: string },
+      clubeId: string,
+    ): Promise<string> {
+      const res = await request(app.getHttpServer())
+        .post(`/api/clubes/${clubeId}/mesas`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({
+          name: 'NL Holdem 1/2',
+          type: 'CASH_GAME',
+          smallBlind: '1.00',
+          bigBlind: '2.00',
+          minBuyIn: '40.00',
+          maxBuyIn: '200.00',
+          maxSeats: 6,
+        })
+        .expect(201);
+      return res.body.id as string;
+    }
+
+    it('PLAYER não pode sentar outro membro nem convidado (403)', async () => {
+      const clubeId = await createClube();
+      const admin = await registerAndLogin(app, clubeId, { admin: true });
+      const player = await registerAndLogin(app, clubeId);
+      const other = await registerAndLogin(app, clubeId);
+      const tableId = await createOpenTable(admin, clubeId);
+
+      await request(app.getHttpServer())
+        .post(`/api/clubes/${clubeId}/mesas/${tableId}/sit/${other.userId}`)
+        .set('Authorization', `Bearer ${player.accessToken}`)
+        .set('Idempotency-Key', randomUUID())
+        .send({ seatNumber: 1, buyInAmount: '50.00' })
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .post(`/api/clubes/${clubeId}/mesas/${tableId}/sit-guest`)
+        .set('Authorization', `Bearer ${player.accessToken}`)
+        .set('Idempotency-Key', randomUUID())
+        .send({
+          seatNumber: 1,
+          buyInAmount: '50.00',
+          name: 'Fulano',
+          phone: '11988887777',
+        })
+        .expect(403);
+    });
+
+    it('ADMIN senta um membro de OUTRO clube: 404 (não deixa debitar wallet de fora do clube)', async () => {
+      const clubeId = await createClube();
+      const outroClubeId = await createClube();
+      const admin = await registerAndLogin(app, clubeId, { admin: true });
+      const forasteiro = await registerAndLogin(app, outroClubeId);
+      const tableId = await createOpenTable(admin, clubeId);
+
+      await request(app.getHttpServer())
+        .post(
+          `/api/clubes/${clubeId}/mesas/${tableId}/sit/${forasteiro.userId}`,
+        )
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .set('Idempotency-Key', randomUUID())
+        .send({ seatNumber: 1, buyInAmount: '50.00' })
+        .expect(404);
+    });
+
+    it('ADMIN senta um membro já cadastrado — buy-in sai da wallet DELE, não da do admin', async () => {
+      const clubeId = await createClube();
+      const admin = await registerAndLogin(app, clubeId, { admin: true });
+      const player = await registerAndLogin(app, clubeId);
+      await creditWallet(player.userId, clubeId, '500.00');
+      const tableId = await createOpenTable(admin, clubeId);
+
+      const sitRes = await request(app.getHttpServer())
+        .post(`/api/clubes/${clubeId}/mesas/${tableId}/sit/${player.userId}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .set('Idempotency-Key', randomUUID())
+        .send({ seatNumber: 1, buyInAmount: '100.00' })
+        .expect(201);
+      expect(sitRes.body).toMatchObject({
+        seatNumber: 1,
+        userId: player.userId,
+        currentStack: '100.00',
+      });
+      expect(await getBalance(player.userId, clubeId)).toBe('400.00');
+    });
+
+    it('ADMIN senta um jogador SEM CADASTRO (nome+telefone) e depois faz cash-out dele', async () => {
+      const clubeId = await createClube();
+      const admin = await registerAndLogin(app, clubeId, { admin: true });
+      const tableId = await createOpenTable(admin, clubeId);
+
+      const sitRes = await request(app.getHttpServer())
+        .post(`/api/clubes/${clubeId}/mesas/${tableId}/sit-guest`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .set('Idempotency-Key', randomUUID())
+        .send({
+          seatNumber: 4,
+          buyInAmount: '80.00',
+          name: 'Convidado Balcão',
+          phone: '11999998888',
+        })
+        .expect(201);
+      expect(sitRes.body).toMatchObject({
+        seatNumber: 4,
+        userName: 'Convidado Balcão',
+        currentStack: '80.00',
+      });
+      const guestUserId = sitRes.body.userId as string;
+
+      // O convidado agora existe como membro (isGuest: true) — aparece na
+      // busca de membro, mas não loga (sem senha conhecida).
+      const membersRes = await request(app.getHttpServer())
+        .get(`/api/clubes/${clubeId}/membros`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+      expect(membersRes.body).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            userId: guestUserId,
+            isGuest: true,
+            phone: '11999998888',
+          }),
+        ]),
+      );
+
+      const session = await prismaDirect.tableSession.findFirstOrThrow({
+        where: { tableId, userId: guestUserId, status: 'ACTIVE' },
+      });
+
+      // Convidado nunca loga — só o admin pode encerrar a sessão dele.
+      const cashOutRes = await request(app.getHttpServer())
+        .post(
+          `/api/clubes/${clubeId}/mesas/${tableId}/sessions/${session.id}/admin-cash-out`,
+        )
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .set('Idempotency-Key', randomUUID())
+        .expect(201);
+      expect(cashOutRes.body).toEqual({
+        seatNumber: 4,
+        userId: null,
+        userName: null,
+        currentStack: null,
+        sessionId: null,
+      });
+      // Saldo final na wallet do convidado = os 80 que ele "trouxe" em
+      // espécie e recuperou no cash-out — fica lá até o balcão pagar em
+      // dinheiro (fluxo fora do escopo desta feature, ver plano).
+      expect(await getBalance(guestUserId, clubeId)).toBe('80.00');
+    });
   });
 });

@@ -68,7 +68,13 @@ function toClubeSummary(
 
 function toMembershipDto(
   membership: ClubeMembership & {
-    user: { name: string; email: string; document: string | null };
+    user: {
+      name: string;
+      email: string;
+      document: string | null;
+      phone: string | null;
+      isGuest: boolean;
+    };
   },
 ): ClubeMembershipDto {
   return {
@@ -77,6 +83,8 @@ function toMembershipDto(
     name: membership.user.name,
     email: membership.user.email,
     document: membership.user.document,
+    phone: membership.user.phone,
+    isGuest: membership.user.isGuest,
     role: membership.role as unknown as SharedClubeRole,
     status: membership.status as unknown as SharedClubeMembershipStatus,
     createdAt: membership.createdAt.toISOString(),
@@ -251,7 +259,15 @@ export class ClubService {
     const memberships = await this.prisma.clubeMembership.findMany({
       where: { clubeId },
       include: {
-        user: { select: { name: true, email: true, document: true } },
+        user: {
+          select: {
+            name: true,
+            email: true,
+            document: true,
+            phone: true,
+            isGuest: true,
+          },
+        },
       },
       orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
     });
@@ -306,7 +322,13 @@ export class ClubService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: dto.userId },
-      select: { name: true, email: true, document: true },
+      select: {
+        name: true,
+        email: true,
+        document: true,
+        phone: true,
+        isGuest: true,
+      },
     });
     if (!user) throw new NotFoundException('Usuário não encontrado.');
 

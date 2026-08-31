@@ -19,6 +19,17 @@ export interface ClubeMembershipDto {
   /** CPF (somente dígitos). `null` até o KYC — a maioria dos membros hoje. */
   document: string | null;
 
+  /** Telefone (somente dígitos). `null` pra quem nunca informou. */
+  phone: string | null;
+
+  /**
+   * `true` para uma conta mínima criada pelo admin ao sentar um jogador sem
+   * cadastro numa mesa (nome+telefone apenas, e-mail sintético, nunca loga —
+   * ver `TableService.sitGuestAtTable`). Telas de busca de membro (ex.:
+   * inscrição em torneio) devem excluir convidados dos resultados.
+   */
+  isGuest: boolean;
+
   role: ClubeRole;
 
   status: ClubeMembershipStatus;

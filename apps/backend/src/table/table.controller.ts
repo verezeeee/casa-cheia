@@ -25,6 +25,7 @@ import { CreateTableDto } from './dto/create-table.dto';
 import { ListTablesQueryDto } from './dto/list-tables-query.dto';
 import { RecordMovementDto } from './dto/record-movement.dto';
 import { SitAtTableDto } from './dto/sit-at-table.dto';
+import { SitGuestAtTableDto } from './dto/sit-guest-at-table.dto';
 import { TableService } from './table.service';
 
 @Controller('clubes/:clubeId/mesas')
@@ -50,6 +51,15 @@ export class TableController {
     @Query() query: ListTablesQueryDto,
   ): Promise<PaginatedResponse<TableSummaryDto>> {
     return this.tableService.listTables(clubeId, query.cursor, query.limit);
+  }
+
+  @Get(':id')
+  @UseGuards(ClubeMembershipGuard)
+  async getTable(
+    @Param('clubeId') clubeId: string,
+    @Param('id') tableId: string,
+  ): Promise<TableSummaryDto> {
+    return this.tableService.getTable(clubeId, tableId);
   }
 
   @Get(':id/seats')
@@ -91,6 +101,73 @@ export class TableController {
   ): Promise<TableSeatDto> {
     requireIdempotencyKey(idempotencyKey);
     return this.tableService.cashOut(
+      user.id,
+      clubeId,
+      tableId,
+      sessionId,
+      idempotencyKey,
+    );
+  }
+
+  /**
+   * ADMIN sentando outro membro do clube (já cadastrado e ACTIVE) — mesmo
+   * `SitAtTableDto`, o buy-in sai da carteira DELE (`userId` da rota), não
+   * da de quem chama.
+   */
+  @Post(':id/sit/:userId')
+  @UseGuards(ClubeMembershipGuard, RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async sitAtTableForUser(
+    @Param('clubeId') clubeId: string,
+    @Param('id') tableId: string,
+    @Param('userId') userId: string,
+    @Body() dto: SitAtTableDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ): Promise<TableSeatDto> {
+    requireIdempotencyKey(idempotencyKey);
+    return this.tableService.sitAtTableForUser(
+      clubeId,
+      tableId,
+      userId,
+      dto,
+      idempotencyKey,
+    );
+  }
+
+  /** ADMIN sentando um jogador SEM CADASTRO — só nome e telefone (ver `TableService.sitGuestAtTable`). */
+  @Post(':id/sit-guest')
+  @UseGuards(ClubeMembershipGuard, RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async sitGuestAtTable(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('clubeId') clubeId: string,
+    @Param('id') tableId: string,
+    @Body() dto: SitGuestAtTableDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ): Promise<TableSeatDto> {
+    requireIdempotencyKey(idempotencyKey);
+    return this.tableService.sitGuestAtTable(
+      user.id,
+      clubeId,
+      tableId,
+      dto,
+      idempotencyKey,
+    );
+  }
+
+  /** ADMIN fazendo cash-out da sessão de OUTRO jogador (ver `TableService.cashOutAsAdmin`). */
+  @Post(':id/sessions/:sessionId/admin-cash-out')
+  @UseGuards(ClubeMembershipGuard, RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async cashOutAsAdmin(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('clubeId') clubeId: string,
+    @Param('id') tableId: string,
+    @Param('sessionId') sessionId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ): Promise<TableSeatDto> {
+    requireIdempotencyKey(idempotencyKey);
+    return this.tableService.cashOutAsAdmin(
       user.id,
       clubeId,
       tableId,

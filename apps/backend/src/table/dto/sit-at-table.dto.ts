@@ -1,7 +1,7 @@
 import { Type } from 'class-transformer';
 import { IsInt, Matches, Max, Min } from 'class-validator';
 
-const DECIMAL_PATTERN = /^\d+(\.\d{1,2})?$/;
+export const DECIMAL_PATTERN = /^\d+(\.\d{1,2})?$/;
 
 export class SitAtTableDto {
   @Type(() => Number)
