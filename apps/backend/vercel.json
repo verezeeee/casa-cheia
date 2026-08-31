@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "buildCommand": "cd ../.. && pnpm --filter @poker-system/shared build && pnpm --filter @poker-system/backend exec prisma generate && mkdir -p apps/backend/public",
+  "buildCommand": "cd ../.. && pnpm --filter @poker-system/shared build && pnpm --filter @poker-system/backend exec prisma generate",
   "outputDirectory": "public",
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }]
 }
