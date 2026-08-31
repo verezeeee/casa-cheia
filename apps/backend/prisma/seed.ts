@@ -22,15 +22,16 @@ import { ARGON2_OPTIONS } from '../src/common/crypto/password-hasher.service';
  */
 const prisma = new PrismaClient();
 
-/** Documento fictício do clube de desenvolvimento (somente dígitos). */
-const SEED_CLUBE_DOCUMENT = '00000000000191';
-const SEED_ADMIN_EMAIL = 'admin@casacheia.dev';
-
 /**
- * Senha do usuário seed. Configurável por ambiente para que o seed também
- * sirva a um staging; o default só existe para o `docker compose up` local.
- * Este seed nunca deve ser executado em produção.
+ * Todos configuráveis por ambiente — o default só existe pro
+ * `docker compose up` local; setar as env vars é o que permite rodar este
+ * mesmo seed (idempotente) contra staging/produção pra criar o primeiro
+ * clube+admin real.
  */
+const SEED_CLUBE_NAME = process.env.SEED_CLUBE_NAME ?? 'Clube Casa Cheia (dev)';
+const SEED_CLUBE_DOCUMENT = process.env.SEED_CLUBE_DOCUMENT ?? '00000000000191';
+const SEED_ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@casacheia.dev';
+const SEED_ADMIN_NAME = process.env.SEED_ADMIN_NAME ?? 'Administrador do Clube';
 const SEED_ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'admin123';
 
 async function main(): Promise<void> {
@@ -38,7 +39,7 @@ async function main(): Promise<void> {
     where: { document: SEED_CLUBE_DOCUMENT },
     update: {},
     create: {
-      name: 'Clube Casa Cheia (dev)',
+      name: SEED_CLUBE_NAME,
       document: SEED_CLUBE_DOCUMENT,
     },
   });
@@ -56,7 +57,7 @@ async function main(): Promise<void> {
     create: {
       email: SEED_ADMIN_EMAIL,
       passwordHash,
-      name: 'Administrador do Clube',
+      name: SEED_ADMIN_NAME,
       emailVerifiedAt: new Date(),
     },
   });
