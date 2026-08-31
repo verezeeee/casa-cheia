@@ -128,31 +128,41 @@ export class PrismaService
 {
   private readonly logger = new Logger(PrismaService.name);
 
-  async onModuleInit(): Promise<void> {
-    // Timeout explícito: sem isso, um host inalcançável (rede, firewall,
-    // connection string errada) trava o `$connect()` pra sempre — a function
-    // serverless come os 300s de timeout inteiros sem log nenhum de erro.
-    // Com o timeout, ao menos aparece a causa no log em vez de silêncio total.
-    this.logger.log('[boot] onModuleInit: chamando $connect()...');
-    const CONNECT_TIMEOUT_MS = 10_000;
+  /**
+   * Corre `op` com um timeout — sem isso, um host inalcançável (rede,
+   * firewall, pooler recusando o protocolo estendido) trava a promise pra
+   * sempre e a function serverless come os 300s de timeout inteiros em
+   * silêncio total. Falhar rápido com uma mensagem clara vale mais do que
+   * deixar o caller descobrir isso pelo timeout da plataforma.
+   */
+  private async withTimeout<T>(
+    op: () => Promise<T>,
+    label: string,
+    ms: number,
+  ): Promise<T> {
     let timer: NodeJS.Timeout;
-    await Promise.race([
-      this.$connect().finally(() => clearTimeout(timer)),
+    return Promise.race([
+      op().finally(() => clearTimeout(timer)),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () =>
             reject(
-              new Error(
-                `PrismaService: $connect() não respondeu em ${CONNECT_TIMEOUT_MS}ms`,
-              ),
+              new Error(`PrismaService: ${label} não respondeu em ${ms}ms`),
             ),
-          CONNECT_TIMEOUT_MS,
+          ms,
         );
       }),
-    ]).catch((error: unknown) => {
-      this.logger.error('Falha ao conectar no PostgreSQL (Prisma).', error);
-      throw error;
-    });
+    ]);
+  }
+
+  async onModuleInit(): Promise<void> {
+    this.logger.log('[boot] onModuleInit: chamando $connect()...');
+    await this.withTimeout(() => this.$connect(), '$connect()', 10_000).catch(
+      (error: unknown) => {
+        this.logger.error('Falha ao conectar no PostgreSQL (Prisma).', error);
+        throw error;
+      },
+    );
     this.logger.log('Conexão com o PostgreSQL (Prisma) estabelecida.');
   }
 
@@ -165,7 +175,7 @@ export class PrismaService
    * está respondendo (sem depender de nenhuma tabela de domínio existir).
    */
   async isHealthy(): Promise<boolean> {
-    await this.$queryRaw`SELECT 1`;
+    await this.withTimeout(() => this.$queryRaw`SELECT 1`, '$queryRaw', 8_000);
     return true;
   }
 
