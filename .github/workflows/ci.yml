@@ -134,6 +134,8 @@ jobs:
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://poker:poker@localhost:5432/poker_system_test?schema=public
+      # Sem pooler no Postgres do CI — mesma URL da DATABASE_URL (ver datasource em base.prisma).
+      DIRECT_URL: postgresql://poker:poker@localhost:5432/poker_system_test?schema=public
       PORT: 3001
       API_PREFIX: api
       LOG_LEVEL: info
