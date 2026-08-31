@@ -100,6 +100,25 @@ export class AuthController {
     return `/${this.configService.get<string>('app.apiPrefix') ?? 'api'}/auth`;
   }
 
+  /**
+   * `SameSite=None` é obrigatório porque frontend e backend vivem em sites
+   * diferentes de verdade (subdomínios distintos de `vercel.app`, que é um
+   * "public suffix" — o browser trata cada um como um registrable domain
+   * próprio, não como mesmo site). Um cookie `Lax` é aceito na resposta do
+   * login mas NUNCA reenviado em fetch/XHR cross-site subsequente — a sessão
+   * simplesmente não se sustenta (usuário cadastra/loga e cai de novo pro
+   * login). `None` exige `Secure` (regra do próprio browser, não nossa);
+   * por isso os dois vêm sempre juntos daqui, amarrados ao mesmo flag —
+   * em dev (`cookieSecure=false`, http://localhost) cair para `lax` é
+   * necessário (`None` sem `Secure` é rejeitado) e inofensivo (front e back
+   * locais são same-site: mesmo `localhost`, só porta diferente).
+   */
+  private sameSitePolicy(): 'none' | 'lax' {
+    return (this.configService.get<boolean>('security.cookieSecure') ?? true)
+      ? 'none'
+      : 'lax';
+  }
+
   private setRefreshCookie(
     res: Response,
     token: string,
@@ -108,7 +127,7 @@ export class AuthController {
     res.cookie(REFRESH_TOKEN_COOKIE, token, {
       httpOnly: true,
       secure: this.configService.get<boolean>('security.cookieSecure') ?? true,
-      sameSite: 'lax',
+      sameSite: this.sameSitePolicy(),
       domain: this.configService.get<string>('security.cookieDomain'),
       path: this.cookiePath(),
       expires: expiresAt,
@@ -119,7 +138,7 @@ export class AuthController {
     res.clearCookie(REFRESH_TOKEN_COOKIE, {
       httpOnly: true,
       secure: this.configService.get<boolean>('security.cookieSecure') ?? true,
-      sameSite: 'lax',
+      sameSite: this.sameSitePolicy(),
       domain: this.configService.get<string>('security.cookieDomain'),
       path: this.cookiePath(),
     });
