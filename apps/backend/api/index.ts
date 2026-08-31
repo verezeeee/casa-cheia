@@ -5,6 +5,21 @@ import serverlessHttp from 'serverless-http';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 
+// A integração Vercel<->Neon cria `DATABASE_URL` travada pra edição manual no
+// dashboard (gerenciada pela integração) e, nessa loja, ela não vem com os
+// parâmetros que o Prisma precisa pra falar com o pooler (PgBouncer,
+// transaction mode): `pgbouncer=true` (desliga prepared statements, que o
+// pooler não suporta) e `connect_timeout`. Sem isso o `$connect()` passa mas
+// uma query real fica pendurada esperando conexão em vez de dar erro.
+// `POSTGRES_PRISMA_URL`, também criada pela integração, já vem com esses
+// parâmetros — só precisa ser lida antes de qualquer PrismaClient existir,
+// já que o client lê `process.env.DATABASE_URL` (via `env()` no schema) no
+// momento em que é instanciado, não no build. Local/CI não têm
+// POSTGRES_PRISMA_URL — no-op, continua a DATABASE_URL do .env normal.
+if (process.env.POSTGRES_PRISMA_URL) {
+  process.env.DATABASE_URL = process.env.POSTGRES_PRISMA_URL;
+}
+
 /**
  * Entry point serverless (Vercel Functions). Alternativa ao `main.ts`
  * (`.listen()`), que não roda numa function — aqui inicializamos a app Nest
