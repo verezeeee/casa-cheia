@@ -79,7 +79,15 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // Neon (via integração Vercel): DATABASE_URL deve ser a URL com o pooler
+  // (PgBouncer, transaction mode) + `?pgbouncer=true&connect_timeout=15` —
+  // sem esses parâmetros o Prisma usa prepared statements que o pooler não
+  // suporta e uma query pode ficar pendurada em vez de dar erro. DIRECT_URL
+  // é a conexão direta (sem pooler), usada só por `prisma migrate deploy`
+  // (migração precisa de sessão persistente, que o pooler não garante).
+  // Local/docker: as duas apontam pro mesmo Postgres, sem pooler.
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ============================================================================
