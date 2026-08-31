@@ -1,24 +1,19 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { Express } from 'express';
 import { NestFactory } from '@nestjs/core';
-import serverlessHttp from 'serverless-http';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 
 // A integração Vercel<->Neon cria `DATABASE_URL` travada pra edição manual no
-// dashboard (gerenciada pela integração). Confirmado em produção: `$connect()`
-// funciona (handshake leve com o pooler), mas uma query real
-// (`SELECT 1` do health check) fica pendurada os 300s inteiros — sintoma
-// clássico de PgBouncer (transaction mode) recebendo prepared statements
-// (protocolo estendido) que ele não sabe proxied direito sem `pgbouncer=true`.
-// Em vez de confiar que a env var já vem com os parâmetros certos, força os
-// dois que o Prisma precisa pra falar com um pooler: `pgbouncer=true`
-// (desliga prepared statements) e `connect_timeout` (falha rápido em vez de
-// pendurar). `POSTGRES_PRISMA_URL` (criada pela integração) é a base — só
-// precisa ser lida antes de qualquer PrismaClient existir, já que o client lê
-// `process.env.DATABASE_URL` (via `env()` no schema) no momento em que é
-// instanciado, não no build. Local/CI não têm POSTGRES_PRISMA_URL — no-op,
-// continua a DATABASE_URL do .env normal.
+// dashboard (gerenciada pela integração). `POSTGRES_PRISMA_URL` (também
+// criada pela integração) é a URL certa pra uso via pooler — força os
+// parâmetros que o Prisma precisa pra falar com PgBouncer em vez de confiar
+// que já vêm certos: `pgbouncer=true` (desliga prepared statements, que o
+// pooler não suporta) e `connect_timeout` (falha rápido em vez de pendurar).
+// Só precisa ser lida antes de qualquer PrismaClient existir, já que o
+// client lê `process.env.DATABASE_URL` (via `env()` no schema) no momento em
+// que é instanciado, não no build. Local/CI não têm POSTGRES_PRISMA_URL —
+// no-op, continua a DATABASE_URL do .env normal.
 const pooledUrl = process.env.POSTGRES_PRISMA_URL;
 if (pooledUrl) {
   const url = new URL(pooledUrl);
@@ -29,43 +24,41 @@ if (pooledUrl) {
   process.env.DATABASE_URL = url.toString();
 }
 
-console.log(
-  '[boot] api/index.ts módulo carregado, POSTGRES_PRISMA_URL:',
-  !!process.env.POSTGRES_PRISMA_URL,
-);
-
 /**
  * Entry point serverless (Vercel Functions). Alternativa ao `main.ts`
  * (`.listen()`), que não roda numa function — aqui inicializamos a app Nest
  * uma vez por instância "quente" (cache em módulo, sobrevive entre
- * invocações da mesma lambda) e delegamos o request/response pro Express
- * interno (`@nestjs/platform-express`, mesmo adapter default do `main.ts`)
- * via `serverless-http`. Ver `bootstrap.ts` pra config compartilhada.
+ * invocações da mesma lambda) e delegamos o request/response direto pro
+ * Express interno (`@nestjs/platform-express`, mesmo adapter default do
+ * `main.ts`).
+ *
+ * SEM `serverless-http`: esse pacote não suporta Vercel (só lista AWS,
+ * Genezio e Azure) — ele espera ser chamado como `handler(event, context)`
+ * (formato de evento do API Gateway da AWS), não como `handler(req, res)`
+ * (o formato nativo que a Vercel usa). Chamado do jeito errado, ele nunca
+ * completa a resposta — a function trava até estourar o timeout, em
+ * silêncio total. Um app Express, por si só, já É uma função
+ * `(req, res) => void` válida — exatamente o formato que a Vercel espera.
+ * Ver `bootstrap.ts` pra config compartilhada.
  */
-let handlerPromise: Promise<ReturnType<typeof serverlessHttp>> | undefined;
+let handlerPromise: Promise<Express> | undefined;
 
-async function buildHandler() {
-  console.log('[boot] buildHandler: chamando NestFactory.create...');
+async function buildHandler(): Promise<Express> {
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
     rawBody: true,
   });
 
-  console.log('[boot] NestFactory.create retornou, chamando app.init()...');
-
   configureApp(app);
   await app.init();
 
-  console.log('[boot] app.init() retornou.');
-
-  return serverlessHttp(app.getHttpAdapter().getInstance() as Express);
+  return app.getHttpAdapter().getInstance() as Express;
 }
 
 export default async function handler(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  console.log('[boot] handler invocado:', req.url);
   if (!handlerPromise) {
     handlerPromise = buildHandler();
     // Se a inicialização falhar (env inválida, banco fora, etc.), não cacheia
@@ -75,14 +68,13 @@ export default async function handler(
       handlerPromise = undefined;
     });
   }
-  let serverlessHandler: Awaited<typeof handlerPromise>;
+  let expressApp: Express;
   try {
-    serverlessHandler = await handlerPromise;
+    expressApp = await handlerPromise;
   } catch (error) {
     // Sem isso, uma falha no boot (timeout de conexão, env inválida) nunca
     // escreve na `res` — a function fica pendurada até estourar os 300s de
     // timeout em vez de devolver o erro na hora.
-
     console.error('Falha ao inicializar a app Nest:', error);
     res.statusCode = 500;
     res.setHeader('content-type', 'application/json');
@@ -91,5 +83,5 @@ export default async function handler(
     );
     return;
   }
-  await serverlessHandler(req, res);
+  expressApp(req, res);
 }

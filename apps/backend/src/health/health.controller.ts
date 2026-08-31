@@ -12,7 +12,6 @@ export class HealthController {
   @Get()
   @HealthCheck()
   check() {
-    console.log('[boot] HealthController.check() invocado.');
     return this.health.check([
       () => this.prismaIndicator.isHealthy('database'),
     ]);
