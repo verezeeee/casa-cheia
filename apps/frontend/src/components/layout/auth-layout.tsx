@@ -43,10 +43,15 @@ export function AuthLayout({ children }: { children: ReactNode }) {
       </motion.div>
 
       <div className="flex flex-1 items-center justify-center bg-background p-4 sm:p-8">
+        {/* `w-full`: sem isso o item do flex row acima faz shrink-to-fit pelo
+         * conteúdo (texto mais largo do form), e o `w-full`/`max-w-*` do
+         * `Card` filho não tem container real pra resolver contra — o card
+         * fica menor que a viewport mesmo em telas estreitas. */}
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+          className="w-full"
         >
           {children}
         </motion.div>

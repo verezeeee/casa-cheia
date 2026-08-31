@@ -85,7 +85,7 @@ export default function RegisterPage() {
 
   return (
     <AuthLayout>
-      <Card className="w-full max-w-md">
+      <Card className="mx-auto w-full max-w-md">
         <form onSubmit={handleSubmit} className="flex flex-col gap-5">
           <div>
             <h1 className="font-display text-2xl font-semibold tracking-tight">Criar conta</h1>
