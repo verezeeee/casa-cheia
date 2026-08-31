@@ -70,6 +70,11 @@
 
 generator client {
   provider = "prisma-client-js"
+  // "native" cobre dev/CI local; "rhel-openssl-3.0.x" é o target do runtime
+  // Node.js da Vercel (AWS Lambda) — sem ele, o client gerado no build da
+  // Vercel não tem a engine certa pra rodar na function e a lambda crasha
+  // no primeiro request com FUNCTION_INVOCATION_FAILED.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

@@ -1,9 +1,7 @@
-import { ValidationPipe } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import cookieParser from 'cookie-parser';
-import { Logger } from 'nestjs-pino';
+import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
+import { configureApp } from './bootstrap';
 
 async function bootstrap(): Promise<void> {
   // `rawBody: true` popula `req.rawBody` (Buffer) em toda requisição, ao
@@ -15,29 +13,9 @@ async function bootstrap(): Promise<void> {
     rawBody: true,
   });
 
-  app.useLogger(app.get(Logger));
+  configureApp(app);
 
-  const configService = app.get(ConfigService);
-  const port = configService.get<number>('app.port') ?? 3001;
-  const apiPrefix = configService.get<string>('app.apiPrefix') ?? 'api';
-  const corsOrigins = configService.get<string[]>('security.corsOrigins') ?? [];
-
-  app.setGlobalPrefix(apiPrefix);
-  // `credentials: true` é obrigatório para o cookie httpOnly de refresh
-  // token trafegar entre origens distintas (frontend/backend em portas
-  // diferentes); com `origin: '*'` (default do enableCors()) o browser
-  // recusa cookies em requisições cross-origin, então a lista precisa ser
-  // explícita.
-  app.enableCors({ origin: corsOrigins, credentials: true });
-  app.use(cookieParser());
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
-
+  const port = app.get(ConfigService).get<number>('app.port') ?? 3001;
   await app.listen(port);
 }
 
