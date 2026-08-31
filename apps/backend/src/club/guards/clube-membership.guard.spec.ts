@@ -1,6 +1,6 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { ClubeRole } from '@prisma/client';
+import { ClubeRole } from '../../generated/prisma';
 import type { PrismaService } from '../../prisma/prisma.service';
 import { ClubeMembershipGuard } from './clube-membership.guard';
 

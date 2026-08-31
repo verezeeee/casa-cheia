@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../src/generated/prisma';
 import * as argon2 from 'argon2';
 
 import { ARGON2_OPTIONS } from '../src/common/crypto/password-hasher.service';

@@ -5,7 +5,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { ClubeRole } from '@prisma/client';
+import type { ClubeRole } from '../../generated/prisma';
 import type { Request } from 'express';
 import type { CurrentClubeContext } from '../../club/types/current-clube.type';
 import { ROLES_KEY } from '../decorators/roles.decorator';

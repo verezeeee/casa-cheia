@@ -4,7 +4,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { AuthTokensResponse, SessionUser } from '@poker-system/shared';
-import { Prisma, type RefreshToken, type User } from '@prisma/client';
+import { Prisma, type RefreshToken, type User } from '../generated/prisma';
 import { randomUUID } from 'node:crypto';
 import { HashService } from '../common/crypto/hash.service';
 import { PasswordHasherService } from '../common/crypto/password-hasher.service';

@@ -2,7 +2,7 @@ import { ForbiddenException, type ExecutionContext } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
 import type { BlindStructureDto } from '@poker-system/shared';
-import { ClubeRole } from '@prisma/client';
+import { ClubeRole } from '../generated/prisma';
 import type { CurrentClubeContext } from '../club/types/current-clube.type';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';

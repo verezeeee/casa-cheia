@@ -18,7 +18,7 @@ import type {
   TournamentEntry,
   TournamentPrize,
   TournamentTableStatus,
-} from '@prisma/client';
+} from '../generated/prisma';
 import { toBlindLevelDto } from './blind-structure.mappers';
 
 const toMoney = (value: { toFixed: (digits: number) => string }): string =>

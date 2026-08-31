@@ -4,7 +4,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
-import { Prisma, type Wallet } from '@prisma/client';
+import { Prisma, type Wallet } from '../generated/prisma';
 import type { PrismaService } from '../prisma/prisma.service';
 import { WalletService } from './wallet.service';
 

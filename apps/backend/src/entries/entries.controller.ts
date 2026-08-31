@@ -3,7 +3,7 @@ import type {
   EntryHistoryItemDto,
   PaginatedResponse,
 } from '@poker-system/shared';
-import { ClubeRole } from '@prisma/client';
+import { ClubeRole } from '../generated/prisma';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';

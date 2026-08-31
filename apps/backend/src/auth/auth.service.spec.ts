@@ -1,5 +1,5 @@
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
-import { Prisma, type RefreshToken, type User } from '@prisma/client';
+import { Prisma, type RefreshToken, type User } from '../generated/prisma';
 import type { HashService } from '../common/crypto/hash.service';
 import type { PasswordHasherService } from '../common/crypto/password-hasher.service';
 import type { PrismaService } from '../prisma/prisma.service';

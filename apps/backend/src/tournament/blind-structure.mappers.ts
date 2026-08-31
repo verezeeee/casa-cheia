@@ -1,5 +1,5 @@
 import type { BlindLevelDto, BlindStructureDto } from '@poker-system/shared';
-import type { BlindLevel, BlindStructure } from '@prisma/client';
+import type { BlindLevel, BlindStructure } from '../generated/prisma';
 
 /**
  * Aceita `BlindLevel` (preset) e também `TournamentBlindLevel` (cópia por

@@ -1,6 +1,6 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { ClubeRole, ClubeStatus, PrismaClient } from '@prisma/client';
+import { ClubeRole, ClubeStatus, PrismaClient } from '../src/generated/prisma';
 import cookieParser from 'cookie-parser';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';

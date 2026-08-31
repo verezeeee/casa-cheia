@@ -5,9 +5,6 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
-  "engines": {
-    "node": "22.x"
-  },
   "scripts": {
     "postinstall": "prisma generate",
     "build": "prisma generate && nest build",
@@ -104,7 +101,8 @@
     "collectCoverageFrom": [
       "**/*.(t|j)s",
       "!**/*.module.ts",
-      "!main.ts"
+      "!main.ts",
+      "!generated/**"
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node",

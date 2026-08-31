@@ -360,7 +360,7 @@ describe('ClubService', () => {
       it('mapeia e-mail já cadastrado para 409, sem vazar detalhe do banco', async () => {
         const { service, prisma, tx } = buildService();
         asAdmin(prisma);
-        const { Prisma } = jest.requireActual('@prisma/client');
+        const { Prisma } = jest.requireActual('../generated/prisma');
         tx.user.create.mockRejectedValue(
           new Prisma.PrismaClientKnownRequestError('duplicate', {
             code: 'P2002',

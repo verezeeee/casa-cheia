@@ -1,4 +1,4 @@
-import type { ClubeRole } from '@prisma/client';
+import type { ClubeRole } from '../../generated/prisma';
 
 /**
  * Clube da requisição corrente, resolvido pelo `ClubeMembershipGuard` a partir

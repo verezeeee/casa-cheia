@@ -75,6 +75,14 @@ generator client {
   // Vercel não tem a engine certa pra rodar na function e a lambda crasha
   // no primeiro request com FUNCTION_INVOCATION_FAILED.
   binaryTargets = ["native", "rhel-openssl-3.0.x"]
+  // Output explícito (em vez do default node_modules/@prisma/client): o
+  // bundler de function da Vercel (api/) resolve dependências com um
+  // tracing próprio, separado da instalação do nosso buildCommand — sob
+  // pnpm isso pode acabar resolvendo uma cópia FISICAMENTE diferente do
+  // client daquela que `prisma generate` gerou (o pacote "stub",
+  // pré-generate), travando a app sem erro nenhum. Um path relativo dentro
+  // do projeto é resolvido do mesmo jeito por qualquer bundler.
+  output = "../../src/generated/prisma"
 }
 
 datasource db {

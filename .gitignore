@@ -9,6 +9,9 @@ build/
 out/
 *.tsbuildinfo
 
+# prisma client gerado (output explícito em prisma/schema/base.prisma)
+apps/backend/src/generated/
+
 # turbo
 .turbo/
 

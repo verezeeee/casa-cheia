@@ -4,7 +4,7 @@ import type {
   TableSummaryDto,
   TableType as SharedTableType,
 } from '@poker-system/shared';
-import type { Table } from '@prisma/client';
+import type { Table } from '../generated/prisma';
 
 const toMoney = (value: { toFixed: (digits: number) => string }): string =>
   value.toFixed(2);

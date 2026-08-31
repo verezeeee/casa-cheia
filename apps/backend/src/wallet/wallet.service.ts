@@ -13,7 +13,7 @@ import type {
   WalletBalanceResponse,
   WalletTransactionDto,
 } from '@poker-system/shared';
-import { Prisma, type Wallet } from '@prisma/client';
+import { Prisma, type Wallet } from '../generated/prisma';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateDepositDto } from './dto/create-deposit.dto';
 import type { RequestWithdrawalDto } from './dto/request-withdrawal.dto';

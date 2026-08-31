@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { BlindStructureDto } from '@poker-system/shared';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../generated/prisma';
 import { PrismaService } from '../prisma/prisma.service';
 import { toBlindStructureDto } from './blind-structure.mappers';
 import type { BlindLevelInputDto } from './dto/blind-level-input.dto';

@@ -4,7 +4,7 @@ import {
   type EntryHistoryItemDto,
   type PaginatedResponse,
 } from '@poker-system/shared';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../generated/prisma';
 import { decodeCursor, encodeCursor } from '../common/pagination/cursor';
 import { PrismaService } from '../prisma/prisma.service';
 

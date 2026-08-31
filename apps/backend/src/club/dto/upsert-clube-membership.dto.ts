@@ -1,4 +1,4 @@
-import { ClubeMembershipStatus, ClubeRole } from '@prisma/client';
+import { ClubeMembershipStatus, ClubeRole } from '../../generated/prisma';
 import {
   IsEmail,
   IsEnum,

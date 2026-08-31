@@ -4,7 +4,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '../generated/prisma';
 
 /**
  * Models cujo escopo de tenant é aplicado AUTOMATICAMENTE por `withClube`.

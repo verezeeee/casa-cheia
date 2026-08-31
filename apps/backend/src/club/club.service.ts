@@ -15,7 +15,7 @@ import type {
   Clube,
   ClubeMembership,
   ClubeMembershipStatus,
-} from '@prisma/client';
+} from '../generated/prisma';
 import { randomBytes } from 'node:crypto';
 import { mapUniqueConstraintError, normalizeEmail } from '../auth/auth.service';
 import { PasswordHasherService } from '../common/crypto/password-hasher.service';

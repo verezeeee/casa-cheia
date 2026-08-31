@@ -8,5 +8,6 @@ coverage
 pnpm-lock.yaml
 **/*.md
 apps/backend/prisma/migrations
+apps/backend/src/generated
 apps/frontend/next-env.d.ts
 .husky/_

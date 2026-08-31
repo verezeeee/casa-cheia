@@ -10,7 +10,7 @@ import type {
   TableSeatDto,
   TableSummaryDto,
 } from '@poker-system/shared';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../generated/prisma';
 import { decodeCursor, encodeCursor } from '../common/pagination/cursor';
 import { PrismaService } from '../prisma/prisma.service';
 import { WalletService } from '../wallet/wallet.service';

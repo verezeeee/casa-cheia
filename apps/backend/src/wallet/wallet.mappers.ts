@@ -13,7 +13,7 @@ import type {
   PixWithdrawal,
   Wallet,
   WalletTransaction,
-} from '@prisma/client';
+} from '../generated/prisma';
 
 export { decodeCursor, encodeCursor } from '../common/pagination/cursor';
 

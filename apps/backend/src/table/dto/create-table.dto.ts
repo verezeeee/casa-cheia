@@ -9,7 +9,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { TableType } from '@prisma/client';
+import { TableType } from '../../generated/prisma';
 
 const DECIMAL_PATTERN = /^\d+(\.\d{1,2})?$/;
 

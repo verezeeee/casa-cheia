@@ -1,4 +1,4 @@
-import { ClubeRole } from '@prisma/client';
+import { ClubeRole } from '../generated/prisma';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type';
 import type { CurrentClubeContext } from '../club/types/current-clube.type';
 import { EntriesController } from './entries.controller';
