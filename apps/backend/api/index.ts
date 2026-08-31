@@ -20,6 +20,11 @@ if (process.env.POSTGRES_PRISMA_URL) {
   process.env.DATABASE_URL = process.env.POSTGRES_PRISMA_URL;
 }
 
+console.log(
+  '[boot] api/index.ts módulo carregado, POSTGRES_PRISMA_URL:',
+  !!process.env.POSTGRES_PRISMA_URL,
+);
+
 /**
  * Entry point serverless (Vercel Functions). Alternativa ao `main.ts`
  * (`.listen()`), que não roda numa function — aqui inicializamos a app Nest
@@ -31,13 +36,18 @@ if (process.env.POSTGRES_PRISMA_URL) {
 let handlerPromise: Promise<ReturnType<typeof serverlessHttp>> | undefined;
 
 async function buildHandler() {
+  console.log('[boot] buildHandler: chamando NestFactory.create...');
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
     rawBody: true,
   });
 
+  console.log('[boot] NestFactory.create retornou, chamando app.init()...');
+
   configureApp(app);
   await app.init();
+
+  console.log('[boot] app.init() retornou.');
 
   return serverlessHttp(app.getHttpAdapter().getInstance() as Express);
 }
@@ -46,6 +56,7 @@ export default async function handler(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  console.log('[boot] handler invocado:', req.url);
   if (!handlerPromise) {
     handlerPromise = buildHandler();
     // Se a inicialização falhar (env inválida, banco fora, etc.), não cacheia

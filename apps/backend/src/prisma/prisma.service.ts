@@ -133,6 +133,7 @@ export class PrismaService
     // connection string errada) trava o `$connect()` pra sempre — a function
     // serverless come os 300s de timeout inteiros sem log nenhum de erro.
     // Com o timeout, ao menos aparece a causa no log em vez de silêncio total.
+    this.logger.log('[boot] onModuleInit: chamando $connect()...');
     const CONNECT_TIMEOUT_MS = 10_000;
     let timer: NodeJS.Timeout;
     await Promise.race([
