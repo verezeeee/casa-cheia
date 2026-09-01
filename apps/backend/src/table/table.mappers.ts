@@ -1,9 +1,11 @@
 import type {
+  TableCloseReportItemDto,
   TableSeatDto,
   TableStatus as SharedTableStatus,
   TableSummaryDto,
   TableType as SharedTableType,
 } from '@poker-system/shared';
+import { Prisma } from '../generated/prisma';
 import type { Table } from '../generated/prisma';
 
 const toMoney = (value: { toFixed: (digits: number) => string }): string =>
@@ -61,6 +63,59 @@ export function toTableSeats(
           sessionId: null,
         };
   });
+}
+
+/**
+ * Agrega `TableSession`s da mesma mesa POR JOGADOR — um jogador pode ter
+ * mais de uma sessão na mesma mesa (cash-out e rebuy voltando a sentar
+ * depois; não há `@@unique` bloqueando isso, ver `table.prisma`), então
+ * somar por `userId` evita duplicar a linha dele no relatório de fechamento.
+ */
+export function toTableCloseReport(
+  sessions: Array<{
+    userId: string;
+    totalBuyIn: Prisma.Decimal;
+    totalCashOut: Prisma.Decimal;
+    currentStack: Prisma.Decimal;
+    user: { name: string };
+  }>,
+): TableCloseReportItemDto[] {
+  const byUser = new Map<
+    string,
+    {
+      userName: string;
+      totalBuyIn: Prisma.Decimal;
+      totalCashOut: Prisma.Decimal;
+      currentStack: Prisma.Decimal;
+    }
+  >();
+
+  for (const session of sessions) {
+    const acc = byUser.get(session.userId) ?? {
+      userName: session.user.name,
+      totalBuyIn: new Prisma.Decimal(0),
+      totalCashOut: new Prisma.Decimal(0),
+      currentStack: new Prisma.Decimal(0),
+    };
+    acc.totalBuyIn = acc.totalBuyIn.plus(session.totalBuyIn);
+    acc.totalCashOut = acc.totalCashOut.plus(session.totalCashOut);
+    acc.currentStack = acc.currentStack.plus(session.currentStack);
+    byUser.set(session.userId, acc);
+  }
+
+  return Array.from(byUser.entries())
+    .map(([userId, acc]) => ({
+      userId,
+      userName: acc.userName,
+      totalBuyIn: toMoney(acc.totalBuyIn),
+      totalCashOut: toMoney(acc.totalCashOut),
+      currentStack: toMoney(acc.currentStack),
+      // Mesma fórmula de `EntriesService` (`totalCashOut + currentStack - totalBuyIn`).
+      netResult: toMoney(
+        acc.totalCashOut.plus(acc.currentStack).minus(acc.totalBuyIn),
+      ),
+    }))
+    .sort((a, b) => a.userName.localeCompare(b.userName));
 }
 
 export function toSeatDto(session: {

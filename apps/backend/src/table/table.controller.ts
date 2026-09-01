@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import type {
   PaginatedResponse,
+  TableCloseResultDto,
   TableSeatDto,
   TableSummaryDto,
 } from '@poker-system/shared';
@@ -201,7 +202,7 @@ export class TableController {
   async closeTable(
     @Param('clubeId') clubeId: string,
     @Param('id') tableId: string,
-  ): Promise<TableSummaryDto> {
+  ): Promise<TableCloseResultDto> {
     return this.tableService.closeTable(clubeId, tableId);
   }
 }
