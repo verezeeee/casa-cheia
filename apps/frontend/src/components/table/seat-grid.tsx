@@ -242,6 +242,17 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     },
   });
 
+  const reopenMutation = useMutation({
+    mutationFn: () => tableApi.reopenTable(tableId),
+    onSuccess: () => {
+      setError(null);
+      invalidate();
+    },
+    onError: (caught: unknown) => {
+      setError(caught instanceof ApiError ? caught.message : 'Não foi possível reabrir a mesa.');
+    },
+  });
+
   // Só navega pro lobby quando o relatório é dispensado (botão, Esc ou
   // backdrop — o `Dialog` já chama `onClose` nos três casos), não no
   // `onSuccess` do fechamento: o admin precisa ver os números antes de sair.
@@ -328,6 +339,18 @@ export function SeatGrid({ tableId }: { tableId: string }) {
             onCancel={() => setConfirmingClose(false)}
           />
         </>
+      )}
+
+      {isAdmin && table && table.status === TableStatus.CLOSED && (
+        <Button
+          size="sm"
+          variant="secondary"
+          loading={reopenMutation.isPending}
+          onClick={() => reopenMutation.mutate()}
+          className="self-end"
+        >
+          Reabrir mesa
+        </Button>
       )}
 
       {/* Relatório de buy-ins/resultado por jogador, mostrado só depois que

@@ -229,4 +229,14 @@ export class TableController {
   ): Promise<TableCloseResultDto> {
     return this.tableService.closeTable(clubeId, tableId);
   }
+
+  @Post(':id/reopen')
+  @UseGuards(ClubeMembershipGuard, RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async reopenTable(
+    @Param('clubeId') clubeId: string,
+    @Param('id') tableId: string,
+  ): Promise<TableSummaryDto> {
+    return this.tableService.reopenTable(clubeId, tableId);
+  }
 }
