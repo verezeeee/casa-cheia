@@ -1,6 +1,10 @@
 'use client';
 
-import type { ClubeMembershipDto, TableSeatDto } from '@poker-system/shared';
+import type {
+  ClubeMembershipDto,
+  TableCloseReportItemDto,
+  TableSeatDto,
+} from '@poker-system/shared';
 import { ClubeMembershipStatus, ClubeRole, TableStatus } from '@poker-system/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
@@ -49,6 +53,7 @@ export function SeatGrid({ tableId }: { tableId: string }) {
   const [buyInAmount, setBuyInAmount] = useState('');
   const [adjustAmount, setAdjustAmount] = useState('');
   const [confirmingClose, setConfirmingClose] = useState(false);
+  const [closeReport, setCloseReport] = useState<TableCloseReportItemDto[] | null>(null);
   const [seatMode, setSeatMode] = useState<'self' | 'member' | 'guest'>('self');
   const [memberSearch, setMemberSearch] = useState('');
   const [guestName, setGuestName] = useState('');
@@ -203,16 +208,30 @@ export function SeatGrid({ tableId }: { tableId: string }) {
 
   const closeMutation = useMutation({
     mutationFn: () => tableApi.closeTable(tableId),
-    onSuccess: () => {
+    onSuccess: (result) => {
       setError(null);
+      setConfirmingClose(false);
       invalidate();
-      router.push('/lobby');
+      // Mesa vazia (ninguém sentou) não tem o que reportar — volta direto.
+      if (result.players.length > 0) {
+        setCloseReport(result.players);
+      } else {
+        router.push('/lobby');
+      }
     },
     onError: (caught: unknown) => {
       setConfirmingClose(false);
       setError(caught instanceof ApiError ? caught.message : 'Não foi possível fechar a mesa.');
     },
   });
+
+  // Só navega pro lobby quando o relatório é dispensado (botão, Esc ou
+  // backdrop — o `Dialog` já chama `onClose` nos três casos), não no
+  // `onSuccess` do fechamento: o admin precisa ver os números antes de sair.
+  function closeReportAndLeave() {
+    setCloseReport(null);
+    router.push('/lobby');
+  }
 
   function handleSitSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -288,6 +307,45 @@ export function SeatGrid({ tableId }: { tableId: string }) {
           />
         </>
       )}
+
+      {/* Relatório de buy-ins/resultado por jogador, mostrado só depois que
+          a mesa fecha de verdade — mesmo idioma visual de `entry-history-list.tsx`
+          (lista + valor colorido por sinal). Uma linha por JOGADOR, já agregada
+          no backend (ver `TableCloseReportItemDto`) — um jogador que fez rebuy
+          nesta mesa não aparece duplicado. */}
+      <Dialog
+        open={closeReport !== null}
+        onClose={closeReportAndLeave}
+        title="Mesa fechada"
+        className="max-w-md"
+        footer={
+          <Button size="sm" onClick={closeReportAndLeave}>
+            Fechar
+          </Button>
+        }
+      >
+        <ul className="divide-y divide-border">
+          {closeReport?.map((player) => (
+            <li key={player.userId} className="flex items-center justify-between gap-3 py-2">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-foreground">{player.userName}</p>
+                <p className="text-xs text-muted">
+                  Buy-in {formatMoneySafe(player.totalBuyIn)} · Cash-out{' '}
+                  {formatMoneySafe(player.totalCashOut)}
+                </p>
+              </div>
+              <span
+                className={cn(
+                  'font-ledger font-semibold',
+                  player.netResult.startsWith('-') ? 'text-danger' : 'text-success',
+                )}
+              >
+                {formatMoneySafe(player.netResult)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </Dialog>
 
       {/* Elipse de feltro (decorativa) + assentos ao redor, em sm:+. Em
           telas estreitas os assentos ficam em fluxo normal (lista), o

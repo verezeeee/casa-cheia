@@ -1,4 +1,9 @@
-import type { PaginatedResponse, TableSeatDto, TableSummaryDto } from '@poker-system/shared';
+import type {
+  PaginatedResponse,
+  TableCloseResultDto,
+  TableSeatDto,
+  TableSummaryDto,
+} from '@poker-system/shared';
 import { httpClient } from '../http-client';
 import { getCurrentClubeId } from './club-context';
 import type {
@@ -108,9 +113,9 @@ export function recordMovement(
   return httpClient.post<TableSeatDto>(TABLE_PATHS.movements(tableId, sessionId), input);
 }
 
-/** ADMIN. Faz cash-out de todo mundo sentado e fecha a mesa. */
-export function closeTable(tableId: string): Promise<TableSummaryDto> {
-  return httpClient.post<TableSummaryDto>(TABLE_PATHS.close(tableId));
+/** ADMIN. Faz cash-out de todo mundo sentado, fecha a mesa e devolve o relatório de buy-ins por jogador. */
+export function closeTable(tableId: string): Promise<TableCloseResultDto> {
+  return httpClient.post<TableCloseResultDto>(TABLE_PATHS.close(tableId));
 }
 
 export const tableApi = {

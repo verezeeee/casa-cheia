@@ -29,8 +29,13 @@ jest.mock('@/components/providers/session-provider', () => ({
   useSession: jest.fn(),
 }));
 
+// Referência estável (não um `jest.fn()` novo por render) — precisa disso pra
+// asserir depois se/quando a navegação pro lobby foi disparada (ver testes
+// do relatório de fechamento, que verificam que NÃO navega antes do modal
+// fechar).
+const mockPush = jest.fn();
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: jest.fn() }),
+  useRouter: () => ({ push: mockPush }),
 }));
 
 const mockedUseSession = jest.mocked(useSession);
@@ -76,7 +81,7 @@ describe('SeatGrid', () => {
   });
 
   afterEach(() => {
-    jest.resetAllMocks();
+    jest.resetAllMocks(); // já cobre `mockPush`, que também é um `jest.fn()`
   });
 
   it('senta em um assento vago (buy-in)', async () => {
@@ -223,7 +228,8 @@ describe('SeatGrid', () => {
       refreshClubes: jest.fn(),
     });
     (tableApi.getSeats as jest.Mock).mockResolvedValue([VACANT]);
-    (tableApi.closeTable as jest.Mock).mockResolvedValue({});
+    // Mesa vazia (sem `players`) — sem relatório pra mostrar, navega direto.
+    (tableApi.closeTable as jest.Mock).mockResolvedValue({ table: {}, players: [] });
 
     renderWithClient(<SeatGrid tableId="table-1" />);
     await waitFor(() => expect(screen.getByText('Fechar mesa')).toBeInTheDocument());
@@ -233,6 +239,40 @@ describe('SeatGrid', () => {
     fireEvent.click(screen.getByText('Sim, fechar mesa'));
 
     await waitFor(() => expect(tableApi.closeTable).toHaveBeenCalledWith('table-1'));
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/lobby'));
+  });
+
+  it('mostra o relatório de buy-ins ao fechar a mesa com jogadores, e só navega ao dispensá-lo', async () => {
+    mockedUseSession.mockReturnValue(ADMIN_SESSION);
+    (tableApi.getSeats as jest.Mock).mockResolvedValue([VACANT]);
+    (tableApi.closeTable as jest.Mock).mockResolvedValue({
+      table: {},
+      players: [
+        {
+          userId: 'user-1',
+          userName: 'Jogador',
+          totalBuyIn: '100.00',
+          totalCashOut: '150.00',
+          currentStack: '0.00',
+          netResult: '50.00',
+        },
+      ],
+    });
+
+    renderWithClient(<SeatGrid tableId="table-1" />);
+    await waitFor(() => expect(screen.getByText('Fechar mesa')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Fechar mesa'));
+    await waitFor(() => expect(screen.getByText('Sim, fechar mesa')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Sim, fechar mesa'));
+
+    await waitFor(() => expect(screen.getByText('Mesa fechada')).toBeInTheDocument());
+    expect(screen.getByText('Jogador')).toBeInTheDocument();
+    expect(screen.getByText('R$ 50,00')).toBeInTheDocument();
+    // Não navega enquanto o admin ainda está vendo o relatório.
+    expect(mockPush).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fechar' }));
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/lobby'));
   });
 
   it('não mostra "Fechar mesa" numa mesa já fechada, mesmo pro ADMIN', async () => {

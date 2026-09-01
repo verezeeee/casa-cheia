@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type {
   PaginatedResponse,
+  TableCloseResultDto,
   TableSeatDto,
   TableSummaryDto,
 } from '@poker-system/shared';
@@ -21,7 +22,12 @@ import type { CreateTableDto } from './dto/create-table.dto';
 import type { RecordMovementDto } from './dto/record-movement.dto';
 import type { SitAtTableDto } from './dto/sit-at-table.dto';
 import type { SitGuestAtTableDto } from './dto/sit-guest-at-table.dto';
-import { toSeatDto, toTableSeats, toTableSummaryDto } from './table.mappers';
+import {
+  toSeatDto,
+  toTableCloseReport,
+  toTableSeats,
+  toTableSummaryDto,
+} from './table.mappers';
 
 /** Senha descartável do convidado: nunca loga, só precisa satisfazer o hash. Mesmo formato de `ClubService.generateTemporaryPassword`. */
 function generateThrowawayPassword(): string {
@@ -608,10 +614,21 @@ export class TableService {
 
   /**
    * Fecha a mesa: faz cash-out de todas as sessões ativas (devolve o stack
-   * para a wallet de cada jogador, mesmo lançamento usado no cash-out normal)
-   * e marca a mesa como CLOSED. Idempotente — mesa já fechada só retorna.
+   * para a wallet de cada jogador, mesmo lançamento usado no cash-out normal),
+   * marca a mesa como CLOSED e devolve o relatório de buy-ins por jogador
+   * (agregado de TODAS as sessões da mesa, não só as fechadas agora — ver
+   * `toTableCloseReport`). Idempotente — mesa já fechada só refaz o relatório.
+   *
+   * Corrida pré-existente, não corrigida aqui: `sitAtTable` só checa
+   * `status === 'OPEN'` uma vez no início da request, sem lock cobrindo este
+   * método inteiro — uma sessão criada bem no meio do fechamento pode
+   * escapar do loop de cash-out abaixo. Por isso a fórmula do relatório
+   * inclui `currentStack` em vez de assumir que é sempre 0 pós-fechamento.
    */
-  async closeTable(clubeId: string, tableId: string): Promise<TableSummaryDto> {
+  async closeTable(
+    clubeId: string,
+    tableId: string,
+  ): Promise<TableCloseResultDto> {
     const table = await this.prisma.table.findUnique({
       where: { id: tableId },
     });
@@ -638,11 +655,19 @@ export class TableService {
       });
     }
 
-    return toTableSummaryDto({
-      ...table,
-      status: 'CLOSED',
-      _count: { sessions: 0 },
+    const sessions = await this.prisma.tableSession.findMany({
+      where: { tableId },
+      include: { user: { select: { id: true, name: true } } },
     });
+
+    return {
+      table: toTableSummaryDto({
+        ...table,
+        status: 'CLOSED',
+        _count: { sessions: 0 },
+      }),
+      players: toTableCloseReport(sessions),
+    };
   }
 
   /** Registra HAND_RESULT/ADJUSTMENT — NUNCA cruza a wallet (ver StackMovementReason em table.prisma). */

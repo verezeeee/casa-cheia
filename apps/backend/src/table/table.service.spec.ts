@@ -411,10 +411,22 @@ describe('TableService', () => {
   });
 
   describe('closeTable', () => {
-    it('faz cash-out de todas as sessões ativas e marca a mesa como CLOSED', async () => {
+    it('faz cash-out de todas as sessões ativas, marca a mesa como CLOSED e devolve o relatório', async () => {
       const { service, prisma, walletService } = buildService();
       prisma.table.findUnique.mockResolvedValue({ ...TABLE, status: 'OPEN' });
-      prisma.tableSession.findMany.mockResolvedValue([{ id: 'session-1' }]);
+      prisma.tableSession.findMany
+        // pré-loop: sessões ACTIVE a fechar
+        .mockResolvedValueOnce([{ id: 'session-1' }])
+        // pós-loop: todas as sessões da mesa, pro relatório
+        .mockResolvedValueOnce([
+          {
+            userId: 'user-1',
+            totalBuyIn: new Prisma.Decimal('80.00'),
+            totalCashOut: new Prisma.Decimal('80.00'),
+            currentStack: new Prisma.Decimal('0'),
+            user: { id: 'user-1', name: 'Jogador' },
+          },
+        ]);
       prisma.walletTransaction.findUnique.mockResolvedValue(null);
       prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
       prisma.tableSession.findUnique.mockResolvedValue({
@@ -433,10 +445,15 @@ describe('TableService', () => {
 
       const result = await service.closeTable(CLUBE_ID, 'table-1');
 
-      expect(prisma.tableSession.findMany).toHaveBeenCalledWith(
+      expect(prisma.tableSession.findMany).toHaveBeenNthCalledWith(
+        1,
         expect.objectContaining({
           where: { tableId: 'table-1', status: 'ACTIVE' },
         }),
+      );
+      expect(prisma.tableSession.findMany).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ where: { tableId: 'table-1' } }),
       );
       expect(walletService.applyLedgerEntry).toHaveBeenCalledWith(
         prisma.tx,
@@ -447,7 +464,61 @@ describe('TableService', () => {
         where: { id: 'table-1' },
         data: { status: 'CLOSED' },
       });
-      expect(result.status).toBe('CLOSED');
+      expect(result.table.status).toBe('CLOSED');
+      expect(result.players).toEqual([
+        {
+          userId: 'user-1',
+          userName: 'Jogador',
+          totalBuyIn: '80.00',
+          totalCashOut: '80.00',
+          currentStack: '0.00',
+          netResult: '0.00',
+        },
+      ]);
+    });
+
+    it('agrega sessões repetidas do MESMO jogador (rebuy) numa única linha do relatório', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({ ...TABLE, status: 'CLOSED' });
+      prisma.tableSession.findMany.mockResolvedValue([
+        {
+          userId: 'user-1',
+          totalBuyIn: new Prisma.Decimal('50.00'),
+          totalCashOut: new Prisma.Decimal('20.00'),
+          currentStack: new Prisma.Decimal('0'),
+          user: { id: 'user-1', name: 'Jogador' },
+        },
+        {
+          userId: 'user-1',
+          totalBuyIn: new Prisma.Decimal('30.00'),
+          totalCashOut: new Prisma.Decimal('40.00'),
+          currentStack: new Prisma.Decimal('0'),
+          user: { id: 'user-1', name: 'Jogador' },
+        },
+      ]);
+
+      const result = await service.closeTable(CLUBE_ID, 'table-1');
+
+      expect(result.players).toEqual([
+        {
+          userId: 'user-1',
+          userName: 'Jogador',
+          totalBuyIn: '80.00',
+          totalCashOut: '60.00',
+          currentStack: '0.00',
+          netResult: '-20.00',
+        },
+      ]);
+    });
+
+    it('mesa fechada sem ninguém ter sentado devolve relatório vazio', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({ ...TABLE, status: 'CLOSED' });
+      prisma.tableSession.findMany.mockResolvedValue([]);
+
+      const result = await service.closeTable(CLUBE_ID, 'table-1');
+
+      expect(result.players).toEqual([]);
     });
 
     it('lança 404 se a mesa é de outro clube', async () => {
@@ -462,19 +533,22 @@ describe('TableService', () => {
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('é idempotente: mesa já fechada não refaz cash-out', async () => {
+    it('é idempotente: mesa já fechada não refaz cash-out (mas ainda monta o relatório)', async () => {
       const { service, prisma, walletService } = buildService();
       prisma.table.findUnique.mockResolvedValue({
         ...TABLE,
         status: 'CLOSED',
       });
+      prisma.tableSession.findMany.mockResolvedValue([]);
 
       const result = await service.closeTable(CLUBE_ID, 'table-1');
 
-      expect(prisma.tableSession.findMany).not.toHaveBeenCalled();
+      expect(prisma.tableSession.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { tableId: 'table-1' } }),
+      );
       expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
       expect(prisma.table.update).not.toHaveBeenCalled();
-      expect(result.status).toBe('CLOSED');
+      expect(result.table.status).toBe('CLOSED');
     });
   });
 
