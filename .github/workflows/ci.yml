@@ -208,6 +208,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
@@ -217,6 +229,30 @@ jobs:
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_BACKEND_PROJECT_ID }}
+
+      # ACHADO: nada neste pipeline rodava migration em produção — o
+      # `migrate deploy` do job `test` acima só toca o Postgres descartável
+      # do CI (`localhost`), nunca o banco real. Resultado: toda migration
+      # mergeada em `main` ficava pendente em produção até alguém notar e
+      # rodar `prisma migrate deploy` manualmente. Roda ANTES do deploy: o
+      # código novo que depende de coluna/tabela nova só pode ir ao ar
+      # depois que o schema já existe.
+      #
+      # `DATABASE_URL`/`DIRECT_URL` são "Sensitive" na Vercel (por design,
+      # não voltam em `vercel pull` pra ninguém, nem com token de conta) —
+      # por isso migra com `DATABASE_URL_UNPOOLED` (Neon, não sensível): é a
+      # conexão DIRETA que `prisma migrate deploy` precisa (o pooler em modo
+      # transação, usado pela função em runtime, não sustenta os advisory
+      # locks que a migration toma).
+      - name: Run production database migrations
+        run: |
+          set -a
+          source .vercel/.env.production.local
+          set +a
+          export DATABASE_URL="$DATABASE_URL_UNPOOLED"
+          export DIRECT_URL="$DATABASE_URL_UNPOOLED"
+          pnpm --filter @poker-system/backend exec prisma migrate deploy
+        working-directory: apps/backend
 
       - name: Build via Vercel
         run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
