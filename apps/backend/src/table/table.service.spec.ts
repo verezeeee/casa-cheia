@@ -410,6 +410,190 @@ describe('TableService', () => {
     });
   });
 
+  describe('rebuy', () => {
+    it('rejeita mesa de outro clube (404)', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        clubeId: 'outro-clube',
+      });
+
+      await expect(
+        service.rebuy(
+          'admin-1',
+          CLUBE_ID,
+          'table-1',
+          'session-1',
+          { buyInAmount: '50.00' },
+          'idem-3',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejeita buy-in fora da faixa da mesa', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue(TABLE);
+
+      await expect(
+        service.rebuy(
+          'admin-1',
+          CLUBE_ID,
+          'table-1',
+          'session-1',
+          { buyInAmount: '5.00' },
+          'idem-3',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejeita sessão já encerrada', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue(TABLE);
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        clubeId: CLUBE_ID,
+        userId: 'user-1',
+        status: 'CASHED_OUT',
+        seatNumber: 3,
+        currentStack: new Prisma.Decimal('0'),
+        version: 1,
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+
+      await expect(
+        service.rebuy(
+          'admin-1',
+          CLUBE_ID,
+          'table-1',
+          'session-1',
+          { buyInAmount: '50.00' },
+          'idem-3',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('debita a wallet, soma ao stack/totalBuyIn existentes e registra o StackMovement de BUY_IN', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.table.findUnique.mockResolvedValue(TABLE);
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        clubeId: CLUBE_ID,
+        userId: 'user-1',
+        status: 'ACTIVE',
+        seatNumber: 3,
+        currentStack: new Prisma.Decimal('0'),
+        version: 2,
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-4' });
+      prisma.tx.tableSession.updateMany.mockResolvedValue({ count: 1 });
+
+      const seat = await service.rebuy(
+        'admin-1',
+        CLUBE_ID,
+        'table-1',
+        'session-1',
+        { buyInAmount: '50.00' },
+        'idem-3',
+      );
+
+      expect(walletService.applyLedgerEntry).toHaveBeenCalledWith(
+        prisma.tx,
+        WALLET.id,
+        expect.objectContaining({ type: 'TABLE_BUY_IN' }),
+      );
+      expect(prisma.tx.tableSession.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'session-1', version: 2 },
+          data: expect.objectContaining({
+            totalBuyIn: { increment: expect.anything() as unknown },
+            version: { increment: 1 },
+          }) as unknown,
+        }),
+      );
+      expect(prisma.tx.stackMovement.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            reason: 'BUY_IN',
+            walletTransactionId: 'wtxn-4',
+            createdById: 'admin-1',
+          }),
+        }),
+      );
+      expect(seat).toMatchObject({ seatNumber: 3, currentStack: '50.00' });
+    });
+
+    it('tenta de novo quando perde o optimistic lock (version mudou)', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.table.findUnique.mockResolvedValue(TABLE);
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.wallet.findUniqueOrThrow.mockResolvedValue(WALLET);
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        clubeId: CLUBE_ID,
+        userId: 'user-1',
+        status: 'ACTIVE',
+        seatNumber: 3,
+        currentStack: new Prisma.Decimal('0'),
+        version: 2,
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-5' });
+      prisma.tx.tableSession.updateMany
+        .mockResolvedValueOnce({ count: 0 })
+        .mockResolvedValueOnce({ count: 1 });
+
+      const seat = await service.rebuy(
+        'admin-1',
+        CLUBE_ID,
+        'table-1',
+        'session-1',
+        { buyInAmount: '50.00' },
+        'idem-3',
+      );
+
+      expect(prisma.tx.tableSession.updateMany).toHaveBeenCalledTimes(2);
+      expect(seat).toMatchObject({ seatNumber: 3, currentStack: '50.00' });
+    });
+
+    it('idempotente: transação já registrada não debita a wallet de novo', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.table.findUnique.mockResolvedValue(TABLE);
+      prisma.walletTransaction.findUnique.mockResolvedValue({
+        id: 'wtxn-existente',
+      });
+      prisma.tableSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        tableId: 'table-1',
+        clubeId: CLUBE_ID,
+        userId: 'user-1',
+        status: 'ACTIVE',
+        seatNumber: 3,
+        currentStack: new Prisma.Decimal('50.00'),
+        version: 3,
+        user: { id: 'user-1', name: 'Jogador' },
+      });
+
+      const seat = await service.rebuy(
+        'admin-1',
+        CLUBE_ID,
+        'table-1',
+        'session-1',
+        { buyInAmount: '50.00' },
+        'idem-3',
+      );
+
+      expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
+      expect(seat).toMatchObject({ seatNumber: 3, currentStack: '50.00' });
+    });
+  });
+
   describe('closeTable', () => {
     it('faz cash-out de todas as sessões ativas, marca a mesa como CLOSED e devolve o relatório', async () => {
       const { service, prisma, walletService } = buildService();

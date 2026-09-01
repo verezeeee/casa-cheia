@@ -24,6 +24,7 @@ import { ClubeMembershipGuard } from '../club/guards/clube-membership.guard';
 import { requireIdempotencyKey } from '../common/http/require-idempotency-key';
 import { CreateTableDto } from './dto/create-table.dto';
 import { ListTablesQueryDto } from './dto/list-tables-query.dto';
+import { RebuyDto } from './dto/rebuy.dto';
 import { RecordMovementDto } from './dto/record-movement.dto';
 import { SitAtTableDto } from './dto/sit-at-table.dto';
 import { SitGuestAtTableDto } from './dto/sit-guest-at-table.dto';
@@ -173,6 +174,29 @@ export class TableController {
       clubeId,
       tableId,
       sessionId,
+      idempotencyKey,
+    );
+  }
+
+  /** ADMIN registrando um novo buy-in numa sessão já sentada (ver `TableService.rebuy`). */
+  @Post(':id/sessions/:sessionId/rebuy')
+  @UseGuards(ClubeMembershipGuard, RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async rebuy(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('clubeId') clubeId: string,
+    @Param('id') tableId: string,
+    @Param('sessionId') sessionId: string,
+    @Body() dto: RebuyDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ): Promise<TableSeatDto> {
+    requireIdempotencyKey(idempotencyKey);
+    return this.tableService.rebuy(
+      user.id,
+      clubeId,
+      tableId,
+      sessionId,
+      dto,
       idempotencyKey,
     );
   }

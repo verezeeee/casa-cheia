@@ -19,6 +19,7 @@ import { PasswordHasherService } from '../common/crypto/password-hasher.service'
 import { PrismaService } from '../prisma/prisma.service';
 import { WalletService } from '../wallet/wallet.service';
 import type { CreateTableDto } from './dto/create-table.dto';
+import type { RebuyDto } from './dto/rebuy.dto';
 import type { RecordMovementDto } from './dto/record-movement.dto';
 import type { SitAtTableDto } from './dto/sit-at-table.dto';
 import type { SitGuestAtTableDto } from './dto/sit-guest-at-table.dto';
@@ -526,6 +527,115 @@ export class TableService {
       sessionId,
       `admin-cashout:${idempotencyKey}`,
       adminId,
+    );
+  }
+
+  /**
+   * ADMIN registrando um NOVO buy-in numa sessão JÁ SENTADA (ex.: jogador
+   * perdeu todas as fichas mas continua na mesa) — mesmo lançamento de
+   * `sitAtTable` (debita a wallet, `StackMovement` BUY_IN, mesma faixa
+   * `minBuyIn`/`maxBuyIn` da mesa), só que soma ao stack/totalBuyIn da
+   * sessão existente em vez de criar uma sessão nova. Mesmo padrão de retry
+   * + optimistic lock de `doCashOut`, porque também cruza a wallet dentro
+   * de uma corrida possível com cash-out/ajuste concorrentes na mesma
+   * sessão.
+   */
+  async rebuy(
+    adminId: string,
+    clubeId: string,
+    tableId: string,
+    sessionId: string,
+    dto: RebuyDto,
+    idempotencyKey: string,
+  ): Promise<TableSeatDto> {
+    const table = await this.prisma.table.findUnique({
+      where: { id: tableId },
+    });
+    if (!table || table.clubeId !== clubeId) {
+      throw new NotFoundException('Mesa não encontrada.');
+    }
+
+    const buyIn = new Prisma.Decimal(dto.buyInAmount);
+    if (buyIn.lessThan(table.minBuyIn) || buyIn.greaterThan(table.maxBuyIn)) {
+      throw new BadRequestException(
+        `Buy-in deve estar entre ${table.minBuyIn.toFixed(2)} e ${table.maxBuyIn.toFixed(2)}.`,
+      );
+    }
+
+    const ledgerKey = `rebuy:${idempotencyKey}`;
+    const existingTxn = await this.prisma.walletTransaction.findUnique({
+      where: { idempotencyKey: ledgerKey },
+    });
+    if (existingTxn) {
+      return toSeatDto(await this.mustGetSession(clubeId, tableId, sessionId));
+    }
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const fresh = await this.mustGetSession(clubeId, tableId, sessionId);
+      if (fresh.status !== 'ACTIVE') {
+        throw new BadRequestException('Sessão já encerrada.');
+      }
+
+      const wallet = await this.prisma.wallet.findUniqueOrThrow({
+        where: { userId_clubeId: { userId: fresh.userId, clubeId } },
+      });
+      const newStack = fresh.currentStack.add(buyIn);
+
+      try {
+        const result = await this.prisma.withClube(clubeId, async (tx) => {
+          const walletTxn = await this.walletService.applyLedgerEntry(
+            tx,
+            wallet.id,
+            {
+              type: 'TABLE_BUY_IN',
+              amount: buyIn.negated(),
+              idempotencyKey: ledgerKey,
+              description: 'Buy-in adicional em mesa',
+              tableSessionId: sessionId,
+            },
+          );
+
+          const updateResult = await tx.tableSession.updateMany({
+            where: { id: sessionId, version: fresh.version },
+            data: {
+              currentStack: newStack,
+              totalBuyIn: { increment: buyIn },
+              version: { increment: 1 },
+            },
+          });
+          if (updateResult.count === 0) {
+            // Optimistic lock perdido (stack mudou entre a leitura e aqui) — aborta a transação e tenta de novo.
+            throw new OptimisticLockError();
+          }
+
+          await tx.stackMovement.create({
+            data: {
+              tableSessionId: sessionId,
+              amount: buyIn,
+              reason: 'BUY_IN',
+              stackAfter: newStack,
+              walletTransactionId: walletTxn.id,
+              createdById: adminId,
+            },
+          });
+
+          return toSeatDto({
+            id: sessionId,
+            seatNumber: fresh.seatNumber,
+            currentStack: newStack,
+            user: { id: fresh.userId, name: fresh.userName },
+          });
+        });
+
+        return result;
+      } catch (error) {
+        if (error instanceof OptimisticLockError) continue;
+        throw error;
+      }
+    }
+
+    throw new ConflictException(
+      'Muita concorrência nesta sessão — tente novamente.',
     );
   }
 
