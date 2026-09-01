@@ -17,6 +17,16 @@ import { TokenService } from './token.service';
 const DUMMY_PASSWORD_HASH =
   '$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
+/**
+ * Janela de graça pra reapresentar o token IMEDIATAMENTE anterior depois de
+ * uma rotação — cobre a corrida legítima de duas requisições concorrentes
+ * com o MESMO refresh token (ex.: duas abas abertas, ou a hidratação de uma
+ * aba nova correndo em paralelo com um refresh que outra parte da aplicação
+ * já disparou): a perdedora do CAS em `refresh()` não é reuso malicioso, só
+ * perdeu a corrida por uma rotação que já tinha acabado de acontecer.
+ */
+const REFRESH_REUSE_GRACE_MS = 10_000;
+
 export interface LoginMetadata {
   userAgent?: string;
   ip?: string;
@@ -94,8 +104,11 @@ export class AuthService {
 
   /**
    * Roda o refresh token. Se o token apresentado já estiver revogado, é
-   * reuso/roubo: a família inteira é revogada (ver `RefreshToken` em
-   * identity.prisma) e a chamada falha.
+   * reuso — dentro de uma janela de graça curta desde uma rotação normal,
+   * trata como corrida legítima entre requisições concorrentes (ver
+   * `REFRESH_REUSE_GRACE_MS`); fora dela (ou revogado por logout/nuke
+   * anterior), é reuso/roubo de verdade: a família inteira é revogada (ver
+   * `RefreshToken` em identity.prisma) e a chamada falha.
    */
   async refresh(rawToken: string, meta: LoginMetadata): Promise<SessionIssued> {
     let subjectId: string;
@@ -143,24 +156,42 @@ export class AuthService {
     }
 
     if (won.count === 0) {
-      // Perdemos o CAS acima: o token já estava revogado (reuso/roubo real,
-      // ou perdemos a corrida contra outra chamada de refresh legítima). Em
-      // ambos os casos a família inteira é derrubada — não dá pra distinguir
-      // com segurança, e continuar seria arriscar sessão sequestrada.
+      // Perdemos o CAS acima: o token já estava revogado. `replacedByTokenId`
+      // só é setado por uma ROTAÇÃO normal (ver `issueSession`) — nunca por
+      // logout explícito nem por um nuke de família anterior. Combinado com
+      // uma janela de graça curta, isso distingue a corrida legítima
+      // (revogado por rotação HÁ POUCO) do reuso de verdade (revogado por
+      // logout, por um nuke anterior, ou uma rotação antiga demais pra ser
+      // corrida — sessão mesmo comprometida).
+      const perdeuCorridaLegitima =
+        stored.replacedByTokenId !== null &&
+        stored.revokedAt !== null &&
+        Date.now() - stored.revokedAt.getTime() <= REFRESH_REUSE_GRACE_MS;
+
+      if (perdeuCorridaLegitima) {
+        // Emite uma sessão nova pra esta chamada também, na mesma família —
+        // sem mexer no token que já venceu a rotação nem derrubar ninguém.
+        // Cada aba/requisição concorrente sai com seu próprio token válido.
+        const user = await this.mustGetActiveUser(stored.userId);
+        return this.issueSession(user, stored.familyId, meta);
+      }
+
       await this.revokeFamily(stored.familyId);
       throw new UnauthorizedException(
         'Refresh token já utilizado — sessão comprometida, todos os dispositivos foram desconectados.',
       );
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: stored.userId },
-    });
+    const user = await this.mustGetActiveUser(stored.userId);
+    return this.issueSession(user, stored.familyId, meta, stored);
+  }
+
+  private async mustGetActiveUser(userId: string): Promise<User> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Usuário inativo.');
     }
-
-    return this.issueSession(user, stored.familyId, meta, stored);
+    return user;
   }
 
   /** Revoga o refresh token corrente. Idempotente: token ausente/já revogado não é erro. */

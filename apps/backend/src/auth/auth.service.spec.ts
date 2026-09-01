@@ -239,6 +239,61 @@ describe('AuthService', () => {
       });
     });
 
+    it('dentro da janela de graça: token revogado por ROTAÇÃO há pouco não derruba a família, emite sessão nova', async () => {
+      const { service, prisma, tokenService } = buildService();
+      tokenService.verifyRefreshToken.mockReturnValue({
+        sub: USER.id,
+        email: USER.email,
+        familyId: REFRESH_ROW.familyId,
+        jti: 'jti-x',
+        iat: 0,
+        exp: 0,
+      });
+      prisma.refreshToken.updateMany.mockResolvedValueOnce({ count: 0 }); // perdeu o CAS
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        ...REFRESH_ROW,
+        revokedAt: new Date(Date.now() - 1_000), // revogado 1s atrás
+        replacedByTokenId: 'successor-row-id', // revogado por ROTAÇÃO, não logout/nuke
+      });
+      prisma.user.findUnique.mockResolvedValue(USER);
+      prisma.tx.refreshToken.create.mockResolvedValue({ id: 'new-row-id' });
+
+      const result = await service.refresh('raw-refresh-token', {});
+
+      expect(result.tokens.accessToken).toBe('access-token');
+      // Não derruba a família: só a checagem de CAS (tokenHash) foi chamada,
+      // nunca o updateMany genérico por familyId do `revokeFamily`.
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledTimes(1);
+      // Não revoga o "sucessor": `issueSession` é chamado sem `previous`.
+      expect(prisma.tx.refreshToken.update).not.toHaveBeenCalled();
+    });
+
+    it('fora da janela de graça: token revogado por rotação antiga derruba a família (reuso de verdade)', async () => {
+      const { service, prisma, tokenService } = buildService();
+      tokenService.verifyRefreshToken.mockReturnValue({
+        sub: USER.id,
+        email: USER.email,
+        familyId: REFRESH_ROW.familyId,
+        jti: 'jti-x',
+        iat: 0,
+        exp: 0,
+      });
+      prisma.refreshToken.updateMany.mockResolvedValueOnce({ count: 0 });
+      prisma.refreshToken.findUnique.mockResolvedValue({
+        ...REFRESH_ROW,
+        revokedAt: new Date(Date.now() - 60_000), // revogado há 60s — fora da janela
+        replacedByTokenId: 'successor-row-id',
+      });
+
+      await expect(
+        service.refresh('raw-refresh-token', {}),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { familyId: REFRESH_ROW.familyId, revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
+    });
+
     it('rotaciona com sucesso: revoga o token anterior e emite um novo', async () => {
       const { service, prisma, tokenService } = buildService();
       tokenService.verifyRefreshToken.mockReturnValue({

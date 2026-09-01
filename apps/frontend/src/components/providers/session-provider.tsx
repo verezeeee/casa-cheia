@@ -2,7 +2,15 @@
 
 import type { ClubeRole, ClubeSummaryDto, SessionUser } from '@poker-system/shared';
 import { useQueryClient } from '@tanstack/react-query';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { authApi } from '@/lib/api/auth';
 import { clubApi, setCurrentClubeId } from '@/lib/api/club-context';
 import type { LoginRequest } from '@/lib/api/types';
@@ -86,6 +94,15 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [currentClubeId, setCurrentClubeIdState] = useState<string | null>(null);
   const [status, setStatus] = useState<SessionStatus>('loading');
 
+  // Guarda contra respostas atrasadas de uma tentativa de autenticação
+  // ANTIGA sobrescrevendo o resultado de uma mais nova — ver `login` e o
+  // `useEffect` de hidratação abaixo. Ref (não state): só precisa ser lido
+  // de forma síncrona dentro dos callbacks assíncronos, nunca dispara
+  // re-render sozinho.
+  const attemptRef = useRef(0);
+  const beginAttempt = useCallback(() => ++attemptRef.current, []);
+  const isCurrentAttempt = useCallback((attempt: number) => attemptRef.current === attempt, []);
+
   // Derivado, não estado próprio: papel do usuário no clube atual. Guardar
   // separado arriscaria os dois dessincronizarem (ex. trocar de clube e
   // esquecer de atualizar o papel junto).
@@ -112,16 +129,31 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    const attempt = beginAttempt();
+
     // Registrado ANTES da chamada de hidratação abaixo (mesmo efeito, ordem
     // síncrona) para que o primeiro 401 de `me()` já encontre o handler.
-    // Vale para qualquer 401 futuro da aplicação inteira, não só o boot.
+    // Vale para qualquer 401 futuro da aplicação inteira, não só o boot —
+    // por isso captura o `attempt` corrente NO MOMENTO em que É CHAMADO (não
+    // o `attempt` da hidratação): pode disparar bem depois do mount, em
+    // resposta a qualquer 401 posterior.
     setUnauthorizedHandler(async () => {
+      const attemptAtCall = attemptRef.current;
       try {
         const { accessToken } = await authApi.refresh();
-        setAccessToken(accessToken);
+        // Só aplica se nada mais recente aconteceu enquanto o refresh estava
+        // em voo (ex.: um `login()` explícito que já terminou) — sem essa
+        // checagem, um refresh atrasado usando um cookie velho/já rotacionado
+        // podia derrubar (`clearSession`) uma sessão nova recém-autenticada,
+        // ou sobrescrever o access token dela com um antigo.
+        if (isCurrentAttempt(attemptAtCall)) {
+          setAccessToken(accessToken);
+        }
         return accessToken;
       } catch {
-        clearSession();
+        if (isCurrentAttempt(attemptAtCall)) {
+          clearSession();
+        }
         return null;
       }
     });
@@ -129,29 +161,46 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     authApi
       .me()
       .then(async (sessionUser) => {
-        applyClubes(await resolveClubes());
+        const resolved = await resolveClubes();
+        if (!isCurrentAttempt(attempt)) return;
+        applyClubes(resolved);
         setUser(sessionUser);
         setStatus('authenticated');
       })
       .catch(() => {
+        if (!isCurrentAttempt(attempt)) return;
         // Se a renovação (handler acima) já rodou, `clearSession` já marcou
         // `unauthenticated`; isso cobre também erro de rede/sem sessão.
         setStatus((current) => (current === 'loading' ? 'unauthenticated' : current));
       });
 
     return () => setUnauthorizedHandler(null);
-  }, [applyClubes, clearSession]);
+  }, [applyClubes, beginAttempt, clearSession, isCurrentAttempt]);
 
   const login = useCallback(
     async (input: LoginRequest) => {
+      // Invalida qualquer tentativa de hidratação/refresh ainda em voo — a
+      // partir daqui, só o resultado DESTE login pode escrever no estado de
+      // sessão. Sem isso, uma resposta atrasada da hidratação (ex.: um
+      // refresh usando um cookie já expirado) podia chegar DEPOIS deste
+      // login ter dado certo e jogar o usuário de volta pro /login mesmo com
+      // credenciais corretas.
+      const attempt = beginAttempt();
       const { accessToken } = await authApi.login(input);
+      // Mesma guarda no caso raro de duplo-clique disparando dois `login()`
+      // concorrentes: só o mais recente escreve o access token do módulo
+      // HTTP, senão a resposta do mais antigo podia chegar depois e
+      // sobrescrever o token válido do mais novo.
+      if (!isCurrentAttempt(attempt)) return;
       setAccessToken(accessToken);
       const sessionUser = await authApi.me();
-      applyClubes(await resolveClubes());
+      const resolved = await resolveClubes();
+      if (!isCurrentAttempt(attempt)) return;
+      applyClubes(resolved);
       setUser(sessionUser);
       setStatus('authenticated');
     },
-    [applyClubes],
+    [applyClubes, beginAttempt, isCurrentAttempt],
   );
 
   const logout = useCallback(async () => {
