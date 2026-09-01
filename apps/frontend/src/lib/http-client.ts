@@ -52,6 +52,27 @@ export function setUnauthorizedHandler(handler: (() => Promise<string | null>) |
 }
 
 /**
+ * Promise do refresh em andamento, se houver. Sem isso, cada request em voo
+ * que toma 401 no mesmo instante (comum: várias queries com polling na
+ * mesma tela) chamaria `unauthorizedHandler()` — e portanto `/auth/refresh`
+ * — em paralelo, todas com o MESMO refresh token ainda não rotacionado. O
+ * backend rotaciona o token a cada chamada e trata reapresentação do token
+ * antigo como reuso/roubo, derrubando a sessão inteira. Compartilhar uma
+ * única promise faz todo 401 concorrente esperar o mesmo refresh em vez de
+ * disparar o seu.
+ */
+let refreshInFlight: Promise<string | null> | null = null;
+
+function getOrCreateRefresh(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = unauthorizedHandler!().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+/**
  * Cliente HTTP centralizado do frontend.
  *
  * Toda chamada ao backend deve passar por aqui - nunca usar `fetch`
@@ -92,7 +113,7 @@ async function request<TResponse>(
 
     if (!response.ok) {
       if (response.status === 401 && !isRetry && !skipAuthRetry && unauthorizedHandler) {
-        const renewedToken = await unauthorizedHandler();
+        const renewedToken = await getOrCreateRefresh();
         if (renewedToken) {
           return request<TResponse>(path, options, true);
         }
