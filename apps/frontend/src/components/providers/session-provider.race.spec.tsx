@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { SessionUser } from '@poker-system/shared';
 import type { ReactNode } from 'react';
 import { clubApi } from '@/lib/api/club-context';
+import { httpClient } from '@/lib/http-client';
 import { SessionProvider, useSession } from './session-provider';
 
 /**
@@ -121,6 +122,81 @@ describe('SessionProvider — corrida hidratação × login (fluxo real de refre
       // Deixa a cadeia de promises da hidratação (refresh -> catch -> me()
       // original rejeitando) drenar antes de checar o estado.
       await Promise.resolve().then().then().then();
+    });
+
+    expect(result.current.status).toBe('authenticated');
+    expect(result.current.user).toEqual(sessionUser);
+  });
+});
+
+describe('SessionProvider — falha transitória do refresh no meio da sessão (fluxo real)', () => {
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_API_URL = API_URL;
+    mockedClubApi.listMyClubes.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.resetAllMocks();
+  });
+
+  it('um refresh que falha por erro de rede/timeout/5xx (não 401) não desloga uma sessão já estabelecida', async () => {
+    let meCallCount = 0;
+    let refreshCallCount = 0;
+    global.fetch = jest.fn((url: unknown) => {
+      const href = String(url);
+      if (href === `${API_URL}/auth/me`) {
+        meCallCount += 1;
+        return Promise.resolve(
+          meCallCount === 1
+            ? jsonResponse(
+                { statusCode: 401, message: 'Não autenticado.', timestamp: '', path: '/auth/me' },
+                401,
+              )
+            : jsonResponse(sessionUser),
+        );
+      }
+      if (href === `${API_URL}/auth/refresh`) {
+        refreshCallCount += 1;
+        // 1ª chamada (hidratação): sucesso normal. 2ª chamada (disparada
+        // pela ação de negócio abaixo, já no meio da sessão): falha
+        // TRANSITÓRIA — o `fetch` em si rejeita (queda de rede/timeout),
+        // não uma resposta HTTP com status. Cold start do backend
+        // serverless / 5xx se comportariam igual (ver `http-client.ts`:
+        // sem `catch` em volta do `fetch`, o erro propaga cru, não vira
+        // `ApiError`).
+        return refreshCallCount === 1
+          ? Promise.resolve(jsonResponse({ accessToken: 'access-token-1', expiresIn: 900 }))
+          : Promise.reject(new TypeError('Failed to fetch'));
+      }
+      if (href === `${API_URL}/business/action`) {
+        // Qualquer ação autenticada comum — sempre 401 aqui só pra forçar
+        // outro refresh (simula o access token ter expirado no meio do uso).
+        return Promise.resolve(
+          jsonResponse(
+            {
+              statusCode: 401,
+              message: 'Não autenticado.',
+              timestamp: '',
+              path: '/business/action',
+            },
+            401,
+          ),
+        );
+      }
+      return Promise.reject(new Error(`fetch não mockado para ${href}`));
+    }) as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useSession(), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe('authenticated'));
+
+    // Ação de negócio comum (ex.: clicar num botão) toma 401 -> tenta
+    // renovar -> a renovação falha por motivo transitório. Sem a correção,
+    // isso derrubava a sessão do mesmo jeito que um refresh token realmente
+    // inválido — exatamente o bug relatado ("às vezes, ao clicar numa ação
+    // ou navegar, meu login é anulado").
+    await act(async () => {
+      await httpClient.get('/business/action').catch(() => undefined);
     });
 
     expect(result.current.status).toBe('authenticated');

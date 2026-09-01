@@ -14,7 +14,7 @@ import {
 import { authApi } from '@/lib/api/auth';
 import { clubApi, setCurrentClubeId } from '@/lib/api/club-context';
 import type { LoginRequest } from '@/lib/api/types';
-import { setAccessToken, setUnauthorizedHandler } from '@/lib/http-client';
+import { ApiError, setAccessToken, setUnauthorizedHandler } from '@/lib/http-client';
 
 /** Onde a escolha de clube do usuário sobrevive a um reload da página. */
 const CURRENT_CLUBE_STORAGE_KEY = 'casa-cheia:currentClubeId';
@@ -150,8 +150,19 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           setAccessToken(accessToken);
         }
         return accessToken;
-      } catch {
-        if (isCurrentAttempt(attemptAtCall)) {
+      } catch (error) {
+        // Só encerra a sessão quando o backend CONFIRMA (401) que o refresh
+        // token não é mais válido. Qualquer outra falha — rede caiu, timeout
+        // de 15s (`http-client.ts`), 5xx/cold start do backend serverless —
+        // é transitória e NÃO significa que a sessão expirou de verdade.
+        // Sem essa distinção, um soluço passageiro ao clicar numa ação no
+        // meio do uso (access token vencido, refresh tenta renovar e esbarra
+        // num timeout/500) derrubava a sessão do mesmo jeito que um refresh
+        // token realmente inválido — a ação em si falha (o chamador original
+        // recebe o 401 dele normalmente), mas o usuário continua logado e
+        // pode simplesmente tentar de novo.
+        const sessionReallyInvalid = error instanceof ApiError && error.statusCode === 401;
+        if (sessionReallyInvalid && isCurrentAttempt(attemptAtCall)) {
           clearSession();
         }
         return null;
