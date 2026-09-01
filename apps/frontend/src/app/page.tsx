@@ -4,7 +4,7 @@ import { Logo } from '@/components/layout/logo';
 import { Reveal, RevealItem } from '@/components/ui';
 
 const FEATURES: Array<{ label: string; description: string }> = [
-  { label: 'Carteira', description: 'Saldo, depósito e saque via PIX, com extrato completo.' },
+  { label: 'Carteira', description: 'Saldo, depósito e saque com extrato completo.' },
   { label: 'Mesas', description: 'Buy-in, cash-out e resultado de mão registrados na hora.' },
   { label: 'Torneios', description: 'Inscrição, eliminação e premiação com um clique.' },
 ];
@@ -34,19 +34,21 @@ export default function Home() {
           </RevealItem>
           <RevealItem as="div">
             <p className="max-w-xl text-lg text-brand-foreground/80">
-              Carteira, PIX, mesas de cash game e torneios — tudo num só lugar, com trilha de
-              auditoria completa de cada centavo que entra ou sai da mesa.
+              Carteira, mesas de cash game e torneios — tudo num só lugar, com trilha de auditoria
+              completa de cada centavo que entra ou sai da mesa.
             </p>
           </RevealItem>
           <RevealItem as="div" className="w-full">
-            <ul className="mt-4 grid w-full gap-6 sm:grid-cols-3">
+            <Reveal as="ul" className="mt-4 grid w-full gap-6 sm:grid-cols-3">
               {FEATURES.map((feature) => (
-                <li key={feature.label} className="ledger-rule">
+                <RevealItem key={feature.label} as="li" className="ledger-rule group">
                   <p className="font-display text-lg font-semibold">{feature.label}</p>
-                  <p className="mt-1 text-sm text-brand-foreground/70">{feature.description}</p>
-                </li>
+                  <p className="mt-1 text-sm text-brand-foreground/70 transition-colors duration-200 group-hover:text-brand-foreground/90">
+                    {feature.description}
+                  </p>
+                </RevealItem>
               ))}
-            </ul>
+            </Reveal>
           </RevealItem>
         </Reveal>
       </main>

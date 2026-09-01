@@ -33,8 +33,8 @@ export function AuthLayout({ children }: { children: ReactNode }) {
             O caixa da sua casa de poker.
           </p>
           <p className="mt-3 text-sm text-brand-foreground/70">
-            Carteira, PIX, mesas de cash game e torneios — tudo com trilha de auditoria completa de
-            cada centavo.
+            Carteira, mesas de cash game e torneios — tudo com trilha de auditoria completa de cada
+            centavo.
           </p>
         </div>
         <p className="relative text-xs text-brand-foreground/50">
