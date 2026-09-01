@@ -224,6 +224,7 @@ describe('AuthService', () => {
         iat: 0,
         exp: 0,
       });
+      prisma.refreshToken.updateMany.mockResolvedValueOnce({ count: 0 }); // perdeu o CAS: já revogado
       prisma.refreshToken.findUnique.mockResolvedValue({
         ...REFRESH_ROW,
         revokedAt: NOW,
@@ -248,6 +249,7 @@ describe('AuthService', () => {
         iat: 0,
         exp: 0,
       });
+      prisma.refreshToken.updateMany.mockResolvedValueOnce({ count: 1 }); // venceu o CAS
       prisma.refreshToken.findUnique.mockResolvedValue(REFRESH_ROW);
       prisma.user.findUnique.mockResolvedValue(USER);
       prisma.tx.refreshToken.create.mockResolvedValue({ id: 'new-row-id' });

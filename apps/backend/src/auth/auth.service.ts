@@ -115,6 +115,21 @@ export class AuthService {
     }
 
     const tokenHash = this.hashService.sha256(rawToken);
+
+    // CAS atômico: revoga o token SOMENTE se ele ainda estiver ativo, na
+    // mesma instrução que faz a checagem. Antes disso era um `findUnique`
+    // seguido de um `if (stored.revokedAt)` separado — a janela entre ler e
+    // escrever permitia que duas chamadas de refresh concorrentes com o
+    // MESMO token (ex.: várias queries com polling tomando 401 ao mesmo
+    // tempo) lessem `revokedAt: null` as duas e seguissem em frente,
+    // corrompendo a cadeia de rotação. Colocar a checagem dentro do próprio
+    // UPDATE fecha essa janela: o banco serializa via lock de linha, e só
+    // uma das chamadas concorrentes "vence" a rotação.
+    const won = await this.prisma.refreshToken.updateMany({
+      where: { tokenHash, userId: subjectId, familyId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
     const stored = await this.prisma.refreshToken.findUnique({
       where: { tokenHash },
     });
@@ -127,7 +142,11 @@ export class AuthService {
       throw new UnauthorizedException('Sessão não encontrada.');
     }
 
-    if (stored.revokedAt) {
+    if (won.count === 0) {
+      // Perdemos o CAS acima: o token já estava revogado (reuso/roubo real,
+      // ou perdemos a corrida contra outra chamada de refresh legítima). Em
+      // ambos os casos a família inteira é derrubada — não dá pra distinguir
+      // com segurança, e continuar seria arriscar sessão sequestrada.
       await this.revokeFamily(stored.familyId);
       throw new UnauthorizedException(
         'Refresh token já utilizado — sessão comprometida, todos os dispositivos foram desconectados.',
