@@ -8,6 +8,7 @@ import { httpClient } from '../http-client';
 import { getCurrentClubeId } from './club-context';
 import type {
   CreateTableRequest,
+  RebuyRequest,
   RecordMovementRequest,
   SitAtTableRequest,
   SitGuestAtTableRequest,
@@ -27,6 +28,7 @@ const TABLE_PATHS = {
     `${base()}/${tableId}/sessions/${sessionId}/cash-out`,
   adminCashOut: (tableId: string, sessionId: string) =>
     `${base()}/${tableId}/sessions/${sessionId}/admin-cash-out`,
+  rebuy: (tableId: string, sessionId: string) => `${base()}/${tableId}/sessions/${sessionId}/rebuy`,
   movements: (tableId: string, sessionId: string) =>
     `${base()}/${tableId}/sessions/${sessionId}/movements`,
   close: (tableId: string) => `${base()}/${tableId}/close`,
@@ -104,6 +106,18 @@ export function cashOutAsAdmin(
   });
 }
 
+/** ADMIN. Novo buy-in numa sessão já sentada — ver docblock de `TableService.rebuy`. */
+export function rebuy(
+  tableId: string,
+  sessionId: string,
+  input: RebuyRequest,
+  idempotencyKey: string,
+): Promise<TableSeatDto> {
+  return httpClient.post<TableSeatDto>(TABLE_PATHS.rebuy(tableId, sessionId), input, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+}
+
 /** ADMIN. */
 export function recordMovement(
   tableId: string,
@@ -128,6 +142,7 @@ export const tableApi = {
   sitGuestAtTable,
   cashOut,
   cashOutAsAdmin,
+  rebuy,
   recordMovement,
   closeTable,
 };

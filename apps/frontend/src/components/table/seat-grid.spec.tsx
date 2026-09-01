@@ -16,6 +16,7 @@ jest.mock('@/lib/api/table', () => ({
     sitGuestAtTable: jest.fn(),
     cashOut: jest.fn(),
     cashOutAsAdmin: jest.fn(),
+    rebuy: jest.fn(),
     recordMovement: jest.fn(),
     closeTable: jest.fn(),
   },
@@ -184,6 +185,42 @@ describe('SeatGrid', () => {
         amount: '25.00',
         reason: 'HAND_RESULT',
       }),
+    );
+  });
+
+  it('ADMIN registra um novo buy-in (rebuy) num jogador que perdeu as fichas', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
+    });
+    (tableApi.getSeats as jest.Mock).mockResolvedValue([OTHER]);
+    (tableApi.rebuy as jest.Mock).mockResolvedValue({ ...OTHER, currentStack: '50.00' });
+
+    renderWithClient(<SeatGrid tableId="table-1" />);
+    await waitFor(() => expect(screen.getByText('Outro')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Outro'));
+    await waitFor(() => expect(screen.getByText('Novo buy-in')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText('Valor do buy-in'), {
+      target: { value: '50.00' },
+    });
+    fireEvent.click(screen.getByText('Registrar buy-in'));
+
+    await waitFor(() =>
+      expect(tableApi.rebuy).toHaveBeenCalledWith(
+        'table-1',
+        'session-other',
+        { buyInAmount: '50.00' },
+        expect.any(String) as unknown,
+      ),
     );
   });
 

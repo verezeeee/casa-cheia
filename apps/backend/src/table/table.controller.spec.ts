@@ -31,6 +31,7 @@ function buildController() {
       | 'getSeats'
       | 'sitAtTable'
       | 'cashOut'
+      | 'rebuy'
       | 'recordMovement'
     >
   > = {
@@ -39,6 +40,7 @@ function buildController() {
     getSeats: jest.fn(),
     sitAtTable: jest.fn(),
     cashOut: jest.fn(),
+    rebuy: jest.fn(),
     recordMovement: jest.fn(),
   };
   const controller = new TableController(
@@ -158,6 +160,45 @@ describe('TableController', () => {
         'table-1',
         'session-1',
         'idem-2',
+      );
+    });
+  });
+
+  describe('rebuy', () => {
+    it('exige Idempotency-Key', async () => {
+      const { controller } = buildController();
+      await expect(
+        controller.rebuy(
+          ADMIN,
+          CLUBE_ID,
+          'table-1',
+          'session-1',
+          { buyInAmount: '50.00' },
+          undefined,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('delega ao service com o id do admin e o clube da rota', async () => {
+      const { controller, tableService } = buildController();
+      tableService.rebuy.mockResolvedValue(SEAT);
+
+      const dto = { buyInAmount: '50.00' };
+      await controller.rebuy(
+        ADMIN,
+        CLUBE_ID,
+        'table-1',
+        'session-1',
+        dto,
+        'idem-3',
+      );
+      expect(tableService.rebuy).toHaveBeenCalledWith(
+        ADMIN.id,
+        CLUBE_ID,
+        'table-1',
+        'session-1',
+        dto,
+        'idem-3',
       );
     });
   });

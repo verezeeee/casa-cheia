@@ -51,6 +51,7 @@ export function SeatGrid({ tableId }: { tableId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [selectedSeatNumber, setSelectedSeatNumber] = useState<number | null>(null);
   const [buyInAmount, setBuyInAmount] = useState('');
+  const [rebuyAmount, setRebuyAmount] = useState('');
   const [adjustAmount, setAdjustAmount] = useState('');
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [closeReport, setCloseReport] = useState<TableCloseReportItemDto[] | null>(null);
@@ -109,6 +110,7 @@ export function SeatGrid({ tableId }: { tableId: string }) {
   function closeSeatDialog() {
     setSelectedSeatNumber(null);
     setBuyInAmount('');
+    setRebuyAmount('');
     setAdjustAmount('');
     setSeatMode('self');
     setMemberSearch('');
@@ -191,6 +193,21 @@ export function SeatGrid({ tableId }: { tableId: string }) {
     },
   });
 
+  const rebuyMutation = useMutation({
+    mutationFn: (sessionId: string) =>
+      tableApi.rebuy(tableId, sessionId, { buyInAmount: rebuyAmount }, crypto.randomUUID()),
+    onSuccess: () => {
+      setError(null);
+      setRebuyAmount('');
+      invalidate();
+    },
+    onError: (caught: unknown) => {
+      setError(
+        caught instanceof ApiError ? caught.message : 'Não foi possível registrar o buy-in.',
+      );
+    },
+  });
+
   const adjustMutation = useMutation({
     mutationFn: (sessionId: string) =>
       tableApi.recordMovement(tableId, sessionId, { amount: adjustAmount, reason: 'HAND_RESULT' }),
@@ -236,6 +253,11 @@ export function SeatGrid({ tableId }: { tableId: string }) {
   function handleSitSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (dialogSeat) sitMutation.mutate(dialogSeat.seatNumber);
+  }
+
+  function handleRebuySubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (dialogSeat?.sessionId) rebuyMutation.mutate(dialogSeat.sessionId);
   }
 
   function handleAdjustSubmit(event: FormEvent<HTMLFormElement>) {
@@ -389,6 +411,10 @@ export function SeatGrid({ tableId }: { tableId: string }) {
               dialogSeat.sessionId && adminCashOutMutation.mutate(dialogSeat.sessionId)
             }
             adminCashingOut={adminCashOutMutation.isPending}
+            rebuyAmount={rebuyAmount}
+            onRebuyAmountChange={setRebuyAmount}
+            onSubmitRebuy={handleRebuySubmit}
+            rebuying={rebuyMutation.isPending}
             adjustAmount={adjustAmount}
             onAdjustAmountChange={setAdjustAmount}
             onSubmitAdjust={handleAdjustSubmit}
@@ -497,6 +523,10 @@ interface SeatDialogBodyProps {
   cashingOut: boolean;
   onAdminCashOut: () => void;
   adminCashingOut: boolean;
+  rebuyAmount: string;
+  onRebuyAmountChange: (value: string) => void;
+  onSubmitRebuy: (event: FormEvent<HTMLFormElement>) => void;
+  rebuying: boolean;
   adjustAmount: string;
   onAdjustAmountChange: (value: string) => void;
   onSubmitAdjust: (event: FormEvent<HTMLFormElement>) => void;
@@ -528,6 +558,10 @@ function SeatDialogBody({
   cashingOut,
   onAdminCashOut,
   adminCashingOut,
+  rebuyAmount,
+  onRebuyAmountChange,
+  onSubmitRebuy,
+  rebuying,
   adjustAmount,
   onAdjustAmountChange,
   onSubmitAdjust,
@@ -699,6 +733,25 @@ function SeatDialogBody({
           <Button variant="secondary" loading={adminCashingOut} onClick={onAdminCashOut} fullWidth>
             Cash-out (admin)
           </Button>
+          {/* Buy-in de verdade (débito na wallet, StackMovement BUY_IN) —
+              diferente do ajuste abaixo, que nunca cruza a wallet. Pro
+              jogador que perdeu todas as fichas mas continua sentado. */}
+          <form
+            onSubmit={onSubmitRebuy}
+            className="flex flex-col gap-2 border-t border-border pt-3"
+          >
+            <p className="text-sm font-medium text-foreground">Novo buy-in</p>
+            <Input
+              inputMode="decimal"
+              placeholder="Valor do buy-in"
+              required
+              value={rebuyAmount}
+              onChange={(e) => onRebuyAmountChange(e.target.value)}
+            />
+            <Button type="submit" size="sm" loading={rebuying}>
+              Registrar buy-in
+            </Button>
+          </form>
           <form
             onSubmit={onSubmitAdjust}
             className="flex flex-col gap-2 border-t border-border pt-3"

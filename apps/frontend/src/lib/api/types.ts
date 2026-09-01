@@ -63,6 +63,11 @@ export interface SitGuestAtTableRequest {
   phone: string;
 }
 
+/** Corpo de `POST /tables/:id/sessions/:sessionId/rebuy` (ADMIN). */
+export interface RebuyRequest {
+  buyInAmount: string;
+}
+
 /** Corpo de `POST /tables/:id/sessions/:sessionId/movements` (ADMIN). */
 export interface RecordMovementRequest {
   amount: string;
