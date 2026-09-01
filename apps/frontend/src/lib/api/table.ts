@@ -32,6 +32,7 @@ const TABLE_PATHS = {
   movements: (tableId: string, sessionId: string) =>
     `${base()}/${tableId}/sessions/${sessionId}/movements`,
   close: (tableId: string) => `${base()}/${tableId}/close`,
+  reopen: (tableId: string) => `${base()}/${tableId}/reopen`,
 } as const;
 
 export function listTables(cursor?: string): Promise<PaginatedResponse<TableSummaryDto>> {
@@ -132,6 +133,11 @@ export function closeTable(tableId: string): Promise<TableCloseResultDto> {
   return httpClient.post<TableCloseResultDto>(TABLE_PATHS.close(tableId));
 }
 
+/** ADMIN. Reabre uma mesa fechada, voltando o status para OPEN e liberando novos sits. */
+export function reopenTable(tableId: string): Promise<TableSummaryDto> {
+  return httpClient.post<TableSummaryDto>(TABLE_PATHS.reopen(tableId));
+}
+
 export const tableApi = {
   listTables,
   createTable,
@@ -145,4 +151,5 @@ export const tableApi = {
   rebuy,
   recordMovement,
   closeTable,
+  reopenTable,
 };

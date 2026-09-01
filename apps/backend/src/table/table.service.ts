@@ -780,6 +780,41 @@ export class TableService {
     };
   }
 
+  /**
+   * Reabre uma mesa fechada: volta o status para OPEN, permitindo novos
+   * sits. Não há sessões pra restaurar — `closeTable` já fez cash-out de
+   * todo mundo antes de fechar, então a mesa reabre vazia. Idempotente
+   * (mesa já OPEN só retorna o estado atual), mesmo padrão de `closeTable`.
+   */
+  async reopenTable(
+    clubeId: string,
+    tableId: string,
+  ): Promise<TableSummaryDto> {
+    const table = await this.prisma.table.findUnique({
+      where: { id: tableId },
+      include: {
+        _count: { select: { sessions: { where: { status: 'ACTIVE' } } } },
+      },
+    });
+    if (!table || table.clubeId !== clubeId) {
+      throw new NotFoundException('Mesa não encontrada.');
+    }
+
+    if (table.status !== 'CLOSED') {
+      return toTableSummaryDto(table);
+    }
+
+    const reopened = await this.prisma.table.update({
+      where: { id: tableId },
+      data: { status: 'OPEN' },
+      include: {
+        _count: { select: { sessions: { where: { status: 'ACTIVE' } } } },
+      },
+    });
+
+    return toTableSummaryDto(reopened);
+  }
+
   /** Registra HAND_RESULT/ADJUSTMENT — NUNCA cruza a wallet (ver StackMovementReason em table.prisma). */
   async recordMovement(
     adminId: string,

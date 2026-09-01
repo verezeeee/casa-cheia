@@ -736,6 +736,59 @@ describe('TableService', () => {
     });
   });
 
+  describe('reopenTable', () => {
+    it('volta o status de CLOSED para OPEN', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        status: 'CLOSED',
+        _count: { sessions: 0 },
+      });
+      prisma.table.update.mockResolvedValue({
+        ...TABLE,
+        status: 'OPEN',
+        _count: { sessions: 0 },
+      });
+
+      const result = await service.reopenTable(CLUBE_ID, 'table-1');
+
+      expect(prisma.table.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'table-1' },
+          data: { status: 'OPEN' },
+        }),
+      );
+      expect(result.status).toBe('OPEN');
+    });
+
+    it('é idempotente: mesa já aberta não chama update', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        status: 'OPEN',
+        _count: { sessions: 0 },
+      });
+
+      const result = await service.reopenTable(CLUBE_ID, 'table-1');
+
+      expect(prisma.table.update).not.toHaveBeenCalled();
+      expect(result.status).toBe('OPEN');
+    });
+
+    it('lança 404 se a mesa é de outro clube', async () => {
+      const { service, prisma } = buildService();
+      prisma.table.findUnique.mockResolvedValue({
+        ...TABLE,
+        status: 'CLOSED',
+        clubeId: 'outro-clube',
+      });
+
+      await expect(
+        service.reopenTable(CLUBE_ID, 'table-1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('sitAtTableForUser', () => {
     it('rejeita usuário sem vínculo ACTIVE neste clube (404), sem tocar a wallet', async () => {
       const { service, prisma, walletService } = buildService();
