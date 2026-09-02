@@ -25,6 +25,7 @@ import {
 } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
 import { formatMoneySafe } from '@/lib/format';
+import { maskPhone, onlyDigits } from '@/lib/masks';
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -712,9 +713,10 @@ function SeatDialogBody({
             <Input
               inputMode="numeric"
               placeholder="Telefone (DDD + número)"
+              maxLength={15}
               required
-              value={guestPhone}
-              onChange={(e) => onGuestPhoneChange(e.target.value.replace(/\D/g, ''))}
+              value={maskPhone(guestPhone)}
+              onChange={(e) => onGuestPhoneChange(onlyDigits(e.target.value, 11))}
             />
             <Input
               inputMode="decimal"

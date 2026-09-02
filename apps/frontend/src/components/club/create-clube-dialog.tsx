@@ -6,6 +6,7 @@ import { useState, type FormEvent } from 'react';
 import { Button, Dialog, FormField, Input, Toast } from '@/components/ui';
 import { clubApi } from '@/lib/api/club-context';
 import { ApiError } from '@/lib/http-client';
+import { maskCpfOuCnpj, onlyDigits } from '@/lib/masks';
 
 export interface CreateClubeDialogProps {
   open: boolean;
@@ -67,9 +68,10 @@ export function CreateClubeDialog({ open, onClose, onSuccess }: CreateClubeDialo
           <Input
             id="create-clube-document"
             inputMode="numeric"
+            maxLength={18}
             required
-            value={document}
-            onChange={(e) => setDocument(e.target.value.replace(/\D/g, ''))}
+            value={maskCpfOuCnpj(document)}
+            onChange={(e) => setDocument(onlyDigits(e.target.value, 14))}
           />
         </FormField>
 

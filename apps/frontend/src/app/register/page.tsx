@@ -8,6 +8,7 @@ import { Button, Card, FormField, Input, TextLink, Toast } from '@/components/ui
 import { authApi } from '@/lib/api/auth';
 import { clubApi } from '@/lib/api/club-context';
 import { ApiError } from '@/lib/http-client';
+import { maskCpfOuCnpj, onlyDigits } from '@/lib/masks';
 
 type ClubeMode = 'none' | 'code' | 'create';
 
@@ -179,9 +180,10 @@ export default function RegisterPage() {
                 <Input
                   id="register-clube-document"
                   inputMode="numeric"
+                  maxLength={18}
                   required
-                  value={clubeDocument}
-                  onChange={(event) => setClubeDocument(event.target.value.replace(/\D/g, ''))}
+                  value={maskCpfOuCnpj(clubeDocument)}
+                  onChange={(event) => setClubeDocument(onlyDigits(event.target.value, 14))}
                 />
               </FormField>
             </>
