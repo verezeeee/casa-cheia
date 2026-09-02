@@ -54,13 +54,17 @@ describe('CreateClubeDialog', () => {
     );
   });
 
-  it('só aceita dígitos no campo de documento', () => {
+  it('aplica máscara de CPF/CNPJ e guarda só dígitos no campo de documento', () => {
     renderWithClient(<CreateClubeDialog open onClose={jest.fn()} onSuccess={jest.fn()} />);
 
     fireEvent.change(screen.getByLabelText('CNPJ ou CPF'), {
       target: { value: '123.456.789-01' },
     });
+    expect(screen.getByLabelText('CNPJ ou CPF')).toHaveValue('123.456.789-01');
 
-    expect(screen.getByLabelText('CNPJ ou CPF')).toHaveValue('12345678901');
+    fireEvent.change(screen.getByLabelText('CNPJ ou CPF'), {
+      target: { value: '12345678000199' },
+    });
+    expect(screen.getByLabelText('CNPJ ou CPF')).toHaveValue('12.345.678/0001-99');
   });
 });
