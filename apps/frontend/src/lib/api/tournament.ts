@@ -13,6 +13,7 @@ import type {
   CreateTournamentRequest,
   EliminateEntryRequest,
   RegisterEntryRequest,
+  RegisterGuestEntryRequest,
   UpdateBlindLevelRequest,
   UpdateTournamentRequest,
 } from './types';
@@ -25,6 +26,7 @@ const TOURNAMENT_PATHS = {
   detail: (id: string) => `${base()}/${id}`,
   register: (id: string) => `${base()}/${id}/register`,
   registerForUser: (id: string, userId: string) => `${base()}/${id}/register/${userId}`,
+  registerGuest: (id: string) => `${base()}/${id}/register-guest`,
   unregister: (id: string) => `${base()}/${id}/unregister`,
   unregisterForUser: (id: string, userId: string) => `${base()}/${id}/unregister/${userId}`,
   eliminate: (id: string, entryId: string) => `${base()}/${id}/entries/${entryId}/eliminate`,
@@ -116,6 +118,17 @@ export function registerEntryForUser(
   });
 }
 
+/** ADMIN. Inscreve um jogador SEM CADASTRO NO CLUBE — só nome e telefone (walk-in). */
+export function registerGuestEntry(
+  id: string,
+  idempotencyKey: string,
+  input: RegisterGuestEntryRequest,
+): Promise<TournamentEntryDto> {
+  return httpClient.post<TournamentEntryDto>(TOURNAMENT_PATHS.registerGuest(id), input, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+  });
+}
+
 /** ADMIN. */
 export function eliminateEntry(
   id: string,
@@ -195,6 +208,7 @@ export const tournamentApi = {
   unregisterEntry,
   unregisterEntryForUser,
   registerEntryForUser,
+  registerGuestEntry,
   eliminateEntry,
   finishTournament,
   getClock,
