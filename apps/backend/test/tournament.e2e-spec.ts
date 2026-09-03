@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 // Fixtures compartilhadas com `tournament-tables.e2e-spec.ts` (MT-QA-01).
+import type { TournamentReportResponse } from '@poker-system/shared';
 import {
   bootstrapTestApp,
+  createForeignClubeAdmin,
   createTestClube,
   creditWallet,
   expectSeatInvariants,
@@ -988,5 +990,440 @@ describe('Tournaments (e2e)', () => {
         .expect(200);
       expect(balanceRes.body.balance).toBe('200.00');
     }
+  });
+
+  /**
+   * RT-QA-02 — o relatório de fechamento contra Postgres de verdade.
+   *
+   * O cenário é montado UMA VEZ no `beforeAll` porque ele é caro e longo (4
+   * inscrições, 1 cancelamento, 1 reentrada, relógio, 3 eliminações e o
+   * `finish`) e porque cada assert abaixo olha uma faceta DIFERENTE do MESMO
+   * payload — quebrar em vários `it` mantém o motivo da falha legível sem
+   * refazer o torneio inteiro a cada caso.
+   *
+   * O torneio é deliberadamente "sujo" nos pontos onde a conta do relatório
+   * pode errar: uma inscrição cancelada (que não pode virar receita), uma
+   * reentrada (que é entrada nova, não rebuy), um bônus de staff (receita que
+   * não passa pelo prize pool), `tableCapacity: 2` (para o torneio montar e
+   * desmontar mesas de verdade) e um `guaranteedPrize` acima do arrecadado
+   * (para o overlay não ser zero).
+   */
+  describe('relatório do torneio encerrado (RT-QA-02)', () => {
+    const BUY_IN = '90.00';
+    const FEE = '10.00';
+    const STAFF_BONUS = '5.00';
+
+    let admin: { accessToken: string; userId: string };
+    let playerA: { accessToken: string; userId: string };
+    let playerB: { accessToken: string; userId: string };
+    let playerC: { accessToken: string; userId: string };
+    let playerD: { accessToken: string; userId: string };
+    let tournamentId: string;
+    /** Inscrições do cenário: A, B (com bônus), C1, C2 (reentrada de C) e D (cancelada). */
+    let entryIds: Record<'A' | 'B' | 'C1' | 'C2' | 'D', string>;
+    let startedAt: Date;
+    let report: TournamentReportResponse;
+
+    const reportPath = (clubeId: string, id: string) =>
+      `/api/clubes/${clubeId}/torneios/${id}/report`;
+
+    beforeAll(async () => {
+      admin = await registerAndLogin(app, { admin: true });
+      [playerA, playerB, playerC, playerD] = await Promise.all([
+        registerAndLogin(app),
+        registerAndLogin(app),
+        registerAndLogin(app),
+        registerAndLogin(app),
+      ]);
+      await Promise.all(
+        [playerA, playerB, playerC, playerD].map((p) =>
+          creditWallet(p.userId, '500.00'),
+        ),
+      );
+      const asAdmin = { Authorization: `Bearer ${admin.accessToken}` };
+
+      // Relógio é pré-requisito do `startedAt` REAL (RT-BE-01): sem estrutura
+      // de blinds `clock/start` é 400 e a duração do relatório cairia no
+      // caminho estimado.
+      const structureRes = await request(app.getHttpServer())
+        .post(`/api/clubes/${CLUBE_ID}/blind-structures`)
+        .set(asAdmin)
+        .send({
+          name: `Relatório ${randomUUID()}`,
+          levels: [
+            {
+              levelNumber: 1,
+              smallBlind: 25,
+              bigBlind: 50,
+              durationSeconds: 1200,
+            },
+            {
+              levelNumber: 2,
+              smallBlind: 50,
+              bigBlind: 100,
+              durationSeconds: 1200,
+            },
+          ],
+        })
+        .expect(201);
+
+      const createRes = await request(app.getHttpServer())
+        .post(`/api/clubes/${CLUBE_ID}/torneios`)
+        .set(asAdmin)
+        .send({
+          name: 'Fechamento do Sábado',
+          buyIn: BUY_IN,
+          fee: FEE,
+          staffBonusCost: STAFF_BONUS,
+          staffBonusChips: 2500,
+          startingStack: 10000,
+          maxPlayers: 6,
+          tableCapacity: 2,
+          allowReentry: true,
+          maxReentries: 1,
+          guaranteedPrize: '1000.00',
+          startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+          blindStructureId: structureRes.body.id as string,
+          prizes: [
+            { position: 1, percentage: '70.00' },
+            { position: 2, percentage: '30.00' },
+          ],
+        })
+        .expect(201);
+      tournamentId = createRes.body.id as string;
+
+      const register = async (
+        player: { accessToken: string },
+        body: Record<string, unknown> = {},
+      ) => {
+        const res = await request(app.getHttpServer())
+          .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/register`)
+          .set('Authorization', `Bearer ${player.accessToken}`)
+          .set('Idempotency-Key', randomUUID())
+          .send(body)
+          .expect(201);
+        return res.body.id as string;
+      };
+
+      entryIds = {
+        A: await register(playerA),
+        B: await register(playerB, { staffBonus: true }),
+        C1: await register(playerC),
+        D: await register(playerD),
+        C2: '',
+      };
+
+      // D cancela: devolveu buy-in + fee e decrementou o prize pool. Não pode
+      // aparecer em `feeRevenue` nem no ranking.
+      await request(app.getHttpServer())
+        .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/unregister`)
+        .set('Authorization', `Bearer ${playerD.accessToken}`)
+        .set('Idempotency-Key', randomUUID())
+        .expect(201);
+
+      // --- Relógio: primeira porta de "o torneio começou" (RT-BE-01).
+      await request(app.getHttpServer())
+        .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/clock/start`)
+        .set(asAdmin)
+        .expect(201);
+      const afterClock = await prismaDirect.tournament.findUniqueOrThrow({
+        where: { id: tournamentId },
+      });
+      expect(afterClock.startedAt).not.toBeNull();
+      // O relógio NÃO mexe no status: quem faz REGISTERING→RUNNING é a 1ª
+      // eliminação.
+      expect(afterClock.status).toBe('REGISTERING');
+      startedAt = afterClock.startedAt!;
+
+      const eliminate = async (entryId: string, finalPosition?: number) =>
+        request(app.getHttpServer())
+          .post(
+            `/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/entries/${entryId}/eliminate`,
+          )
+          .set(asAdmin)
+          .send(finalPosition === undefined ? {} : { finalPosition })
+          .expect(201);
+
+      // C cai SEM colocação registrada (o caso comum fora das faixas
+      // premiadas) — é a linha que o relatório vai ter de derivar.
+      await eliminate(entryIds.C1);
+
+      // A transição para RUNNING não sobrescreveu o carimbo do relógio: o
+      // início real do torneio é o mais antigo dos dois eventos.
+      const afterFirstElimination =
+        await prismaDirect.tournament.findUniqueOrThrow({
+          where: { id: tournamentId },
+        });
+      expect(afterFirstElimination.status).toBe('RUNNING');
+      expect(afterFirstElimination.startedAt).toEqual(startedAt);
+
+      // C reentra: entrada NOVA, com buy-in e fee próprios.
+      entryIds.C2 = await register(playerC);
+
+      await eliminate(entryIds.C2, 3);
+      await eliminate(entryIds.B, 2);
+
+      await request(app.getHttpServer())
+        .post(`/api/clubes/${CLUBE_ID}/torneios/${tournamentId}/finish`)
+        .set(asAdmin)
+        .expect(201);
+
+      const reportRes = await request(app.getHttpServer())
+        .get(reportPath(CLUBE_ID, tournamentId))
+        .set(asAdmin)
+        .expect(200);
+      report = reportRes.body as TournamentReportResponse;
+    });
+
+    it('cabeçalho e grade de premiação vêm do torneio encerrado', () => {
+      expect(report).toMatchObject({
+        tournamentId,
+        name: 'Fechamento do Sábado',
+        status: 'FINISHED',
+        buyIn: BUY_IN,
+        fee: FEE,
+        staffBonusCost: STAFF_BONUS,
+        prizes: [
+          { position: 1, percentage: '70.00' },
+          { position: 2, percentage: '30.00' },
+        ],
+      });
+      expect(report.stats.startedAt).toBe(startedAt.toISOString());
+      expect(report.stats.durationEstimated).toBe(false);
+      expect(report.stats.durationMs).toBeGreaterThanOrEqual(0);
+      expect(report.stats.lastLevelNumber).toBe(1);
+    });
+
+    it('ranking está completo, ordenado e sem buracos de posição', () => {
+      // 4 inscrições disputaram; a cancelada (D) não entra.
+      expect(report.ranking).toHaveLength(4);
+      expect(report.ranking.map((item) => item.position)).toEqual([1, 2, 3, 4]);
+      expect(report.ranking.map((item) => item.entryId)).toEqual([
+        entryIds.A,
+        entryIds.B,
+        entryIds.C2,
+        entryIds.C1,
+      ]);
+      expect(report.ranking.map((item) => item.userId)).toEqual([
+        playerA.userId,
+        playerB.userId,
+        playerC.userId,
+        playerC.userId,
+      ]);
+      // As três colocações digitadas/inferidas pelo `finish` são RECORDED; a
+      // eliminação sem colocação (C1) sai DERIVED, na última posição livre.
+      expect(report.ranking.map((item) => item.positionSource)).toEqual([
+        'RECORDED',
+        'RECORDED',
+        'RECORDED',
+        'DERIVED',
+      ]);
+      expect(report.ranking.map((item) => item.finalPosition)).toEqual([
+        1,
+        2,
+        3,
+        null,
+      ]);
+      expect(report.ranking.map((item) => item.status)).toEqual([
+        'PAID',
+        'PAID',
+        'ELIMINATED',
+        'ELIMINATED',
+      ]);
+      expect(report.ranking.map((item) => item.prizeAmount)).toEqual([
+        '252.00', // 70% de 360.00
+        '108.00', // 30% de 360.00
+        null,
+        null,
+      ]);
+      expect(report.ranking.every((item) => item.userId !== '')).toBe(true);
+      // Nenhuma inscrição REFUNDED no ranking (D ficou fora).
+      expect(report.ranking.some((item) => item.entryId === entryIds.D)).toBe(
+        false,
+      );
+    });
+
+    // O assert mais importante da suíte: o relatório e o DINHEIRO REALMENTE
+    // MOVIMENTADO têm de fechar no centavo. Qualquer divergência de
+    // arredondamento entre o payout de `finishTournament` e a soma do
+    // relatório aparece aqui, e em nenhum outro teste.
+    it('totalPaidOut é exatamente a soma das WalletTransaction TOURNAMENT_PAYOUT do torneio', async () => {
+      const paid = await prismaDirect.walletTransaction.aggregate({
+        _sum: { amount: true },
+        _count: true,
+        where: {
+          type: 'TOURNAMENT_PAYOUT',
+          tournamentEntry: { tournamentId },
+        },
+      });
+
+      expect(paid._count).toBe(2); // 1º e 2º lugares
+      expect(paid._sum.amount?.toFixed(2)).toBe(report.stats.totalPaidOut);
+      expect(report.stats.totalPaidOut).toBe('360.00');
+      // Grade que fecha 100%: não sobra prize pool.
+      expect(report.stats.unpaidPrizePool).toBe('0.00');
+      expect(report.stats.prizePool).toBe('360.00');
+    });
+
+    it('feeRevenue desconsidera a inscrição cancelada e soma o bônus de staff', () => {
+      // 4 entradas válidas (A, B, C1, C2) × 10.00 — a de D voltou pra wallet.
+      expect(report.stats.feeRevenue).toBe('40.00');
+      expect(report.stats.refundedEntries).toBe(1);
+      // Só B optou pelo bônus; a receita dele NÃO passa pelo prize pool.
+      expect(report.stats.staffBonusesPaid).toBe(1);
+      expect(report.stats.staffBonusRevenue).toBe('5.00');
+      expect(report.stats.houseRevenue).toBe('45.00');
+      // Garantia anunciada acima do arrecadado: overlay informativo (o payout
+      // de hoje ignora `guaranteedPrize` — lacuna que o relatório expõe).
+      expect(report.stats.guaranteedPrize).toBe('1000.00');
+      expect(report.stats.overlay).toBe('640.00');
+    });
+
+    it('reentries e uniquePlayers contam entradas, não jogadores', () => {
+      expect(report.stats.totalEntries).toBe(4);
+      expect(report.stats.uniquePlayers).toBe(3); // A, B, C
+      expect(report.stats.reentries).toBe(1); // a segunda entrada de C
+      // `reentries` e as linhas marcadas como reentrada não podem divergir.
+      const flagged = report.ranking.filter((item) => item.isReentry);
+      expect(flagged.map((item) => item.entryId)).toEqual([entryIds.C2]);
+      expect(flagged).toHaveLength(report.stats.reentries);
+    });
+
+    it('tablesUsed bate com a contagem real de TournamentTable (inclui fechadas)', async () => {
+      const tables = await prismaDirect.tournamentTable.count({
+        where: { tournamentId },
+      });
+      expect(report.stats.tablesUsed).toBe(tables);
+      // `tableCapacity: 2` com 4 inscritos garante que houve mais de uma mesa,
+      // e a desmontagem fechou pelo menos uma — o número é histórico.
+      expect(report.stats.tablesUsed).toBeGreaterThan(1);
+      expect(
+        await prismaDirect.tournamentTable.count({
+          where: { tournamentId, status: 'CLOSED' },
+        }),
+      ).toBeGreaterThan(0);
+    });
+
+    it('duas leituras seguidas devolvem o mesmo payload, exceto generatedAt', async () => {
+      const first = await request(app.getHttpServer())
+        .get(reportPath(CLUBE_ID, tournamentId))
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+      const second = await request(app.getHttpServer())
+        .get(reportPath(CLUBE_ID, tournamentId))
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+
+      const { generatedAt: firstAt, ...firstRest } =
+        first.body as TournamentReportResponse;
+      const { generatedAt: secondAt, ...secondRest } =
+        second.body as TournamentReportResponse;
+
+      expect(secondRest).toEqual(firstRest);
+      expect(Date.parse(secondAt)).toBeGreaterThanOrEqual(Date.parse(firstAt));
+    });
+
+    it('PLAYER membro não vê o relatório (403), sem token é 401', async () => {
+      await request(app.getHttpServer())
+        .get(reportPath(CLUBE_ID, tournamentId))
+        .set('Authorization', `Bearer ${playerA.accessToken}`)
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .get(reportPath(CLUBE_ID, tournamentId))
+        .expect(401);
+    });
+
+    // Isolamento de tenant: ADMIN de OUTRO clube, com o id REAL do torneio,
+    // recebe 404 — e não 403, que confirmaria a existência do torneio alheio.
+    it('ADMIN de outro clube pedindo o mesmo tournamentId recebe 404', async () => {
+      const foreign = await createForeignClubeAdmin(app);
+
+      await request(app.getHttpServer())
+        .get(reportPath(foreign.clubeId, tournamentId))
+        .set('Authorization', `Bearer ${foreign.accessToken}`)
+        .expect(404);
+
+      // Pelo caminho do clube certo ele nem chega no service: não é membro,
+      // então o `ClubeMembershipGuard` também responde 404.
+      await request(app.getHttpServer())
+        .get(reportPath(CLUBE_ID, tournamentId))
+        .set('Authorization', `Bearer ${foreign.accessToken}`)
+        .expect(404);
+    });
+
+    // RT-002: durante o jogo os números são provisórios. Torneio próprio para
+    // não desfazer o cenário encerrado acima.
+    it('torneio ainda em andamento não tem relatório (400)', async () => {
+      const asAdmin = { Authorization: `Bearer ${admin.accessToken}` };
+      const player = await registerAndLogin(app);
+      const rival = await registerAndLogin(app);
+      await Promise.all(
+        [player, rival].map((p) => creditWallet(p.userId, '200.00')),
+      );
+
+      const createRes = await request(app.getHttpServer())
+        .post(`/api/clubes/${CLUBE_ID}/torneios`)
+        .set(asAdmin)
+        .send({
+          name: 'Ainda rolando',
+          buyIn: '50.00',
+          fee: '5.00',
+          startingStack: 5000,
+          maxPlayers: 4,
+          startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+          prizes: [{ position: 1, percentage: '100.00' }],
+        })
+        .expect(201);
+      const runningId = createRes.body.id as string;
+
+      // REGISTERING também é 400: o relatório não nasce provisório.
+      const registeringRes = await request(app.getHttpServer())
+        .get(reportPath(CLUBE_ID, runningId))
+        .set(asAdmin)
+        .expect(400);
+      expect(registeringRes.body.message).toBe(
+        'O relatório fica disponível quando o torneio é encerrado.',
+      );
+
+      const entryIdsHere: string[] = [];
+      for (const p of [player, rival]) {
+        const res = await request(app.getHttpServer())
+          .post(`/api/clubes/${CLUBE_ID}/torneios/${runningId}/register`)
+          .set('Authorization', `Bearer ${p.accessToken}`)
+          .set('Idempotency-Key', randomUUID())
+          .expect(201);
+        entryIdsHere.push(res.body.id as string);
+      }
+
+      await request(app.getHttpServer())
+        .post(
+          `/api/clubes/${CLUBE_ID}/torneios/${runningId}/entries/${entryIdsHere[1]}/eliminate`,
+        )
+        .set(asAdmin)
+        .send({ finalPosition: 2 })
+        .expect(201);
+
+      const running = await prismaDirect.tournament.findUniqueOrThrow({
+        where: { id: runningId },
+      });
+      expect(running.status).toBe('RUNNING');
+
+      await request(app.getHttpServer())
+        .get(reportPath(CLUBE_ID, runningId))
+        .set(asAdmin)
+        .expect(400);
+
+      // Encerrado, o MESMO torneio passa a ter relatório — a guarda é de
+      // status, não de configuração.
+      await request(app.getHttpServer())
+        .post(`/api/clubes/${CLUBE_ID}/torneios/${runningId}/finish`)
+        .set(asAdmin)
+        .expect(201);
+      await request(app.getHttpServer())
+        .get(reportPath(CLUBE_ID, runningId))
+        .set(asAdmin)
+        .expect(200);
+    });
   });
 });

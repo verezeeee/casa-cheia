@@ -131,6 +131,57 @@ export async function registerAndLogin(
   };
 }
 
+/**
+ * Um SEGUNDO tenant com um ADMIN próprio, para os testes de isolamento
+ * (RT-QA-02: "token válido, mas de outro clube").
+ *
+ * NÃO mexe em `currentClubeId` de propósito — quem chamar isto continua com
+ * `registerAndLogin`/`creditWallet` apontando para o clube da suíte, que é o
+ * que os demais casos esperam. Por isso a membership e a wallet são criadas
+ * aqui à mão em vez de reaproveitar `registerAndLogin`: só o cadastro/login do
+ * usuário passa pela API (é onde o token é emitido de verdade).
+ */
+export async function createForeignClubeAdmin(
+  app: INestApplication<App>,
+): Promise<{ clubeId: string; accessToken: string; userId: string }> {
+  const clube = await prismaDirect.clube.create({
+    data: {
+      name: 'Clube Vizinho (isolamento)',
+      document: randomUUID().replace(/-/g, '').slice(0, 14),
+      joinCode: randomJoinCode(),
+      status: 'ACTIVE',
+    },
+  });
+
+  const email = `${randomUUID()}@tournament-e2e.test`;
+  const registerRes = await request(app.getHttpServer())
+    .post('/api/auth/register')
+    .send({ email, password: 'senha-forte-123', name: 'Admin Vizinho' })
+    .expect(201);
+  const userId = registerRes.body.id as string;
+
+  await prismaDirect.clubeMembership.create({
+    data: {
+      clubeId: clube.id,
+      userId,
+      role: ClubeRole.ADMIN,
+      status: 'ACTIVE',
+    },
+  });
+  await prismaDirect.wallet.create({ data: { userId, clubeId: clube.id } });
+
+  const loginRes = await request(app.getHttpServer())
+    .post('/api/auth/login')
+    .send({ email, password: 'senha-forte-123' })
+    .expect(200);
+
+  return {
+    clubeId: clube.id,
+    accessToken: loginRes.body.accessToken as string,
+    userId,
+  };
+}
+
 export async function creditWallet(
   userId: string,
   amount: string,

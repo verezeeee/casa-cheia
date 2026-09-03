@@ -15,6 +15,7 @@ import type {
   TournamentClockDto,
   TournamentDetailResponse,
   TournamentEntryDto,
+  TournamentReportResponse,
   TournamentSummaryDto,
   TournamentTableMapDto,
 } from '@poker-system/shared';
@@ -83,6 +84,33 @@ export class TournamentController {
       query.cursor,
       query.limit,
     );
+  }
+
+  /**
+   * RT-BE-04 — Relatório de fechamento do torneio encerrado.
+   *
+   * ADMIN só (`RT-003`): o payload carrega a economia da casa (`feeRevenue`,
+   * `staffBonusRevenue`, `overlay`), não é dado de jogador. Guards de classe
+   * herdados (`JwtAuthGuard, ClubeMembershipGuard`) mais `RolesGuard` por
+   * handler, igual a `finish` — não-membro do clube nem chega no `RolesGuard`
+   * (o membership guard 404 antes, e é o que impede vazar a existência do
+   * torneio para outro tenant).
+   *
+   * Sem `Idempotency-Key`: é `GET`, leitura pura, repetível por definição.
+   *
+   * DECLARADO ANTES de `@Get(':id')` de propósito: `:id` não casa com barra em
+   * path-to-regexp, então não há ambiguidade de fato — mas manter a rota de 2
+   * segmentos acima da de 1 é a disciplina que evita descobrir isso do jeito
+   * errado quando alguém trocar `:id` por um wildcard.
+   */
+  @Get(':id/report')
+  @UseGuards(RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async getReport(
+    @Param('clubeId') clubeId: string,
+    @Param('id') id: string,
+  ): Promise<TournamentReportResponse> {
+    return this.tournamentService.getReport(clubeId, id);
   }
 
   @Get(':id')

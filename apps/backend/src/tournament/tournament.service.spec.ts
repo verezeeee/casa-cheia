@@ -24,6 +24,7 @@ const TOURNAMENT = {
   registrationOpensAt: null,
   startsAt: new Date('2026-02-01T21:00:00.000Z'),
   lateRegUntil: null,
+  startedAt: null,
   finishedAt: null,
   prizePool: new Prisma.Decimal('180.00'),
   guaranteedPrize: null,
@@ -145,6 +146,9 @@ function buildPrisma() {
       updateMany: jest.fn(),
     },
     tournamentPrize: { findMany: jest.fn() },
+    // Contagem de mesas do relatório (RT-BE-03). Fora de qualquer transação:
+    // `getReport` é leitura pura.
+    tournamentTable: { count: jest.fn().mockResolvedValue(0) },
     tournamentEntry: {
       findMany: jest.fn(),
       findUnique: shared.entryFindUnique,
@@ -401,6 +405,173 @@ describe('TournamentService', () => {
       await expect(
         service.getTournament(CLUBE_ID, 'inexistente'),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  // RT-BE-03. A CORREÇÃO dos números é do `tournament-report.spec.ts` (função
+  // pura, RT-QA-01); aqui o que se testa é a montagem da consulta e as duas
+  // guardas — 404 de tenant e 400 de status.
+  describe('getReport', () => {
+    const FINISHED = {
+      ...TOURNAMENT,
+      status: 'FINISHED',
+      startedAt: new Date('2026-02-01T21:10:00.000Z'),
+      finishedAt: new Date('2026-02-02T01:10:00.000Z'),
+      currentLevelNumber: 12,
+    };
+
+    function primeReport(
+      prisma: ReturnType<typeof buildPrisma>,
+      tournament: Record<string, unknown> = FINISHED,
+    ) {
+      prisma.tournament.findUnique.mockResolvedValue(tournament);
+      prisma.tournamentPrize.findMany.mockResolvedValue([
+        { position: 1, percentage: new Prisma.Decimal('100.00') },
+      ]);
+      prisma.tournamentEntry.findMany.mockResolvedValue([]);
+      prisma.tournamentTable.count.mockResolvedValue(0);
+    }
+
+    it('lança 404 quando o torneio não existe (ou é de outro clube)', async () => {
+      const { service, prisma } = buildService();
+      prisma.tournament.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getReport(CLUBE_ID, 'inexistente'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      // O `clubeId` no WHERE é o isolamento de tenant desta camada: torneio de
+      // outro clube cai no MESMO 404, sem 403 que confirmaria a existência.
+      expect(prisma.tournament.findUnique).toHaveBeenCalledWith({
+        where: { id: 'inexistente', clubeId: CLUBE_ID },
+      });
+    });
+
+    it.each(['DRAFT', 'REGISTERING', 'RUNNING'])(
+      'lança 400 com o torneio em %s (RT-002)',
+      async (status) => {
+        const { service, prisma } = buildService();
+        primeReport(prisma, { ...TOURNAMENT, status });
+
+        await expect(service.getReport(CLUBE_ID, 'trn-1')).rejects.toThrow(
+          /relatório fica disponível quando o torneio é encerrado/,
+        );
+        // Barrou ANTES de consultar prêmios/inscrições/mesas.
+        expect(prisma.tournamentPrize.findMany).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['FINISHED', 'CANCELLED'])(
+      'devolve o relatório com o torneio em %s',
+      async (status) => {
+        const { service, prisma } = buildService();
+        primeReport(prisma, { ...FINISHED, status });
+        prisma.tournamentTable.count.mockResolvedValue(4);
+        prisma.tournamentEntry.findMany.mockResolvedValue([
+          {
+            id: 'e1',
+            userId: 'u1',
+            status: 'PAID',
+            staffBonusPaid: true,
+            finalPosition: 1,
+            prizeAmount: new Prisma.Decimal('180.00'),
+            registeredAt: new Date('2026-02-01T20:00:00.000Z'),
+            eliminatedAt: null,
+            user: { name: 'Campeão' },
+          },
+          {
+            id: 'e2',
+            userId: 'u2',
+            status: 'REFUNDED',
+            staffBonusPaid: false,
+            finalPosition: null,
+            prizeAmount: null,
+            registeredAt: new Date('2026-02-01T20:05:00.000Z'),
+            eliminatedAt: null,
+            user: { name: 'Cancelou' },
+          },
+        ]);
+
+        const report = await service.getReport(CLUBE_ID, 'trn-1');
+
+        expect(report).toMatchObject({
+          tournamentId: 'trn-1',
+          name: 'Sunday Major',
+          status,
+          prizes: [{ position: 1, percentage: '100.00' }],
+        });
+        expect(report.stats).toMatchObject({
+          totalEntries: 1,
+          refundedEntries: 1,
+          staffBonusesPaid: 1,
+          tablesUsed: 4,
+          lastLevelNumber: 12,
+          totalPaidOut: '180.00',
+          feeRevenue: '10.00', // fee 10.00 × 1 entrada válida
+          durationEstimated: false,
+          durationMs: 4 * 60 * 60 * 1000,
+        });
+        // A cancelada fica fora do ranking, mas foi CONSULTADA — é o service
+        // que entrega todas as inscrições e a função pura que recorta.
+        expect(report.ranking.map((item) => item.entryId)).toEqual(['e1']);
+        expect(typeof report.generatedAt).toBe('string');
+      },
+    );
+
+    it('consulta prêmios, inscrições (todas) e mesas — inclusive as fechadas', async () => {
+      const { service, prisma } = buildService();
+      primeReport(prisma);
+
+      await service.getReport(CLUBE_ID, 'trn-1');
+
+      expect(prisma.tournamentPrize.findMany).toHaveBeenCalledWith({
+        where: { tournamentId: 'trn-1' },
+        orderBy: { position: 'asc' },
+      });
+      expect(prisma.tournamentEntry.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // Sem recorte de status: a REFUNDED precisa chegar na função pura
+          // para virar `refundedEntries`.
+          where: { tournamentId: 'trn-1' },
+          orderBy: { registeredAt: 'asc' },
+        }),
+      );
+      // `count` SEM `status`: mesa `CLOSED` conta (histórico, não estado).
+      expect(prisma.tournamentTable.count).toHaveBeenCalledWith({
+        where: { tournamentId: 'trn-1' },
+      });
+    });
+
+    it('não abre transação nem lock: é leitura pura', async () => {
+      const { service, prisma } = buildService();
+      primeReport(prisma);
+
+      await service.getReport(CLUBE_ID, 'trn-1');
+
+      expect(prisma.withClube).not.toHaveBeenCalled();
+      expect(prisma.tx.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    // Torneio anterior ao MVP de mesas e a RT-DB-01: sem mesas, sem relógio e
+    // sem `startedAt`. Precisa devolver 200 com números degradados, não 500.
+    it('torneio legado responde com tablesUsed 0 e duração estimada', async () => {
+      const { service, prisma } = buildService();
+      primeReport(prisma, {
+        ...TOURNAMENT,
+        status: 'FINISHED',
+        startedAt: null,
+        finishedAt: new Date('2026-02-01T23:00:00.000Z'),
+        currentLevelNumber: null,
+      });
+
+      const report = await service.getReport(CLUBE_ID, 'trn-1');
+
+      expect(report.stats).toMatchObject({
+        tablesUsed: 0,
+        lastLevelNumber: null,
+        startedAt: null,
+        durationEstimated: true,
+        durationMs: 2 * 60 * 60 * 1000, // medido do AGENDADO (21:00 → 23:00)
+      });
     });
   });
 

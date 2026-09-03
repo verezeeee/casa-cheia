@@ -9,6 +9,7 @@ import type {
   PublicTournamentTableMapDto,
   TournamentDetailResponse,
   TournamentEntryDto,
+  TournamentReportResponse,
   TournamentSummaryDto,
   TournamentTableMapDto,
 } from '@poker-system/shared';
@@ -21,6 +22,7 @@ import type { EliminateEntryDto } from './dto/eliminate-entry.dto';
 import type { UpdateTournamentDto } from './dto/update-tournament.dto';
 import type { Move, TableSnapshot } from './seating';
 import { planInitialSeat, planRebalance, planRedraw } from './seating';
+import { buildTournamentReport } from './tournament-report';
 import type { TournamentTableRow } from './tournament.mappers';
 import {
   advanceClockToNow,
@@ -54,6 +56,29 @@ const ENTRY_INCLUDE = {
     },
   },
 } satisfies Prisma.TournamentEntryInclude;
+
+/**
+ * As colunas de inscrição que o RELATÓRIO consome (RT-BE-03), e só elas.
+ *
+ * `select` explícito em vez do `include: { user: ... }` sobre o model inteiro:
+ * o shape resultante é exatamente `TournamentReportEntrySource`, então o
+ * compilador cobra a correspondência aqui, no ponto da consulta, em vez de
+ * aceitar por estrutura um payload gordo (chipStack, buyInTransactionId,
+ * payoutTransactionId...) que a função pura ignora. Um campo novo exigido pelo
+ * relatório amanhã quebra a compilação DESTE arquivo — que é onde a query mora
+ * — em vez de vir `undefined` em runtime.
+ */
+const REPORT_ENTRY_SELECT = {
+  id: true,
+  userId: true,
+  status: true,
+  staffBonusPaid: true,
+  finalPosition: true,
+  prizeAmount: true,
+  registeredAt: true,
+  eliminatedAt: true,
+  user: { select: { name: true } },
+} satisfies Prisma.TournamentEntrySelect;
 
 /**
  * Mesas do torneio com a ocupação corrente. Um único shape para os três usos
@@ -365,6 +390,75 @@ export class TournamentService {
     ]);
 
     return toTournamentDetailResponse(tournament, prizes, entries);
+  }
+
+  /**
+   * RT-BE-03 — Relatório de fechamento do torneio (`RT-001`: endpoint próprio,
+   * não o retorno de `finish`, porque isto é consultável N vezes e meses
+   * depois).
+   *
+   * LEITURA PURA: sem `withClube`, sem transação e sem `lockTournament`. Não há
+   * uma única escrita aqui, e o relatório só existe para torneios `FINISHED`/
+   * `CANCELLED` — a partir daí as linhas de origem são IMUTÁVEIS (nenhuma rota
+   * do módulo aceita torneio encerrado: `finish` dá 400, `register`/`eliminate`
+   * também), então não existe corrida a serializar nem snapshot a proteger.
+   * Mesma decisão de `getTournament`, e o `clubeId` no `where` do `findUnique`
+   * é o que faz o isolamento de tenant nesta camada, independente do RLS.
+   *
+   * GUARDA DE STATUS (`RT-002`): `DRAFT`/`REGISTERING`/`RUNNING` → 400, e não
+   * um relatório parcial. Durante o jogo os números são provisórios (prize pool
+   * ainda cresce com reentradas, colocações ainda não existem) e um documento
+   * financeiro provisório é pior que documento nenhum — o staff imprimiria o
+   * fechamento errado. `CANCELLED` entra porque é fechamento legítimo: mostra
+   * quem foi reembolsado e quanto voltou.
+   *
+   * A agregação inteira acontece em memória, em `buildTournamentReport` — nunca
+   * em `groupBy`/SQL. São dezenas de linhas por torneio, e a regra (posição
+   * derivada, reentrada, aritmética de dinheiro) precisa ser testável sem
+   * Postgres.
+   */
+  async getReport(
+    clubeId: string,
+    tournamentId: string,
+  ): Promise<TournamentReportResponse> {
+    const tournament = await this.prisma.tournament.findUnique({
+      where: { id: tournamentId, clubeId },
+    });
+    if (!tournament) throw new NotFoundException('Torneio não encontrado.');
+    if (tournament.status !== 'FINISHED' && tournament.status !== 'CANCELLED') {
+      throw new BadRequestException(
+        'O relatório fica disponível quando o torneio é encerrado.',
+      );
+    }
+
+    const [prizes, entries, tablesUsed] = await Promise.all([
+      this.prisma.tournamentPrize.findMany({
+        where: { tournamentId },
+        orderBy: { position: 'asc' },
+      }),
+      // TODAS as inscrições, inclusive as `REFUNDED`: é
+      // `buildTournamentReport` que decide o que cada status faz no relatório
+      // (o cancelamento vira `refundedEntries` e sai do ranking). Filtrar aqui
+      // esconderia dele a informação de que houve cancelamento.
+      this.prisma.tournamentEntry.findMany({
+        where: { tournamentId },
+        select: REPORT_ENTRY_SELECT,
+        orderBy: { registeredAt: 'asc' },
+      }),
+      // SEM filtro de status: mesa `CLOSED` conta. A pergunta que este número
+      // responde é "quantas mesas o clube montou nesta noite" (histórico), não
+      // "quantas estão abertas agora" — num torneio de 4 mesas que desmontou
+      // até a final table, filtrar por `OPEN` devolveria 1.
+      this.prisma.tournamentTable.count({ where: { tournamentId } }),
+    ]);
+
+    return buildTournamentReport(
+      tournament,
+      prizes,
+      entries,
+      tablesUsed,
+      new Date(),
+    );
   }
 
   /**

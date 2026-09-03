@@ -54,6 +54,7 @@ function buildController() {
       | 'unregisterEntry'
       | 'eliminateEntry'
       | 'finishTournament'
+      | 'getReport'
     >
   > = {
     createTournament: jest.fn(),
@@ -64,6 +65,7 @@ function buildController() {
     unregisterEntry: jest.fn(),
     eliminateEntry: jest.fn(),
     finishTournament: jest.fn(),
+    getReport: jest.fn(),
   };
   const clockService: jest.Mocked<
     Pick<
@@ -367,6 +369,52 @@ describe('TournamentController', () => {
       CLUBE_ID,
       'trn-1',
     );
+  });
+
+  // RT-BE-04. O guard é declarativo (metadata do `RolesGuard`) e o e2e
+  // RT-QA-02 é quem prova o 403 de PLAYER; aqui só a delegação e o repasse do
+  // par (clubeId, id) — sem `Idempotency-Key`, porque é GET.
+  it('getReport delega ao service', async () => {
+    const { controller, tournamentService } = buildController();
+    const report = {
+      tournamentId: 'trn-1',
+      name: 'Sunday Major',
+      status: TournamentStatus.FINISHED,
+      buyIn: '90.00',
+      fee: '10.00',
+      staffBonusCost: null,
+      startsAt: new Date().toISOString(),
+      stats: {
+        totalEntries: 0,
+        uniquePlayers: 0,
+        reentries: 0,
+        refundedEntries: 0,
+        staffBonusesPaid: 0,
+        tablesUsed: 0,
+        lastLevelNumber: null,
+        prizePool: '0.00',
+        totalPaidOut: '0.00',
+        unpaidPrizePool: '0.00',
+        guaranteedPrize: null,
+        overlay: null,
+        feeRevenue: '0.00',
+        staffBonusRevenue: '0.00',
+        houseRevenue: '0.00',
+        startedAt: null,
+        finishedAt: null,
+        durationMs: null,
+        durationEstimated: true,
+      },
+      prizes: [],
+      ranking: [],
+      generatedAt: new Date().toISOString(),
+    };
+    tournamentService.getReport.mockResolvedValue(report);
+
+    const result = await controller.getReport(CLUBE_ID, 'trn-1');
+
+    expect(tournamentService.getReport).toHaveBeenCalledWith(CLUBE_ID, 'trn-1');
+    expect(result).toBe(report);
   });
 
   describe('relógio', () => {
