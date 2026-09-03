@@ -78,6 +78,21 @@ describe('api/tournament', () => {
     expect(init.body).toBe(JSON.stringify({ staffBonus: true }));
   });
 
+  it('registerGuestEntry faz POST em .../register-guest com o corpo e o header Idempotency-Key', async () => {
+    mockJsonResponse({ id: 'entry-1', userId: 'guest-1' });
+    await tournamentApi.registerGuestEntry('trn-1', 'idem-guest-1', {
+      name: 'Convidado da Silva',
+      phone: '11999998888',
+      staffBonus: true,
+    });
+    const [url, init] = lastCall();
+    expect(url).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1/register-guest`);
+    expect(init.body).toBe(
+      JSON.stringify({ name: 'Convidado da Silva', phone: '11999998888', staffBonus: true }),
+    );
+    expect((init.headers as Record<string, string>)['Idempotency-Key']).toBe('idem-guest-1');
+  });
+
   it('eliminateEntry faz POST em .../eliminate com o corpo informado', async () => {
     mockJsonResponse({ id: 'entry-1' });
     await tournamentApi.eliminateEntry('trn-1', 'entry-1', { finalPosition: 3 });

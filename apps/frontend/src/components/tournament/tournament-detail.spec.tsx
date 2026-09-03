@@ -14,6 +14,7 @@ jest.mock('@/lib/api/tournament', () => ({
     unregisterEntry: jest.fn(),
     unregisterEntryForUser: jest.fn(),
     registerEntryForUser: jest.fn(),
+    registerGuestEntry: jest.fn(),
     eliminateEntry: jest.fn(),
     finishTournament: jest.fn(),
     updateTournament: jest.fn(),
@@ -520,6 +521,43 @@ describe('TournamentDetail', () => {
     );
     // Fecha o modal e limpa a busca depois de inscrever.
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('admin inscreve um jogador sem cadastro no clube (walk-in)', async () => {
+    mockedUseSession.mockReturnValue({
+      clubeRole: ClubeRole.ADMIN,
+      user: { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
+      status: 'authenticated',
+      login: jest.fn(),
+      logout: jest.fn(),
+      clubes: [],
+      currentClubeId: null,
+      switchClube: jest.fn(),
+      refreshClubes: jest.fn(),
+    });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
+    (clubMembersApi.listMembers as jest.Mock).mockResolvedValue([]);
+    (tournamentApi.registerGuestEntry as jest.Mock).mockResolvedValue({});
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Inscrever jogador')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Sem cadastro'));
+    fireEvent.change(screen.getByPlaceholderText('Nome do jogador'), {
+      target: { value: 'Convidado da Silva' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Telefone (DDD + número)'), {
+      target: { value: '11999998888' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Inscrever convidado' }));
+
+    await waitFor(() =>
+      expect(tournamentApi.registerGuestEntry).toHaveBeenCalledWith('trn-1', expect.any(String), {
+        name: 'Convidado da Silva',
+        phone: '11999998888',
+        staffBonus: false,
+      }),
+    );
   });
 
   it('mostra mensagem de erro quando a query falha', async () => {

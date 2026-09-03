@@ -129,6 +129,19 @@ export interface RegisterEntryRequest {
 }
 
 /**
+ * Corpo de `POST /clubes/:clubeId/torneios/:id/register-guest` (ADMIN).
+ * Jogador SEM CADASTRO NO CLUBE — só nome e telefone, mesmo espírito de
+ * `SitGuestAtTableRequest`. Buy-in não vem no corpo: é sempre o do torneio.
+ */
+export interface RegisterGuestEntryRequest {
+  name: string;
+  /** Somente dígitos, DDD + número (10 ou 11 dígitos). */
+  phone: string;
+  /** Opção pelo bônus de staff. Ausente/`false` = não paga. */
+  staffBonus?: boolean;
+}
+
+/**
  * Um nível na criação/substituição de um preset de blinds.
  *
  * Herda os campos obrigatórios do DTO de resposta para não divergir dele; o

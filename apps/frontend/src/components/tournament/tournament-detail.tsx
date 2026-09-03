@@ -26,7 +26,12 @@ import {
 } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
 import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
+import { maskPhone, onlyDigits } from '@/lib/masks';
 import { EditTournamentForm } from './edit-tournament-form';
+
+/** Mesmo idioma dos 3 modos de sentar na mesa (`seat-grid.tsx`), só que sem o modo "eu mesmo" — quem inscreve aqui é sempre o admin, por outra pessoa. */
+const REGISTER_MODE_LABEL = { member: 'Membro do clube', guest: 'Sem cadastro' } as const;
+type RegisterMode = keyof typeof REGISTER_MODE_LABEL;
 
 const STATUS_VARIANT: Record<TournamentStatus, BadgeVariant> = {
   [TournamentStatus.DRAFT]: 'warning',
@@ -94,6 +99,10 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const [memberSearch, setMemberSearch] = useState('');
   const [confirmingMember, setConfirmingMember] = useState<ClubeMembershipDto | null>(null);
   const [confirmStaffBonus, setConfirmStaffBonus] = useState(false);
+  const [registerMode, setRegisterMode] = useState<RegisterMode>('member');
+  const [guestName, setGuestName] = useState('');
+  const [guestPhone, setGuestPhone] = useState('');
+  const [guestStaffBonus, setGuestStaffBonus] = useState(false);
 
   const {
     data: tournament,
@@ -156,6 +165,32 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   function openConfirmRegister(member: ClubeMembershipDto) {
     setConfirmStaffBonus(false);
     setConfirmingMember(member);
+  }
+
+  const registerGuestMutation = useMutation({
+    mutationFn: () =>
+      tournamentApi.registerGuestEntry(tournamentId, crypto.randomUUID(), {
+        name: guestName,
+        phone: guestPhone,
+        staffBonus: guestStaffBonus,
+      }),
+    onSuccess: () => {
+      setError(null);
+      setGuestName('');
+      setGuestPhone('');
+      setGuestStaffBonus(false);
+      invalidate();
+    },
+    onError: (caught: unknown) => {
+      setError(
+        caught instanceof ApiError ? caught.message : 'Não foi possível inscrever o convidado.',
+      );
+    },
+  });
+
+  function handleRegisterGuest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    registerGuestMutation.mutate();
   }
 
   const eliminateMutation = useMutation({
@@ -392,37 +427,95 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
 
       {isAdmin && registrationOpen && (
         <Card title="Inscrever jogador">
-          <p className="text-sm text-muted">
-            Busque um membro já cadastrado no clube por nome, e-mail ou CPF para inscrevê-lo em nome
-            dele — o buy-in sai da carteira do jogador, não da sua.
-          </p>
-          <Input
-            className="mt-3"
-            placeholder="Nome, e-mail ou CPF"
-            value={memberSearch}
-            onChange={(e) => setMemberSearch(e.target.value)}
-          />
-          {memberSearch.trim() && (
-            <ul className="mt-3 flex flex-col gap-2 divide-y divide-border">
-              {memberCandidates.length === 0 ? (
-                <li className="pt-2 text-sm text-muted">Nenhum membro encontrado.</li>
-              ) : (
-                memberCandidates.map((member) => (
-                  <li
-                    key={member.userId}
-                    className="flex items-center justify-between gap-2 pt-2 first:pt-0"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{member.name}</p>
-                      <p className="truncate text-xs text-muted">{member.email}</p>
-                    </div>
-                    <Button size="sm" onClick={() => openConfirmRegister(member)}>
-                      Inscrever
-                    </Button>
-                  </li>
-                ))
+          {/* Mesmo idioma visual do seletor de modos de `seat-grid.tsx`. */}
+          <div className="flex flex-wrap gap-2">
+            {(Object.keys(REGISTER_MODE_LABEL) as RegisterMode[]).map((mode) => (
+              <Button
+                key={mode}
+                type="button"
+                size="sm"
+                variant={registerMode === mode ? 'secondary' : 'ghost'}
+                onClick={() => setRegisterMode(mode)}
+              >
+                {REGISTER_MODE_LABEL[mode]}
+              </Button>
+            ))}
+          </div>
+
+          {registerMode === 'member' && (
+            <>
+              <p className="mt-3 text-sm text-muted">
+                Busque um membro já cadastrado no clube por nome, e-mail ou CPF para inscrevê-lo em
+                nome dele — o buy-in sai da carteira do jogador, não da sua.
+              </p>
+              <Input
+                className="mt-3"
+                placeholder="Nome, e-mail ou CPF"
+                value={memberSearch}
+                onChange={(e) => setMemberSearch(e.target.value)}
+              />
+              {memberSearch.trim() && (
+                <ul className="mt-3 flex flex-col gap-2 divide-y divide-border">
+                  {memberCandidates.length === 0 ? (
+                    <li className="pt-2 text-sm text-muted">Nenhum membro encontrado.</li>
+                  ) : (
+                    memberCandidates.map((member) => (
+                      <li
+                        key={member.userId}
+                        className="flex items-center justify-between gap-2 pt-2 first:pt-0"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{member.name}</p>
+                          <p className="truncate text-xs text-muted">{member.email}</p>
+                        </div>
+                        <Button size="sm" onClick={() => openConfirmRegister(member)}>
+                          Inscrever
+                        </Button>
+                      </li>
+                    ))
+                  )}
+                </ul>
               )}
-            </ul>
+            </>
+          )}
+
+          {registerMode === 'guest' && (
+            <form onSubmit={handleRegisterGuest} className="mt-3 flex flex-col gap-3">
+              <p className="text-sm text-muted">
+                Jogador sem cadastro no clube (walk-in) — só nome e telefone. O valor do buy-in
+                {tournament.staffBonusCost ? ' (e do bônus de staff, se marcado)' : ''} entra como
+                dinheiro em espécie recebido no balcão.
+              </p>
+              <Input
+                placeholder="Nome do jogador"
+                required
+                value={guestName}
+                onChange={(e) => setGuestName(e.target.value)}
+              />
+              <Input
+                inputMode="numeric"
+                placeholder="Telefone (DDD + número)"
+                maxLength={15}
+                required
+                value={maskPhone(guestPhone)}
+                onChange={(e) => setGuestPhone(onlyDigits(e.target.value, 11))}
+              />
+              {tournament.staffBonusCost && (
+                <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-[var(--accent)]"
+                    checked={guestStaffBonus}
+                    onChange={(e) => setGuestStaffBonus(e.target.checked)}
+                  />
+                  Bônus de staff ({formatMoneySafe(tournament.staffBonusCost)} → +
+                  {tournament.staffBonusChips} fichas)
+                </label>
+              )}
+              <Button type="submit" loading={registerGuestMutation.isPending} fullWidth>
+                Inscrever convidado
+              </Button>
+            </form>
           )}
         </Card>
       )}

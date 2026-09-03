@@ -30,6 +30,7 @@ import { CreateTournamentDto } from './dto/create-tournament.dto';
 import { EliminateEntryDto } from './dto/eliminate-entry.dto';
 import { ListTournamentsQueryDto } from './dto/list-tournaments-query.dto';
 import { RegisterEntryDto } from './dto/register-entry.dto';
+import { RegisterGuestEntryDto } from './dto/register-guest-entry.dto';
 import { UpdateBlindLevelDto } from './dto/update-blind-level.dto';
 import { UpdateTournamentDto } from './dto/update-tournament.dto';
 import { TournamentClockService } from './tournament-clock.service';
@@ -151,6 +152,31 @@ export class TournamentController {
       tournamentId,
       idempotencyKey,
       dto.staffBonus ?? false,
+    );
+  }
+
+  /**
+   * ADMIN inscrevendo um jogador SEM CADASTRO NO CLUBE — só nome e telefone
+   * (walk-in). Ver `TournamentService.registerGuestEntry`: cria conta,
+   * vínculo e wallet do convidado na mesma transação da inscrição.
+   */
+  @Post(':id/register-guest')
+  @UseGuards(RolesGuard)
+  @Roles(ClubeRole.ADMIN)
+  async registerGuest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('clubeId') clubeId: string,
+    @Param('id') tournamentId: string,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Body() dto: RegisterGuestEntryDto,
+  ): Promise<TournamentEntryDto> {
+    requireIdempotencyKey(idempotencyKey);
+    return this.tournamentService.registerGuestEntry(
+      user.id,
+      clubeId,
+      tournamentId,
+      dto,
+      idempotencyKey,
     );
   }
 

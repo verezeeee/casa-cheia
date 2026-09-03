@@ -12,12 +12,16 @@ import type {
   TournamentSummaryDto,
   TournamentTableMapDto,
 } from '@poker-system/shared';
+import { randomBytes } from 'node:crypto';
 import { Prisma } from '../generated/prisma';
+import { mapUniqueConstraintError, normalizeEmail } from '../auth/auth.service';
 import { decodeCursor, encodeCursor } from '../common/pagination/cursor';
+import { PasswordHasherService } from '../common/crypto/password-hasher.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WalletService } from '../wallet/wallet.service';
 import type { CreateTournamentDto } from './dto/create-tournament.dto';
 import type { EliminateEntryDto } from './dto/eliminate-entry.dto';
+import type { RegisterGuestEntryDto } from './dto/register-guest-entry.dto';
 import type { UpdateTournamentDto } from './dto/update-tournament.dto';
 import type { Move, TableSnapshot } from './seating';
 import { planInitialSeat, planRebalance, planRedraw } from './seating';
@@ -38,6 +42,18 @@ const ONE_HUNDRED = new Prisma.Decimal('100');
 const DEFAULT_TABLE_CAPACITY = 9;
 /** Inscrições que ocupam vaga e assento — as demais já saíram do torneio. */
 const ALIVE_STATUSES = ['REGISTERED', 'PLAYING'] as const;
+
+/** Senha descartável do convidado: nunca loga, só precisa satisfazer o hash. Mesmo formato de `TableService.generateThrowawayPassword`. */
+function generateThrowawayPassword(): string {
+  return randomBytes(9).toString('base64url');
+}
+
+/** E-mail sintético do convidado — só existe pra satisfazer `User.email @unique`; nunca é entregável nem exibido como contato real. Mesmo formato de `TableService.generateGuestEmail`. */
+function generateGuestEmail(): string {
+  return normalizeEmail(
+    `convidado+${randomBytes(12).toString('hex')}@guests.invalid`,
+  );
+}
 
 /**
  * Inscrição + assento ATIVO, o "ticket" do PRD §5.1. O `where: { active: true }`
@@ -87,6 +103,7 @@ export class TournamentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
+    private readonly passwordHasher: PasswordHasherService,
   ) {}
 
   /**
@@ -439,115 +456,24 @@ export class TournamentService {
         const twin = await findReplay(tx, clubeId, ledgerKey);
         if (twin) return twin;
 
-        const tournament = await tx.tournament.findUniqueOrThrow({
-          where: { id: tournamentId },
-          include: { blindLevels: { orderBy: { levelNumber: 'asc' } } },
-        });
-
         // Inscrições ANTERIORES deste jogador neste torneio (as vivas o banco
         // já barra em `tournament_entries_active_user_unique`): > 0 significa
         // reentrada, e reentrada tem regras próprias.
         const previousEntries = await tx.tournamentEntry.count({
           where: { tournamentId, userId, status: { not: 'REFUNDED' } },
         });
-        // Nível EFETIVO (não o gravado): o relógio anda sozinho por tempo de
-        // parede (`advanceClockToNow`) e ninguém pode ter mexido nele
-        // recentemente — sem isto, o corte por nível abaixo deixaria passar
-        // uma inscrição tardia só porque a coluna no banco ainda não tinha
-        // sido atualizada por um `next()` manual.
-        const now = new Date();
-        const currentLevelNumber = advanceClockToNow(
-          tournament,
-          tournament.blindLevels,
-          now,
-        ).currentLevelNumber;
-        assertRegistrationAllowed(
-          { ...tournament, currentLevelNumber },
-          previousEntries,
-          now,
-        );
-
-        // Conta só quem está VIVO: com reentry, o eliminado devolveu a vaga.
-        const aliveCount = await tx.tournamentEntry.count({
-          where: { tournamentId, status: { in: [...ALIVE_STATUSES] } },
-        });
-        if (aliveCount >= tournament.maxPlayers) {
-          throw new BadRequestException('Torneio lotado.');
-        }
-
-        // Bônus de staff (staff add-on): OPCIONAL por jogador, bypassa o
-        // prize pool como `fee` — ver docblock de `Tournament.staffBonusCost`
-        // (tournament.prisma). `staffBonus: true` num torneio que não
-        // oferece o bônus (`staffBonusCost` nulo) é 400, não um no-op
-        // silencioso: o jogador achou que ia pagar por fichas extras.
-        if (staffBonus && tournament.staffBonusCost === null) {
-          throw new BadRequestException(
-            'Este torneio não oferece bônus de staff.',
-          );
-        }
-        const chipStack =
-          tournament.startingStack +
-          (staffBonus ? (tournament.staffBonusChips ?? 0) : 0);
-
-        const created = await tx.tournamentEntry.create({
-          data: {
-            // `clubeId` explícito aqui só para o TYPESCRIPT: o `tx` tipado é
-            // o `Prisma.TransactionClient` padrão (a extension de
-            // `withClube` é invisível para o compilador), então o
-            // `TournamentEntryUncheckedCreateInput` exige a coluna mesmo a
-            // injeção automática cobrindo o runtime — ver o JSDoc de
-            // `clubeScopeExtension` sobre o chokepoint sempre vencer.
-            clubeId,
-            tournamentId,
-            userId,
-            status: 'REGISTERED',
-            chipStack,
-            staffBonusPaid: staffBonus,
-          },
-        });
-
-        let debit = new Prisma.Decimal(tournament.buyIn).add(tournament.fee);
-        let description = 'Inscrição em torneio';
-        if (staffBonus) {
-          debit = debit.add(tournament.staffBonusCost ?? 0);
-          description += ' (+ bônus de staff)';
-        }
-
-        const walletTxn = await this.walletService.applyLedgerEntry(
-          tx,
-          wallet.id,
-          {
-            type: 'TOURNAMENT_BUY_IN',
-            amount: debit.negated(),
-            idempotencyKey: ledgerKey,
-            description,
-            tournamentEntryId: created.id,
-          },
-        );
-
-        await tx.tournament.update({
-          where: { id: tournamentId },
-          data: {
-            prizePool: { increment: tournament.buyIn },
-            // `version` continua subindo: é o carimbo de "mudou" que os
-            // leitores usam, mesmo sem servir mais de guarda de concorrência.
-            version: { increment: 1 },
-          },
-        });
-
-        // Plano de assento calculado AQUI DENTRO, sobre o estado lido na
-        // própria transação e sob o lock — nunca sobre leitura anterior.
-        await this.seatEntry(
+        const tournament = await this.assertEntryEligible(
           tx,
           tournamentId,
-          tournament.tableCapacity,
-          created.id,
+          previousEntries,
+          staffBonus,
         );
 
-        return tx.tournamentEntry.update({
-          where: { id: created.id },
-          data: { buyInTransactionId: walletTxn.id },
-          include: ENTRY_INCLUDE,
+        return this.createEntryLocked(tx, tournament, clubeId, {
+          userId,
+          walletId: wallet.id,
+          staffBonus,
+          ledgerKey,
         });
       });
 
@@ -557,6 +483,277 @@ export class TournamentService {
         // Chaves de idempotência DIFERENTES para o mesmo jogador ainda vivo
         // (`tournament_entries_active_user_unique`): aí é 409 de verdade — o
         // replay legítimo já foi resolvido dentro da transação.
+        throw new ConflictException('Você já está inscrito neste torneio.');
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Valida elegibilidade de inscrição (reentrada, corte por nível, lotação,
+   * bônus de staff) e devolve o torneio lido — SEMPRE dentro da transação já
+   * travada por `lockTournament`, e ANTES de qualquer escrita da inscrição
+   * (`createEntryLocked`). Compartilhado por `registerEntry`/
+   * `registerGuestEntry`: a única diferença entre os dois é `previousEntries`
+   * — um convidado recém-criado NUNCA teve inscrição anterior neste torneio
+   * (a conta ainda nem existia), então `registerGuestEntry` passa `0`
+   * diretamente em vez de rodar a query de contagem.
+   *
+   * Rodar isto ANTES de criar o convidado (em vez de só dentro do núcleo de
+   * escrita) é o que evita criar `User`/`ClubeMembership`/`Wallet` do
+   * convidado só para descobrir, um passo depois, que o torneio está lotado
+   * ou com inscrições fechadas — a transação reverteria tudo de qualquer
+   * forma, mas falhar cedo evita trabalho e leituras desnecessárias.
+   */
+  private async assertEntryEligible(
+    tx: Prisma.TransactionClient,
+    tournamentId: string,
+    previousEntries: number,
+    staffBonus: boolean,
+  ) {
+    const tournament = await tx.tournament.findUniqueOrThrow({
+      where: { id: tournamentId },
+      include: { blindLevels: { orderBy: { levelNumber: 'asc' } } },
+    });
+
+    // Nível EFETIVO (não o gravado): o relógio anda sozinho por tempo de
+    // parede (`advanceClockToNow`) e ninguém pode ter mexido nele
+    // recentemente — sem isto, o corte por nível abaixo deixaria passar
+    // uma inscrição tardia só porque a coluna no banco ainda não tinha
+    // sido atualizada por um `next()` manual.
+    const now = new Date();
+    const currentLevelNumber = advanceClockToNow(
+      tournament,
+      tournament.blindLevels,
+      now,
+    ).currentLevelNumber;
+    assertRegistrationAllowed(
+      { ...tournament, currentLevelNumber },
+      previousEntries,
+      now,
+    );
+
+    // Conta só quem está VIVO: com reentry, o eliminado devolveu a vaga.
+    const aliveCount = await tx.tournamentEntry.count({
+      where: { tournamentId, status: { in: [...ALIVE_STATUSES] } },
+    });
+    if (aliveCount >= tournament.maxPlayers) {
+      throw new BadRequestException('Torneio lotado.');
+    }
+
+    // Bônus de staff (staff add-on): OPCIONAL por jogador, bypassa o
+    // prize pool como `fee` — ver docblock de `Tournament.staffBonusCost`
+    // (tournament.prisma). `staffBonus: true` num torneio que não
+    // oferece o bônus (`staffBonusCost` nulo) é 400, não um no-op
+    // silencioso: o jogador achou que ia pagar por fichas extras.
+    if (staffBonus && tournament.staffBonusCost === null) {
+      throw new BadRequestException('Este torneio não oferece bônus de staff.');
+    }
+
+    return tournament;
+  }
+
+  /**
+   * Núcleo de escrita de `registerEntry`/`registerGuestEntry` — roda DEPOIS
+   * de `assertEntryEligible` já ter aprovado a inscrição: cria a
+   * `TournamentEntry`, debita o buy-in da wallet informada e senta a
+   * inscrição. Só muda de quem chama: `registerEntry` já tem `walletId`
+   * (jogador com cadastro no clube); `registerGuestEntry` acabou de criar
+   * `User` + `ClubeMembership` + `Wallet` para o convidado, DENTRO da mesma
+   * transação, e passa o `walletId` recém criado.
+   */
+  private async createEntryLocked(
+    tx: Prisma.TransactionClient,
+    tournament: Awaited<ReturnType<TournamentService['assertEntryEligible']>>,
+    clubeId: string,
+    params: {
+      userId: string;
+      walletId: string;
+      staffBonus: boolean;
+      ledgerKey: string;
+    },
+  ) {
+    const { userId, walletId, staffBonus, ledgerKey } = params;
+    const tournamentId = tournament.id;
+
+    const chipStack =
+      tournament.startingStack +
+      (staffBonus ? (tournament.staffBonusChips ?? 0) : 0);
+
+    const created = await tx.tournamentEntry.create({
+      data: {
+        // `clubeId` explícito aqui só para o TYPESCRIPT: o `tx` tipado é
+        // o `Prisma.TransactionClient` padrão (a extension de
+        // `withClube` é invisível para o compilador), então o
+        // `TournamentEntryUncheckedCreateInput` exige a coluna mesmo a
+        // injeção automática cobrindo o runtime — ver o JSDoc de
+        // `clubeScopeExtension` sobre o chokepoint sempre vencer.
+        clubeId,
+        tournamentId,
+        userId,
+        status: 'REGISTERED',
+        chipStack,
+        staffBonusPaid: staffBonus,
+      },
+    });
+
+    let debit = new Prisma.Decimal(tournament.buyIn).add(tournament.fee);
+    let description = 'Inscrição em torneio';
+    if (staffBonus) {
+      debit = debit.add(tournament.staffBonusCost ?? 0);
+      description += ' (+ bônus de staff)';
+    }
+
+    const walletTxn = await this.walletService.applyLedgerEntry(tx, walletId, {
+      type: 'TOURNAMENT_BUY_IN',
+      amount: debit.negated(),
+      idempotencyKey: ledgerKey,
+      description,
+      tournamentEntryId: created.id,
+    });
+
+    await tx.tournament.update({
+      where: { id: tournamentId },
+      data: {
+        prizePool: { increment: tournament.buyIn },
+        // `version` continua subindo: é o carimbo de "mudou" que os
+        // leitores usam, mesmo sem servir mais de guarda de concorrência.
+        version: { increment: 1 },
+      },
+    });
+
+    // Plano de assento calculado AQUI DENTRO, sobre o estado lido na
+    // própria transação e sob o lock — nunca sobre leitura anterior.
+    await this.seatEntry(
+      tx,
+      tournamentId,
+      tournament.tableCapacity,
+      created.id,
+    );
+
+    return tx.tournamentEntry.update({
+      where: { id: created.id },
+      data: { buyInTransactionId: walletTxn.id },
+      include: ENTRY_INCLUDE,
+    });
+  }
+
+  /**
+   * ADMIN inscrevendo no torneio um jogador SEM CADASTRO NO CLUBE — só nome e
+   * telefone (walk-in). Mesmo espírito de `TableService.sitGuestAtTable`:
+   * cria uma conta `User` mínima (e-mail sintético, `isGuest: true`) +
+   * `ClubeMembership` (`PLAYER`/`ACTIVE`) + `Wallet` (nasce zerada) NA MESMA
+   * TRANSAÇÃO da inscrição — se qualquer passo falhar, NADA commita, então
+   * não sobra convidado órfão sem inscrição. A elegibilidade (torneio
+   * lotado, inscrições fechadas, bônus de staff) é conferida ANTES de criar
+   * o convidado — ver docblock de `assertEntryEligible`.
+   *
+   * DINHEIRO: o convidado nunca fez PIX, a wallet dele nasce zerada. O valor
+   * do buy-in do torneio (+ fee, + bônus de staff se optado) entra como um
+   * `ADJUSTMENT` explícito (crédito, `createdById: adminId`) imediatamente
+   * antes do débito `TOURNAMENT_BUY_IN` de sempre — mesmo raciocínio do
+   * docblock de `sitGuestAtTable` sobre não usar o fallback de "saldo
+   * insuficiente" do `WalletService.applyLedgerEntry` pra dinheiro real.
+   *
+   * Reaproveita `createEntryLocked` para o restante da regra de negócio
+   * (débito, assento) — idêntica à de um membro com cadastro.
+   */
+  async registerGuestEntry(
+    adminId: string,
+    clubeId: string,
+    tournamentId: string,
+    dto: RegisterGuestEntryDto,
+    idempotencyKey: string,
+  ): Promise<TournamentEntryDto> {
+    const ledgerKey = `tournament-buyin:${idempotencyKey}`;
+    const staffBonus = dto.staffBonus ?? false;
+
+    const replay = await findReplay(this.prisma, clubeId, ledgerKey);
+    if (replay) return toTournamentEntryDto(replay);
+
+    // Hash calculado ANTES da transação — não segurar a transação aberta
+    // durante um `await` de argon2id (mesmo cuidado de
+    // `TableService.sitGuestAtTable`).
+    const passwordHash = await this.passwordHasher.hash(
+      generateThrowawayPassword(),
+    );
+
+    try {
+      const entry = await this.prisma.withClube(clubeId, async (tx) => {
+        await lockTournament(tx, clubeId, tournamentId);
+
+        // Mesmo caminho rápido de idempotência sob lock de `registerEntry`.
+        const twin = await findReplay(tx, clubeId, ledgerKey);
+        if (twin) return twin;
+
+        // Convidado recém-criado nunca teve inscrição anterior neste
+        // torneio — ver docblock de `assertEntryEligible`.
+        const tournament = await this.assertEntryEligible(
+          tx,
+          tournamentId,
+          0,
+          staffBonus,
+        );
+
+        const guest = await tx.user.create({
+          data: {
+            email: generateGuestEmail(),
+            passwordHash,
+            name: dto.name,
+            phone: dto.phone,
+            isGuest: true,
+          },
+        });
+
+        await tx.clubeMembership.create({
+          data: {
+            clubeId,
+            userId: guest.id,
+            role: 'PLAYER',
+            status: 'ACTIVE',
+          },
+        });
+
+        const wallet = await tx.wallet.create({
+          data: { userId: guest.id, clubeId },
+        });
+
+        // Entrada em espécie — crédito explícito cobrindo o MESMO valor que
+        // `createEntryLocked` vai debitar logo abaixo (buy-in + fee [+
+        // bônus de staff]), ver docblock do método.
+        let cashIn = new Prisma.Decimal(tournament.buyIn).add(tournament.fee);
+        if (staffBonus) {
+          cashIn = cashIn.add(tournament.staffBonusCost ?? 0);
+        }
+        await this.walletService.applyLedgerEntry(tx, wallet.id, {
+          type: 'ADJUSTMENT',
+          amount: cashIn,
+          idempotencyKey: `guest-cash-in:${idempotencyKey}`,
+          description: 'Entrada em dinheiro — jogador sem cadastro',
+          createdById: adminId,
+        });
+
+        return this.createEntryLocked(tx, tournament, clubeId, {
+          userId: guest.id,
+          walletId: wallet.id,
+          staffBonus,
+          ledgerKey,
+        });
+      });
+
+      return toTournamentEntryDto(entry);
+    } catch (error) {
+      // P2002 de `users.email` (colisão do e-mail sintético — praticamente
+      // impossível, 24 chars hex aleatórios) tem mensagem específica;
+      // qualquer outro P2002 aqui só pode ser a mesma corrida de
+      // `tournament_entries_active_user_unique` de `registerEntry` (não
+      // deveria acontecer para um convidado recém-criado, mas o retry de
+      // idempotência pode reapresentar a mesma chave).
+      const mapped = mapUniqueConstraintError(error);
+      if (mapped !== error) {
+        throw mapped;
+      }
+      if (isUniqueConstraintError(error)) {
         throw new ConflictException('Você já está inscrito neste torneio.');
       }
       throw error;

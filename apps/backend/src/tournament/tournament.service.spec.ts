@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../generated/prisma';
+import type { PasswordHasherService } from '../common/crypto/password-hasher.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { WalletService } from '../wallet/wallet.service';
 import { TournamentService } from './tournament.service';
@@ -126,8 +127,12 @@ function buildPrisma() {
       updateMany: jest.fn(),
     },
     tournamentSeat: { create: jest.fn(), updateMany: jest.fn() },
-    wallet: { findUniqueOrThrow: jest.fn() },
+    wallet: { findUniqueOrThrow: jest.fn(), create: jest.fn() },
     walletTransaction: { findUnique: shared.walletTransactionFindUnique },
+    // Criação do convidado (`registerGuestEntry`), mesmo trio de
+    // `TableService.sitGuestAtTable`.
+    user: { create: jest.fn() },
+    clubeMembership: { create: jest.fn() },
     // Lock pessimista do torneio (`SELECT ... FOR UPDATE`).
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'trn-1' }]),
   };
@@ -180,13 +185,15 @@ function primeRegister(
 function buildService(overrides?: { prisma?: ReturnType<typeof buildPrisma> }) {
   const prisma = overrides?.prisma ?? buildPrisma();
   const walletService = { applyLedgerEntry: jest.fn() };
+  const passwordHasher = { hash: jest.fn().mockResolvedValue('hashed') };
 
   const service = new TournamentService(
     prisma as unknown as PrismaService,
     walletService as unknown as WalletService,
+    passwordHasher as unknown as PasswordHasherService,
   );
 
-  return { service, prisma, walletService };
+  return { service, prisma, walletService, passwordHasher };
 }
 
 describe('TournamentService', () => {
@@ -904,6 +911,169 @@ describe('TournamentService', () => {
       await expect(
         service.registerEntry('user-1', CLUBE_ID, 'trn-1', 'idem-1'),
       ).rejects.toBeInstanceOf(ConflictException);
+    });
+  });
+
+  describe('registerGuestEntry', () => {
+    const GUEST_DTO = { name: 'Convidado da Silva', phone: '11999998888' };
+    const GUEST_WALLET = { id: 'guest-wallet-1', userId: 'guest-1' };
+
+    /** Cenário feliz: convidado criado, cash-in e inscrição, tudo na mesma transação. */
+    function primeGuestRegister(
+      prisma: ReturnType<typeof buildPrisma>,
+      walletService: { applyLedgerEntry: jest.Mock },
+      tournament: Record<string, unknown> = TOURNAMENT,
+    ) {
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.tournament.findUnique.mockResolvedValue(tournament);
+      prisma.tournamentEntry.count.mockResolvedValue(0);
+      prisma.tx.user.create.mockResolvedValue({ id: 'guest-1' });
+      prisma.tx.wallet.create.mockResolvedValue(GUEST_WALLET);
+      prisma.tx.tournamentEntry.create.mockResolvedValue({ id: 'entry-1' });
+      walletService.applyLedgerEntry.mockResolvedValue({ id: 'wtxn-1' });
+      prisma.tx.tournamentTable.create.mockResolvedValue({ id: 'table-1' });
+      prisma.tx.tournamentEntry.update.mockResolvedValue(ENTRY_ROW);
+    }
+
+    it('cria conta, vínculo e wallet do convidado e inscreve, tudo na mesma transação', async () => {
+      const { service, prisma, walletService, passwordHasher } = buildService();
+      primeGuestRegister(prisma, walletService);
+
+      await service.registerGuestEntry(
+        'admin-1',
+        CLUBE_ID,
+        'trn-1',
+        GUEST_DTO,
+        'idem-guest-1',
+      );
+
+      expect(passwordHasher.hash).toHaveBeenCalled();
+      expect(prisma.tx.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            name: GUEST_DTO.name,
+            phone: GUEST_DTO.phone,
+            isGuest: true,
+          }),
+        }),
+      );
+      expect(prisma.tx.clubeMembership.create).toHaveBeenCalledWith({
+        data: {
+          clubeId: CLUBE_ID,
+          userId: 'guest-1',
+          role: 'PLAYER',
+          status: 'ACTIVE',
+        },
+      });
+      expect(prisma.tx.wallet.create).toHaveBeenCalledWith({
+        data: { userId: 'guest-1', clubeId: CLUBE_ID },
+      });
+
+      // Crédito em espécie (ADJUSTMENT) cobrindo EXATAMENTE buyIn+fee, antes
+      // do débito TOURNAMENT_BUY_IN de sempre.
+      const calls = walletService.applyLedgerEntry.mock.calls as Array<
+        [unknown, string, { type: string; amount: Prisma.Decimal }]
+      >;
+      const cashIn = calls.find(([, , p]) => p.type === 'ADJUSTMENT')?.[2];
+      expect(cashIn?.amount.toFixed(2)).toBe('100.00'); // 90 + 10
+      const debit = calls.find(
+        ([, , p]) => p.type === 'TOURNAMENT_BUY_IN',
+      )?.[2];
+      expect(debit?.amount.toFixed(2)).toBe('-100.00');
+
+      expect(prisma.tx.tournamentEntry.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ userId: 'guest-1' }),
+        }),
+      );
+    });
+
+    it('respeita staffBonus: cash-in e débito cobrem buyIn+fee+staffBonusCost', async () => {
+      const WITH_STAFF_BONUS = {
+        ...TOURNAMENT,
+        staffBonusCost: new Prisma.Decimal('5.00'),
+        staffBonusChips: 2_500,
+      };
+      const { service, prisma, walletService } = buildService();
+      primeGuestRegister(prisma, walletService, WITH_STAFF_BONUS);
+
+      await service.registerGuestEntry(
+        'admin-1',
+        CLUBE_ID,
+        'trn-1',
+        { ...GUEST_DTO, staffBonus: true },
+        'idem-guest-2',
+      );
+
+      const calls = walletService.applyLedgerEntry.mock.calls as Array<
+        [unknown, string, { type: string; amount: Prisma.Decimal }]
+      >;
+      const cashIn = calls.find(([, , p]) => p.type === 'ADJUSTMENT')?.[2];
+      expect(cashIn?.amount.toFixed(2)).toBe('105.00'); // 90 + 10 + 5
+      const debit = calls.find(
+        ([, , p]) => p.type === 'TOURNAMENT_BUY_IN',
+      )?.[2];
+      expect(debit?.amount.toFixed(2)).toBe('-105.00');
+    });
+
+    it('rejeita quando o torneio não está REGISTERING (nenhum convidado sobra órfão)', async () => {
+      const { service, prisma } = buildService();
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.tournament.findUnique.mockResolvedValue({
+        ...TOURNAMENT,
+        status: 'RUNNING',
+      });
+
+      await expect(
+        service.registerGuestEntry(
+          'admin-1',
+          CLUBE_ID,
+          'trn-1',
+          GUEST_DTO,
+          'idem-guest-3',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    // Replay idempotente: mesmo idempotencyKey não cria um segundo convidado.
+    it('replay idempotente devolve o mesmo ticket sem criar um segundo convidado', async () => {
+      const { service, prisma, walletService } = buildService();
+      prisma.walletTransaction.findUnique.mockResolvedValue({
+        tournamentEntryId: 'entry-1',
+      });
+      prisma.tournamentEntry.findUnique.mockResolvedValue({
+        ...ENTRY_ROW,
+        seats: [{ seatNumber: 4, tournamentTable: { tableNumber: 2 } }],
+      });
+
+      const result = await service.registerGuestEntry(
+        'admin-1',
+        CLUBE_ID,
+        'trn-1',
+        GUEST_DTO,
+        'idem-guest-1',
+      );
+
+      expect(result).toMatchObject({ id: 'entry-1', tableNumber: 2 });
+      expect(prisma.tx.user.create).not.toHaveBeenCalled();
+      expect(walletService.applyLedgerEntry).not.toHaveBeenCalled();
+    });
+
+    it('colisão do e-mail sintético (P2002) vira 409 com mensagem específica', async () => {
+      const { service, prisma } = buildService();
+      prisma.walletTransaction.findUnique.mockResolvedValue(null);
+      prisma.tournament.findUnique.mockResolvedValue(TOURNAMENT);
+      (prisma.withClube as jest.Mock).mockRejectedValue(uniqueError('email'));
+
+      await expect(
+        service.registerGuestEntry(
+          'admin-1',
+          CLUBE_ID,
+          'trn-1',
+          GUEST_DTO,
+          'idem-guest-4',
+        ),
+      ).rejects.toThrow('E-mail já cadastrado.');
     });
   });
 
