@@ -21,8 +21,16 @@ import type {
 } from '../generated/prisma';
 import { toBlindLevelDto } from './blind-structure.mappers';
 
-const toMoney = (value: { toFixed: (digits: number) => string }): string =>
-  value.toFixed(2);
+/**
+ * Dinheiro na borda HTTP: `Prisma.Decimal` → `MoneyString` com 2 casas fixas.
+ *
+ * Exportado (e não local) porque `tournament-report.ts` precisa exatamente
+ * desta conversão — dois `toFixed(2)` independentes seriam duas chances de
+ * divergir no formato do dinheiro exposto pelo mesmo módulo.
+ */
+export const toMoney = (value: {
+  toFixed: (digits: number) => string;
+}): string => value.toFixed(2);
 
 export function toTournamentSummaryDto(
   tournament: Tournament & { _count: { entries: number } },
@@ -291,7 +299,10 @@ export function toPublicTournamentTableMapDto(
   };
 }
 
-function toTournamentPrizeDto(prize: TournamentPrize): TournamentPrizeDto {
+/** Faixa da grade de premiação. Exportado para o relatório (`RT-BE-02`). */
+export function toTournamentPrizeDto(
+  prize: Pick<TournamentPrize, 'position' | 'percentage'>,
+): TournamentPrizeDto {
   return { position: prize.position, percentage: toMoney(prize.percentage) };
 }
 
