@@ -29,11 +29,16 @@ import type {
   PaginatedResponse,
   PixChargeResponse,
   PixWithdrawalResponse,
+  PositionSource,
   SessionUser,
   TableSeatDto,
   TableSummaryDto,
   TournamentClockDto,
   TournamentEntryDto,
+  TournamentPrizeDto,
+  TournamentReportRankingItemDto,
+  TournamentReportResponse,
+  TournamentReportStatsDto,
   TournamentSeatDto,
   TournamentSummaryDto,
   TournamentTableDto,
@@ -75,6 +80,7 @@ describe('@poker-system/shared barrel export', () => {
         'TABLE_CASH_OUT',
         'TOURNAMENT_BUY_IN',
         'TOURNAMENT_PAYOUT',
+        'TOURNAMENT_REFUND',
         'ADJUSTMENT',
       ]);
     });
@@ -315,6 +321,9 @@ describe('@poker-system/shared barrel export', () => {
         userId: sessionUser.id,
         name: sessionUser.name,
         email: sessionUser.email,
+        document: null,
+        phone: null,
+        isGuest: false,
         role: ClubeRole.ADMIN,
         status: ClubeMembershipStatus.ACTIVE,
         createdAt: '2026-01-31T12:00:00.000Z',
@@ -323,6 +332,66 @@ describe('@poker-system/shared barrel export', () => {
       const page: PaginatedResponse<WalletTransactionDto> = {
         items: [transaction],
         nextCursor: null,
+      };
+
+      const prize: TournamentPrizeDto = { position: 1, percentage: '100.00' };
+
+      // Campeão: sem `finalPosition` gravado (o staff só digita colocação na
+      // eliminação) e sem `eliminatedAt` — daí `positionSource: 'DERIVED'`.
+      const derivedSource: PositionSource = 'DERIVED';
+
+      const champion: TournamentReportRankingItemDto = {
+        entryId: entry.id,
+        userId: sessionUser.id,
+        userName: sessionUser.name,
+        position: 1,
+        positionSource: derivedSource,
+        finalPosition: null,
+        prizeAmount: '90.00',
+        status: TournamentEntryStatus.PAID,
+        registeredAt: '2026-02-01T20:30:00.000Z',
+        eliminatedAt: null,
+        staffBonusPaid: true,
+        isReentry: false,
+      };
+
+      const reportStats: TournamentReportStatsDto = {
+        totalEntries: 2,
+        uniquePlayers: 1,
+        // 2 entradas de 1 jogador só = 1 reentrada. Não é rebuy: rebuy/add-on
+        // não existem como produto neste domínio.
+        reentries: 1,
+        refundedEntries: 1,
+        staffBonusesPaid: 1,
+        tablesUsed: 1,
+        lastLevelNumber: 4,
+        prizePool: '180.00',
+        totalPaidOut: '90.00',
+        unpaidPrizePool: '90.00',
+        guaranteedPrize: '500.00',
+        // Informativo: `finishTournament` ignora `guaranteedPrize` no payout.
+        overlay: '320.00',
+        feeRevenue: '20.00',
+        staffBonusRevenue: '5.00',
+        houseRevenue: '25.00',
+        startedAt: '2026-02-01T21:05:00.000Z',
+        finishedAt: '2026-02-01T23:05:00.000Z',
+        durationMs: 7_200_000,
+        durationEstimated: false,
+      };
+
+      const report: TournamentReportResponse = {
+        tournamentId: tournament.id,
+        name: tournament.name,
+        status: TournamentStatus.FINISHED,
+        buyIn: tournament.buyIn,
+        fee: tournament.fee,
+        staffBonusCost: tournament.staffBonusCost,
+        startsAt: tournament.startsAt,
+        stats: reportStats,
+        prizes: [prize],
+        ranking: [champion],
+        generatedAt: '2026-02-02T09:00:00.000Z',
       };
 
       assert.equal(tokens.expiresIn, 900);
@@ -343,6 +412,12 @@ describe('@poker-system/shared barrel export', () => {
       assert.equal(membership.status, ClubeMembershipStatus.ACTIVE);
       assert.equal(page.nextCursor, null);
       assert.equal(page.items.length, 1);
+      assert.equal(report.ranking[0]?.positionSource, 'DERIVED');
+      assert.equal(report.ranking[0]?.finalPosition, null);
+      assert.equal(report.stats.reentries, 1);
+      assert.equal(report.stats.overlay, '320.00');
+      assert.equal(report.stats.durationEstimated, false);
+      assert.equal(report.prizes[0]?.position, 1);
     });
 
     it('rejeita number em campos monetários', () => {
@@ -386,11 +461,39 @@ describe('@poker-system/shared barrel export', () => {
         breakLabel: null,
       } satisfies BlindLevelDto;
 
+      // `durationMs` é number (milissegundos, não dinheiro) e `prizePool` é
+      // MoneyString: os dois erros de tipo convivem no mesmo DTO, então vale
+      // ancorar ambos aqui.
+      const invalidReportStats = {
+        totalEntries: 0,
+        uniquePlayers: 0,
+        reentries: 0,
+        refundedEntries: 0,
+        staffBonusesPaid: 0,
+        tablesUsed: 0,
+        lastLevelNumber: null,
+        // @ts-expect-error dinheiro é sempre MoneyString (string), nunca number
+        prizePool: 0,
+        totalPaidOut: '0.00',
+        unpaidPrizePool: '0.00',
+        guaranteedPrize: null,
+        overlay: null,
+        feeRevenue: '0.00',
+        staffBonusRevenue: '0.00',
+        houseRevenue: '0.00',
+        startedAt: null,
+        finishedAt: '2026-02-01T21:00:00.000Z',
+        // @ts-expect-error duração é milissegundos (number), não MoneyString
+        durationMs: '0.00',
+        durationEstimated: true,
+      } satisfies TournamentReportStatsDto;
+
       // Os objetos só existem para ancorar os @ts-expect-error acima.
       assert.ok(invalidBalance);
       assert.ok(invalidTransaction);
       assert.ok(invalidWithdrawal);
       assert.ok(invalidLevel);
+      assert.ok(invalidReportStats);
     });
   });
 });

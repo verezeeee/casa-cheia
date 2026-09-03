@@ -62,3 +62,7 @@ export * from './interfaces/clube-membership.dto';
 
 // Histórico unificado de entradas (torneio + mesa) — ver `EntriesService`.
 export * from './interfaces/entry-history-item.dto';
+
+// --- RT / Relatório de torneio finalizado ---------------------------------
+// Documento DERIVADO das linhas de origem (não há model no banco, ver RT-000).
+export * from './interfaces/tournament-report.dto';
