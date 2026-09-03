@@ -34,7 +34,37 @@ jest.mock('@/components/providers/session-provider', () => ({
   useSession: jest.fn(),
 }));
 
+/**
+ * `router.push` do App Router: o componente navega para o relatório depois de
+ * encerrar (`RT-FE-05`). `routerPush` é declarado antes do `jest.mock` mas só
+ * é LIDO dentro do `useRouter()` fake — no momento em que a fábrica roda
+ * (require do módulo) ninguém toca a variável, então não há TDZ.
+ */
+const routerPush = jest.fn();
+
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ push: routerPush }),
+}));
+
 const mockedUseSession = jest.mocked(useSession);
+
+/** A sessão é mockada em todo teste deste arquivo; só o papel varia. */
+function mockSession(
+  clubeRole: ClubeRole,
+  user = { id: 'admin', email: 'admin@x.dev', name: 'Admin' },
+) {
+  mockedUseSession.mockReturnValue({
+    clubeRole,
+    user,
+    status: 'authenticated',
+    login: jest.fn(),
+    logout: jest.fn(),
+    clubes: [],
+    currentClubeId: null,
+    switchClube: jest.fn(),
+    refreshClubes: jest.fn(),
+  });
+}
 
 function renderWithClient(ui: ReactElement) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -520,6 +550,88 @@ describe('TournamentDetail', () => {
     );
     // Fecha o modal e limpa a busca depois de inscrever.
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  // `RT-FE-05`: sem estes pontos de entrada a tela de relatório fica órfã,
+  // alcançável só digitando a URL.
+  it('ADMIN vê "Ver relatório" em torneio FINISHED', async () => {
+    mockSession(ClubeRole.ADMIN);
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      status: 'FINISHED' as const,
+    });
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Ver relatório')).toBeInTheDocument());
+
+    expect(screen.getByText('Ver relatório')).toHaveAttribute('href', '/tournaments/trn-1/report');
+  });
+
+  // CANCELLED também tem relatório (`RT-002`): é o documento de fechamento de
+  // quem foi reembolsado e de quanto voltou.
+  it('ADMIN vê "Ver relatório" em torneio CANCELLED', async () => {
+    mockSession(ClubeRole.ADMIN);
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      status: 'CANCELLED' as const,
+    });
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Ver relatório')).toBeInTheDocument());
+  });
+
+  it('não mostra "Ver relatório" para quem não é ADMIN, mesmo com o torneio encerrado', async () => {
+    mockSession(ClubeRole.PLAYER, { id: 'me', email: 'me@x.dev', name: 'Eu' });
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue({
+      ...TOURNAMENT,
+      status: 'FINISHED' as const,
+    });
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Ver mesas')).toBeInTheDocument());
+
+    expect(screen.queryByText('Ver relatório')).not.toBeInTheDocument();
+  });
+
+  it.each(['REGISTERING', 'RUNNING'] as const)(
+    'não mostra "Ver relatório" com o torneio em %s',
+    async (status) => {
+      mockSession(ClubeRole.ADMIN);
+      (tournamentApi.getTournament as jest.Mock).mockResolvedValue({ ...TOURNAMENT, status });
+
+      renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+      await waitFor(() => expect(screen.getByText('Ver mesas')).toBeInTheDocument());
+
+      expect(screen.queryByText('Ver relatório')).not.toBeInTheDocument();
+    },
+  );
+
+  it('encerrar o torneio leva o ADMIN direto para o relatório', async () => {
+    mockSession(ClubeRole.ADMIN);
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
+    (tournamentApi.finishTournament as jest.Mock).mockResolvedValue({});
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Encerrar torneio')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Encerrar torneio'));
+
+    await waitFor(() => expect(tournamentApi.finishTournament).toHaveBeenCalledWith('trn-1'));
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith('/tournaments/trn-1/report'));
+  });
+
+  it('falha ao encerrar não navega para o relatório', async () => {
+    mockSession(ClubeRole.ADMIN);
+    (tournamentApi.getTournament as jest.Mock).mockResolvedValue(TOURNAMENT);
+    (tournamentApi.finishTournament as jest.Mock).mockRejectedValue(new Error('falhou'));
+
+    renderWithClient(<TournamentDetail tournamentId="trn-1" />);
+    await waitFor(() => expect(screen.getByText('Encerrar torneio')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Encerrar torneio'));
+
+    await waitFor(() => expect(screen.getByText('Não foi possível encerrar.')).toBeInTheDocument());
+    expect(routerPush).not.toHaveBeenCalled();
   });
 
   it('mostra mensagem de erro quando a query falha', async () => {

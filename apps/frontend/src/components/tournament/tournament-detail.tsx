@@ -9,6 +9,7 @@ import {
 import type { ClubeMembershipDto, TournamentEntryDto } from '@poker-system/shared';
 import type { BadgeVariant } from '@/components/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'next/navigation';
 import { TOURNAMENT_STATUS_VARIANT } from '@/lib/tournament-status';
 import { useState, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
@@ -79,6 +80,7 @@ function seatLabel(entry: TournamentEntryDto): string | null {
 export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const { user, clubeRole } = useSession();
   const queryClient = useQueryClient();
+  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [wantsStaffBonus, setWantsStaffBonus] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -199,6 +201,12 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
     onSuccess: () => {
       setError(null);
       invalidate();
+      // Encerrar é a última ação operacional do torneio, e é exatamente o
+      // instante em que o relatório passa a existir (`RT-002`): em vez de
+      // deixar o admin numa tela que acabou de virar histórico, leva direto
+      // para o fechamento (`RT-FE-05`). `push`, não `replace`: o voltar do
+      // navegador tem de trazer o detalhe de volta.
+      router.push(`/tournaments/${tournamentId}/report`);
     },
     onError: (caught: unknown) => {
       setError(caught instanceof ApiError ? caught.message : 'Não foi possível encerrar.');
@@ -269,6 +277,13 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
   const canFinish =
     tournament.status === TournamentStatus.REGISTERING ||
     tournament.status === TournamentStatus.RUNNING;
+  // Espelha as duas guardas do endpoint de relatório: só torneio encerrado
+  // (`RT-002`) e só ADMIN do clube (`RT-003`, o payload carrega a receita da
+  // casa). Mostrar o link fora dessa janela seria oferecer um 400/403.
+  const canSeeReport =
+    isAdmin &&
+    (tournament.status === TournamentStatus.FINISHED ||
+      tournament.status === TournamentStatus.CANCELLED);
   // Mesma condição do backend (`TournamentService.updateTournament`): só dá
   // para editar antes da 1ª inscrição — depois disso a config trava.
   const canEdit =
@@ -324,6 +339,9 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
           >
             Tela de TV
           </TextLink>
+          {canSeeReport && (
+            <TextLink href={`/tournaments/${tournamentId}/report`}>Ver relatório</TextLink>
+          )}
         </div>
 
         {canRegister && (

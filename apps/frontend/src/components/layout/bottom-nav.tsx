@@ -19,10 +19,12 @@ import { isNavTabActive, NAV_TABS } from './nav-tabs';
 export function BottomNav() {
   const pathname = usePathname();
 
+  // `print:hidden`: além de não fazer sentido no papel, uma barra `fixed`
+  // impressa reaparece em TODA página do documento (ver `RT-FE-04`).
   return (
     <nav
       aria-label="Navegação principal"
-      className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] lg:hidden"
+      className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] lg:hidden print:hidden"
     >
       <ul className="mx-auto flex w-full max-w-3xl gap-1 p-1.5">
         {NAV_TABS.map((tab) => {

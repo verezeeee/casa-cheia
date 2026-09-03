@@ -8,9 +8,10 @@ import type {
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { tournamentApi } from '@/lib/api/tournament';
-import { Badge, Card, ErrorState, Skeleton } from '@/components/ui';
+import { Badge, Button, Card, ErrorState, Skeleton } from '@/components/ui';
 import { formatCountdown, formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
 import { ApiError } from '@/lib/http-client';
+import { buildTournamentReportCsv, tournamentReportCsvFilename } from '@/lib/report-csv';
 import { TOURNAMENT_STATUS_VARIANT } from '@/lib/tournament-status';
 
 /** Placeholder único para "não se aplica"/"não existe" em todo o relatório. */
@@ -59,6 +60,38 @@ function isPositiveMoney(value: MoneyString | null | undefined): boolean {
 }
 
 /**
+ * Baixa o CSV do relatório (`RT-FE-04`).
+ *
+ * Impuro (toca `document`/`URL`) e por isso declarado FORA do componente, na
+ * mesma disciplina de `lateRegistrationOpen` em `tournament-detail.tsx`: o
+ * lint de pureza do React Compiler recusa esse tipo de chamada no corpo de
+ * render. Só roda a partir de um `onClick`.
+ *
+ * O payload vem do cache do `useQuery` — nenhuma requisição nova (`RT-004`):
+ * o relatório é imutável depois de encerrado, então exportar é serializar o
+ * que já está na tela. `Blob` + `createObjectURL` + `<a download>` é o único
+ * caminho de download client-side sem endpoint de arquivo no backend (que é
+ * justamente a fase 2 descartada em `RT-004`).
+ */
+function downloadReportCsv(report: TournamentReportResponse): void {
+  const blob = new Blob([buildTournamentReportCsv(report)], {
+    type: 'text/csv;charset=utf-8;',
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = tournamentReportCsvFilename(report);
+
+  // O nó precisa estar no documento para o clique programático valer no
+  // Firefox; sai logo em seguida, e o object URL é revogado para não segurar
+  // o Blob em memória pelo resto da sessão.
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+/**
  * Relatório de fechamento do torneio (`RT-FE-02`/`RT-FE-03`).
  *
  * Sem `refetchInterval` e com `staleTime: Infinity` de propósito, ao contrário
@@ -104,6 +137,21 @@ export function TournamentReport({ tournamentId }: { tournamentId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* `print:hidden`: os próprios botões não fazem sentido no papel — e o
+          "Salvar PDF" é a caixa de impressão do navegador, então eles
+          apareceriam no preview do documento que estão gerando. O resto do
+          chrome de navegação (`Sidebar`/`TopBar`/`BottomNav`/voltar) recebe a
+          mesma classe nos próprios componentes, já que é montado pelo
+          `RequireAuth`, fora desta página. */}
+      <div className="flex flex-wrap justify-end gap-2 print:hidden">
+        <Button variant="secondary" size="sm" onClick={() => downloadReportCsv(data)}>
+          Exportar CSV
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => window.print()}>
+          Imprimir / Salvar PDF
+        </Button>
+      </div>
+
       <ReportHeader report={data} />
 
       <div className="flex flex-col gap-4 lg:grid lg:grid-cols-2 lg:items-start">

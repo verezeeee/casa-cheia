@@ -16,7 +16,9 @@ export interface PageHeaderProps {
 export function PageHeader({ title, backHref }: PageHeaderProps) {
   return (
     <div className="flex items-center gap-2">
-      {backHref && <BackLink href={backHref} />}
+      {/* O título fica no documento impresso (identifica a folha); o botão de
+          voltar, não — é navegação (ver `RT-FE-04`). */}
+      {backHref && <BackLink href={backHref} className="print:hidden" />}
       <h1 className="font-display text-2xl font-semibold tracking-tight">{title}</h1>
     </div>
   );

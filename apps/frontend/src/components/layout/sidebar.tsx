@@ -37,8 +37,11 @@ export function Sidebar() {
   const { user, clubeRole, logout } = useSession();
   const isAdmin = clubeRole === ClubeRole.ADMIN;
 
+  // `print:hidden` (junto com `TopBar`/`BottomNav`): a impressão do relatório
+  // de torneio (`RT-FE-04`) sai do desktop, onde esta sidebar é a navegação
+  // visível — e navegação não vai para o papel.
   return (
-    <aside className="hidden shrink-0 lg:flex lg:w-64 lg:flex-col lg:border-r lg:border-border lg:p-4">
+    <aside className="hidden shrink-0 lg:flex lg:w-64 lg:flex-col lg:border-r lg:border-border lg:p-4 print:hidden">
       <Link href="/lobby" className="px-3 transition-opacity duration-200 hover:opacity-80">
         <Logo className="text-lg" />
       </Link>

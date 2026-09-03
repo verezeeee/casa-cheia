@@ -1,7 +1,7 @@
 import { TournamentEntryStatus, TournamentStatus } from '@poker-system/shared';
 import type { TournamentReportResponse } from '@poker-system/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { tournamentApi } from '@/lib/api/tournament';
 import { ApiError } from '@/lib/http-client';
@@ -252,6 +252,101 @@ describe('TournamentReport', () => {
     await waitFor(() =>
       expect(screen.getByText('Não foi possível carregar o relatório.')).toBeInTheDocument(),
     );
+  });
+
+  // `RT-FE-04`. O conteúdo do arquivo é testado em `lib/report-csv.spec.ts`
+  // (função pura); aqui interessa só o encanamento de download: Blob criado a
+  // partir do payload em cache (sem requisição nova), nome de arquivo certo,
+  // âncora temporária clicada e removida, object URL revogado.
+  it('exporta o CSV a partir do payload já em cache, sem nova requisição', async () => {
+    mockReport(FULL_REPORT);
+    const createObjectURL = jest.fn().mockReturnValue('blob:relatorio');
+    const revokeObjectURL = jest.fn();
+    // `URL.createObjectURL` não existe no jsdom — `defineProperty` em vez de
+    // `spyOn`, que exigiria a propriedade já presente.
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: createObjectURL,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      value: revokeObjectURL,
+      configurable: true,
+      writable: true,
+    });
+
+    // O clique real do jsdom em `<a download>` não baixa nada; o spy também
+    // captura o estado da âncora no instante do clique (depois ela é removida).
+    const clicked: { href: string | null; name: string; connected: boolean } = {
+      href: null,
+      name: '',
+      connected: false,
+    };
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.href = this.getAttribute('href');
+      clicked.name = this.download;
+      clicked.connected = this.isConnected;
+    });
+
+    try {
+      renderWithClient(<TournamentReport tournamentId="trn-1" />);
+      const button = await screen.findByRole('button', { name: 'Exportar CSV' });
+
+      fireEvent.click(button);
+
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(createObjectURL.mock.calls[0][0]).toBeInstanceOf(Blob);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+      expect(clicked.href).toBe('blob:relatorio');
+      expect(clicked.name).toBe('relatorio-sunday-major-2026-09-03.csv');
+      // Firefox só honra clique programático em nó ligado ao documento.
+      expect(clicked.connected).toBe(true);
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:relatorio');
+      // Nada de âncora órfã sobrando no documento depois do download.
+      expect(document.querySelector('a[download]')).toBeNull();
+      // Exportar não refaz a leitura: o relatório é imutável (`RT-004`).
+      expect(tournamentApi.getTournamentReport).toHaveBeenCalledTimes(1);
+    } finally {
+      clickSpy.mockRestore();
+    }
+  });
+
+  it('clique em imprimir chama window.print', async () => {
+    mockReport(FULL_REPORT);
+    const print = jest.fn();
+    Object.defineProperty(window, 'print', { value: print, configurable: true, writable: true });
+
+    renderWithClient(<TournamentReport tournamentId="trn-1" />);
+    const button = await screen.findByRole('button', { name: 'Imprimir / Salvar PDF' });
+
+    fireEvent.click(button);
+
+    expect(print).toHaveBeenCalledTimes(1);
+  });
+
+  it('esconde a barra de ações na impressão', async () => {
+    mockReport(FULL_REPORT);
+
+    renderWithClient(<TournamentReport tournamentId="trn-1" />);
+    const button = await screen.findByRole('button', { name: 'Exportar CSV' });
+
+    // Os botões não podem sair no papel — nem no preview do "Salvar PDF" que
+    // eles próprios abrem.
+    expect(button.parentElement).toHaveClass('print:hidden');
+  });
+
+  it('não oferece exportação quando o relatório não carregou', async () => {
+    (tournamentApi.getTournamentReport as jest.Mock).mockRejectedValue(new Error('rede'));
+
+    renderWithClient(<TournamentReport tournamentId="trn-1" />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Não foi possível carregar o relatório.')).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('button', { name: 'Exportar CSV' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Imprimir / Salvar PDF' })).not.toBeInTheDocument();
   });
 
   it('estado de carregamento renderiza esqueleto sem quebrar', () => {

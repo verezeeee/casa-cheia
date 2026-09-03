@@ -19,8 +19,11 @@ import { Logo } from './logo';
 export function TopBar() {
   const { user, logout } = useSession();
 
+  // `print:hidden` (junto com `Sidebar`/`BottomNav`): navegação não vai para o
+  // papel. Vale para qualquer página, mas nasceu do relatório de torneio
+  // (`RT-FE-04`), a primeira tela do app pensada para imprimir.
   return (
-    <header className="border-b border-border px-4 py-3 lg:hidden">
+    <header className="border-b border-border px-4 py-3 lg:hidden print:hidden">
       <div className="flex items-center justify-between gap-3">
         <Link href="/lobby" className="transition-opacity duration-200 hover:opacity-80">
           <Logo className="text-base" />
