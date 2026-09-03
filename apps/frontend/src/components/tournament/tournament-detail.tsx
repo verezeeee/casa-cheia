@@ -9,6 +9,7 @@ import {
 import type { ClubeMembershipDto, TournamentEntryDto } from '@poker-system/shared';
 import type { BadgeVariant } from '@/components/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { TOURNAMENT_STATUS_VARIANT } from '@/lib/tournament-status';
 import { useState, type FormEvent } from 'react';
 import { useSession } from '@/components/providers/session-provider';
 import { clubMembersApi } from '@/lib/api/club';
@@ -27,14 +28,6 @@ import {
 import { ApiError } from '@/lib/http-client';
 import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
 import { EditTournamentForm } from './edit-tournament-form';
-
-const STATUS_VARIANT: Record<TournamentStatus, BadgeVariant> = {
-  [TournamentStatus.DRAFT]: 'warning',
-  [TournamentStatus.REGISTERING]: 'success',
-  [TournamentStatus.RUNNING]: 'info',
-  [TournamentStatus.FINISHED]: 'neutral',
-  [TournamentStatus.CANCELLED]: 'danger',
-};
 
 const ENTRY_STATUS_VARIANT: Record<TournamentEntryStatus, BadgeVariant> = {
   [TournamentEntryStatus.REGISTERED]: 'neutral',
@@ -311,7 +304,9 @@ export function TournamentDetail({ tournamentId }: { tournamentId: string }) {
                 Editar
               </Button>
             )}
-            <Badge variant={STATUS_VARIANT[tournament.status]}>{tournament.status}</Badge>
+            <Badge variant={TOURNAMENT_STATUS_VARIANT[tournament.status]}>
+              {tournament.status}
+            </Badge>
           </div>
         </div>
         <p className="mt-2 text-sm text-muted">

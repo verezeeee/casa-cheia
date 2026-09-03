@@ -4,6 +4,7 @@ import type {
   TournamentClockDto,
   TournamentDetailResponse,
   TournamentEntryDto,
+  TournamentReportResponse,
   TournamentSummaryDto,
   TournamentTableMapDto,
 } from '@poker-system/shared';
@@ -23,6 +24,7 @@ function base(): string {
 
 const TOURNAMENT_PATHS = {
   detail: (id: string) => `${base()}/${id}`,
+  report: (id: string) => `${base()}/${id}/report`,
   register: (id: string) => `${base()}/${id}/register`,
   registerForUser: (id: string, userId: string) => `${base()}/${id}/register/${userId}`,
   unregister: (id: string) => `${base()}/${id}/unregister`,
@@ -64,6 +66,17 @@ export function updateTournament(
 
 export function getTournament(id: string): Promise<TournamentDetailResponse> {
   return httpClient.get<TournamentDetailResponse>(TOURNAMENT_PATHS.detail(id));
+}
+
+/**
+ * ADMIN. Relatório de fechamento (`RT-BE-04`).
+ *
+ * Recusado com 400 enquanto o torneio não está `FINISHED`/`CANCELLED`
+ * (`RT-002`) — a tela diferencia esse caso pelo `statusCode` do `ApiError`,
+ * então NÃO trate o erro aqui.
+ */
+export function getTournamentReport(id: string): Promise<TournamentReportResponse> {
+  return httpClient.get<TournamentReportResponse>(TOURNAMENT_PATHS.report(id));
 }
 
 export function registerEntry(
@@ -191,6 +204,7 @@ export const tournamentApi = {
   createTournament,
   updateTournament,
   getTournament,
+  getTournamentReport,
   registerEntry,
   unregisterEntry,
   unregisterEntryForUser,

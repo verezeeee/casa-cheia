@@ -1,20 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { TournamentStatus } from '@poker-system/shared';
-import type { BadgeVariant } from '@/components/ui';
 import { useQuery } from '@tanstack/react-query';
 import { tournamentApi } from '@/lib/api/tournament';
 import { Badge, EmptyState, ErrorState, Reveal, RevealItem, Skeleton } from '@/components/ui';
 import { formatDateTimeSafe, formatMoneySafe } from '@/lib/format';
-
-const STATUS_VARIANT: Record<TournamentStatus, BadgeVariant> = {
-  [TournamentStatus.DRAFT]: 'warning',
-  [TournamentStatus.REGISTERING]: 'success',
-  [TournamentStatus.RUNNING]: 'info',
-  [TournamentStatus.FINISHED]: 'neutral',
-  [TournamentStatus.CANCELLED]: 'danger',
-};
+import { TOURNAMENT_STATUS_VARIANT } from '@/lib/tournament-status';
 
 export function TournamentList() {
   const { data, isLoading, isError } = useQuery({
@@ -66,7 +57,9 @@ export function TournamentList() {
                 {formatDateTimeSafe(tournament.startsAt)}
               </p>
             </div>
-            <Badge variant={STATUS_VARIANT[tournament.status]}>{tournament.status}</Badge>
+            <Badge variant={TOURNAMENT_STATUS_VARIANT[tournament.status]}>
+              {tournament.status}
+            </Badge>
           </Link>
         </RevealItem>
       ))}

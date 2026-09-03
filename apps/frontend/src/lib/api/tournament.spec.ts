@@ -62,6 +62,15 @@ describe('api/tournament', () => {
     expect(lastCall()[0]).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1`);
   });
 
+  it('getTournamentReport faz GET em /tournaments/:id/report', async () => {
+    mockJsonResponse({ tournamentId: 'trn-1', ranking: [] });
+    await tournamentApi.getTournamentReport('trn-1');
+    const [url, init] = lastCall();
+    expect(url).toBe(`${API_URL}/clubes/clube-1/torneios/trn-1/report`);
+    expect(init.method).toBe('GET');
+    expect(init.body).toBeUndefined();
+  });
+
   it('registerEntry envia o header Idempotency-Key sem corpo', async () => {
     mockJsonResponse({ id: 'entry-1' });
     await tournamentApi.registerEntry('trn-1', 'idem-1');
