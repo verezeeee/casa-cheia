@@ -2,7 +2,56 @@
 
 Gerado pelo agente `arquiteto` a partir da lacuna identificada em [`mesas-torneio-mvp.md`](./mesas-torneio-mvp.md) (seção "Fora de escopo do MVP" / Fase 4: "dashboard consolidado e relatórios"), com exploração real do repositório (schema Prisma, `tournament.service.ts`, `tournament-clock.service.ts`, `packages/shared`, telas do frontend, board `MT-*` existente). Convenção de ID: `RT-<CAMADA>-<NN>`.
 
-## Status: PLANEJADO (03/09/2026) — nenhuma tarefa implementada ainda
+## Status: IMPLEMENTADO (03/09/2026)
+
+Todas as tarefas de `RT-000` a `RT-QA-05` foram implementadas e verificadas, na ordem sugerida no fim deste documento (6 commits, um por bloco). O restante deste documento é o plano original — mantido como registro de decisão, agora com este cabeçalho marcando o resultado. As seções de cada tarefa **não** foram editadas uma a uma com "✅": este resumo é a fonte de verdade sobre o que foi construído, e onde a implementação divergiu do plano isso está listado abaixo.
+
+**Verificação final (rodada no monorepo inteiro, não por tarefa isolada):**
+
+| Verificação | Resultado |
+|---|---|
+| `tsc --noEmit` (backend, frontend, shared) | limpo |
+| `eslint` (backend, frontend, shared) | 0 erros; 4 warnings PRÉ-EXISTENTES de `no-floating-promises` em `wallet.controller.spec.ts`, sem relação com esta feature |
+| `prettier --check` | limpo |
+| Testes unitários — backend | 582/582 (40 suites) |
+| Testes unitários — frontend | 369/369 (54 suites) |
+| Testes unitários — shared | 19/19 (6 suites) |
+| Integração (`*.int-spec.ts`, Postgres real) | 53/53 (2 suites), incluindo o CHECK de coerência de `RT-QA-03` |
+| e2e (`*.e2e-spec.ts`, Postgres real) | 49 passaram, 9 skipped (2 suítes de PIX em standby deliberado), **1 falha pré-existente** em `auth.e2e-spec.ts` — ver "Nota operacional" abaixo |
+| `next build` | limpo; rota `/tournaments/[id]/report` gerada |
+| Cobertura de `tournament-report.ts` (`RT-BE-02`) | 100% statements/branches/functions/lines |
+| Cobertura de `lib/report-csv.ts` (`RT-FE-04`) | 100% statements/branches/functions/lines |
+
+**Arquivos principais criados/alterados, por área:**
+
+- **Schema** (`apps/backend/prisma/`): `schema/tournament.prisma` (`Tournament.startedAt`), migration `20260903012128_tournament_started_at` (editada à mão para o CHECK `tournaments_finished_after_started`). Sem backfill e sem índice novo, como decidido em `RT-DB-01`.
+- **Shared** (`packages/shared/src/`): `interfaces/tournament-report.dto.ts` novo (`PositionSource`, `TournamentReportRankingItemDto`, `TournamentReportStatsDto`, `TournamentReportResponse`), exportado em `index.ts`, mais cenários em `index.spec.ts`.
+- **Backend** (`apps/backend/src/tournament/`): `tournament-report.ts` novo (agregação e ranking como função pura, zero I/O — padrão de `seating.ts`), `tournament.service.ts` (`getReport` + carimbo de `startedAt` em `eliminateEntry`), `tournament-clock.service.ts` (carimbo de `startedAt` no `start`, sem quebrar a disciplina de colunas explícitas de `MT-BE-07`), `tournament.controller.ts` (`@Get(':id/report')` com `@Roles(ADMIN)`), `tournament.mappers.ts`.
+- **Testes backend**: `tournament-report.spec.ts` novo (`RT-QA-01`), extensões de `tournament.service.spec.ts`, `tournament.controller.spec.ts`, `tournament-clock.service.spec.ts`, `test/tournament.e2e-spec.ts` (`RT-QA-02`, fluxo completo contra Postgres), `test/schema-invariants.int-spec.ts` e `test/tenant-isolation.int-spec.ts` (`RT-QA-03`), mais `test/tournament-helpers.ts`/`test/join-code.ts` (fixtures extraídas).
+- **Frontend** (`apps/frontend/src/`): `lib/api/tournament.ts` (`getTournamentReport`), `app/tournaments/[id]/report/page.tsx`, `components/tournament/tournament-report.tsx`, `lib/report-csv.ts` novo (serialização pura do CSV), `lib/tournament-status.ts` novo (`TOURNAMENT_STATUS_VARIANT` extraído das duas telas que o duplicavam), pontos de entrada em `tournament-detail.tsx`/`tournament-list.tsx`, e `print:hidden` no chrome de navegação (`sidebar`, `top-bar`, `bottom-nav`, `page-header`), que é montado pelo `RequireAuth` fora da página do relatório.
+
+### Divergências do plano (decisões tomadas na implementação)
+
+1. **CSV com `null` → célula VAZIA, não `"—"`** (`RT-FE-04` deixava a escolha aberta). O travessão é decisão de tela; em planilha, célula vazia é a representação correta de "não se aplica" e não contamina coluna numérica com texto.
+2. **BOM UTF-8 dentro da função pura**, não no chamador: quem baixa só embrulha a string em um `Blob`, e o conhecimento de "isto é um CSV para Excel pt-BR" não se divide em dois arquivos.
+3. **Data do nome do arquivo vem de `generatedAt`** (do payload), não de `new Date()`, e é formatada no fuso da operação (America/Sao_Paulo) — o nome passa a ser função pura do relatório, e um export às 22h não cai no dia seguinte.
+4. **`print:hidden` foi aplicado nos componentes de navegação compartilhados**, não só na página: `Sidebar`/`TopBar`/`BottomNav` são montados pelo `RequireAuth`, fora da árvore do relatório — não havia como esconder de dentro da página.
+5. **O item da lista de torneios deixou de ser um único `<Link>`**: o atalho "Ver relatório" é um segundo destino, e âncora dentro de âncora é HTML inválido. A moldura de `lg:` subiu para um wrapper; padding e hover continuam no link principal.
+6. **Na lista, o atalho aparece só em `FINISHED`** (e não em `CANCELLED`, que também tem relatório por `RT-002`): no lobby, "ver relatório" ao lado de um torneio que nem aconteceu convida ao clique errado — para cancelado, o caminho continua sendo o detalhe.
+
+### Nota operacional — banco e falha pré-existente de e2e
+
+- **Sem Docker daemon neste ambiente.** As suítes de integração/e2e rodaram contra o cluster local (`pg_ctlcluster` 16 na porta 5432) com `DATABASE_URL_TEST='postgresql://poker:poker@localhost:5432/poker_system_test?schema=public'`, em vez do 5433 do `docker-compose`. `DATABASE_URL_TEST` tem precedência sobre `DATABASE_URL` no `test/setup-env.ts`, então a trava contra rodar suíte destrutiva no banco de dev continua valendo.
+- **`auth.e2e-spec.ts` falha, e a falha é anterior a esta feature.** O cenário "reapresentar o refresh token já rotacionado → 401" espera 401, mas recebe 200: o commit `d1ee963` (`fix(backend,frontend): corrige login jogando de volta pro login e logout frequente residual`, três commits antes do início deste board) introduziu de propósito uma janela de graça de 10s (`REFRESH_REUSE_GRACE_MS` em `auth.service.ts`) para não deslogar quem tem duas abas refrescando ao mesmo tempo. O teste é de antes dessa mudança (último toque no arquivo: PR #14) e não foi atualizado junto. Falha reprodutível 3/3, sem relação com o relatório de torneio — corrigir exige decidir entre ajustar o teste ou revisar a janela de graça, e isso é tarefa do dono do fluxo de auth.
+
+### Pendências conhecidas (deixadas de propósito, não esquecidas)
+
+- **Overlay não é aplicado no payout.** `finishTournament` continua distribuindo só `prizePool × percentage` e ignorando `guaranteedPrize` (`tournament.service.ts:1183-1187`). O relatório apenas EXPÕE a lacuna (`stats.overlay`); corrigir é mudança de regra financeira com efeito em torneios já pagos — tarefa separada, com decisão de produto própria.
+- **Sem backfill de `startedAt`** nos torneios encerrados antes da migration: eles saem com `durationEstimated: true` e o horário AGENDADO rotulado como estimado na tela e no CSV.
+- **PDF/CSV server-side** (`RT-004` fase 2) — reconsiderar só quando houver envio automático do fechamento por e-mail/WhatsApp.
+- **Ranking público na TV do salão** (`RT-003`, fase 2) e **relatório parcial durante `RUNNING`** (`RT-002`) — sem consumidor declarado ainda.
+- **Model `TournamentReport` materializado** (`RT-000`) — reconsiderar no dashboard consolidado da Fase 4.
+- **Sem Playwright/Cypress** (`RT-QA-05`): decisão mantida de `MT-QA-04`. A validação manual do PR (encerrar torneio de teste, conferir números contra `prismaDirect`, exportar CSV, imprimir) continua sendo o complemento de RTL + `RT-QA-02`.
 
 ---
 
