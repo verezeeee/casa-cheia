@@ -695,10 +695,31 @@ export class TournamentService {
 
       // Primeira eliminação: REGISTERING -> RUNNING (o torneio "começou a
       // jogar") — dentro da mesma transação.
-      await tx.tournament.updateMany({
+      const transition = await tx.tournament.updateMany({
         where: { id: tournamentId, status: 'REGISTERING' },
         data: { status: 'RUNNING' },
       });
+
+      // RT-BE-01 — HORA REAL DE INÍCIO. Esta é a segunda porta de "o torneio
+      // começou" (a outra é `TournamentClockService.start`), e só carimba na
+      // TRANSIÇÃO: `transition.count === 1` acontece uma única vez por torneio,
+      // então as eliminações seguintes não disparam escrita nenhuma — e um
+      // torneio que já estava `RUNNING` antes desta migration NÃO ganha um
+      // `startedAt` inventado no meio do jogo (seria o backfill falso que
+      // RT-DB-01 recusa).
+      //
+      // `startedAt: null` no `where` mantém o carimbo imutável: se o diretor já
+      // tinha iniciado o relógio de blinds, aquele horário (mais antigo, e o
+      // certo) prevalece. Sobrescrevê-lo com o instante da primeira eliminação
+      // encurtaria a duração do torneio no relatório. Escrita separada da
+      // transição de status justamente porque a transição NÃO pode depender do
+      // carimbo — ela tem que valer nos dois casos.
+      if (transition.count === 1) {
+        await tx.tournament.updateMany({
+          where: { id: tournamentId, startedAt: null },
+          data: { startedAt: new Date() },
+        });
+      }
 
       const updated = await tx.tournamentEntry.update({
         where: { id: entryId },

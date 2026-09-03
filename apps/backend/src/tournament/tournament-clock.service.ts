@@ -30,6 +30,12 @@ type ClockPlan = {
       'smallBlind' | 'bigBlind' | 'ante' | 'durationSeconds'
     >;
   };
+  /**
+   * RT-BE-01: esta operação é uma das duas portas de "o torneio começou de
+   * verdade" e deve carimbar `Tournament.startedAt`. Só `start` a liga — nem
+   * `pause`, nem `resume`, nem `next` marcam início.
+   */
+  stampStartedAt?: boolean;
 };
 
 /**
@@ -85,7 +91,14 @@ export class TournamentClockService {
     return toTournamentClockDto(clock, tournament.blindLevels, now);
   }
 
-  /** `NOT_STARTED → RUNNING`, no primeiro nível da grade. */
+  /**
+   * `NOT_STARTED → RUNNING`, no primeiro nível da grade.
+   *
+   * Também CARIMBA a hora real de início do torneio (RT-BE-01) — ver
+   * `stampStartedAt` em `mutate`. Este método continua sem tocar em
+   * `Tournament.status`: quem faz `REGISTERING → RUNNING` é a primeira
+   * eliminação (`TournamentService.eliminateEntry`).
+   */
   async start(
     clubeId: string,
     tournamentId: string,
@@ -111,6 +124,7 @@ export class TournamentClockService {
           clockRemainingMs: null,
         },
         levels,
+        stampStartedAt: true,
       };
     });
   }
@@ -296,7 +310,7 @@ export class TournamentClockService {
         tournament.blindLevels,
         now,
       );
-      const { clock, levels, levelWrite } = plan(
+      const { clock, levels, levelWrite, stampStartedAt } = plan(
         advanced,
         tournament.blindLevels,
         now,
@@ -327,6 +341,26 @@ export class TournamentClockService {
             },
           });
           if (result.count === 0) throw new OptimisticLockError();
+
+          // RT-BE-01 — HORA REAL DE INÍCIO, em `updateMany` PRÓPRIO.
+          //
+          // Fora do update acima de propósito, por duas razões:
+          //  1. Disciplina de colunas nomeadas (ver o comentário acima): aquele
+          //     `data` descreve o ESTADO DO RELÓGIO e nada mais. `startedAt` é
+          //     estado do TORNEIO e não sai do plano — sai daqui.
+          //  2. `startedAt: null` no `where` faz do carimbo uma escrita
+          //     ÚNICA, decidida pelo BANCO e não por um read-then-write: se a
+          //     primeira eliminação (a outra porta de "começou", em
+          //     `eliminateEntry`) já carimbou, esta linha afeta 0 registros e o
+          //     horário mais antigo — o correto — permanece.
+          // Sem `version` no `where`: o lock otimista já foi conquistado logo
+          // acima, na mesma transação.
+          if (stampStartedAt) {
+            await tx.tournament.updateMany({
+              where: { id: tournamentId, startedAt: null },
+              data: { startedAt: now },
+            });
+          }
         });
 
         return toTournamentClockDto(clock, levels, now);

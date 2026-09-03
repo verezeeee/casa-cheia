@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from '../src/generated/prisma';
 import { randomUUID } from 'node:crypto';
+import { randomJoinCode } from './join-code';
 
 /**
  * CL-DB-03 — isolamento entre clubes por Row-Level Security nativo do
@@ -65,6 +66,7 @@ describe('Isolamento entre clubes (RLS, Postgres real)', () => {
       data: {
         name: `Clube ${randomUUID().slice(0, 8)}`,
         document: randomUUID().replaceAll('-', '').slice(0, 14),
+        joinCode: randomJoinCode(),
       },
     });
     return clube.id;

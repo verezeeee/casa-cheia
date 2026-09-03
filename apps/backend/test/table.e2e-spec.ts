@@ -7,17 +7,13 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { AbacatePayClient } from './../src/integrations/abacatepay';
+import { randomJoinCode } from './join-code';
 
 /** Cliente direto ao Postgres: monta clube/vínculo sem passar pela API (não há `POST /clubes`, ADR-0003). */
 const prismaDirect = new PrismaClient();
 
 /** Ids criados pela suíte, para o teardown (vínculo antes do clube: FK Restrict). */
 const createdClubeIds: string[] = [];
-
-/** 6 dígitos, primeiro dígito 1-9 — mesmo formato de `ClubService.generateJoinCode`. */
-function randomJoinCode(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
 
 async function createClube(): Promise<string> {
   const clube = await prismaDirect.clube.create({

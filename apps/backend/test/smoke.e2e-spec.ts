@@ -7,6 +7,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { AbacatePayClient } from './../src/integrations/abacatepay';
+import { randomJoinCode } from './join-code';
 
 /**
  * Fumaça ponta a ponta do MVP: um jogador percorre o ciclo completo de
@@ -126,7 +127,11 @@ describe.skip('Fumaça: registrar -> depositar -> sentar -> cash-out -> sacar (e
     // ADR-0003, `club.prisma` e `wallet.e2e-spec.ts`). O papel agora vive na
     // aresta usuário↔clube (`ClubeMembership.role`), não mais em `User.role`.
     const clube = await prismaDirect.clube.create({
-      data: { name: 'Clube Fumaça', document: randomUUID().replace(/-/g, '') },
+      data: {
+        name: 'Clube Fumaça',
+        document: randomUUID().replace(/-/g, ''),
+        joinCode: randomJoinCode(),
+      },
     });
     createdClubeIds.push(clube.id);
 

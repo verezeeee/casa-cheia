@@ -318,6 +318,109 @@ describe('TournamentClockService', () => {
         /sem estrutura de blinds/,
       );
     });
+
+    // RT-BE-01 — hora REAL de início do torneio (contraste com `startsAt`, que
+    // é o horário agendado).
+    describe('carimbo de startedAt', () => {
+      it('grava startedAt em updateMany PRÓPRIO, fora das colunas do relógio', async () => {
+        const { service, tx } = buildService(tournamentRow({}));
+
+        await service.start(CLUBE_ID, 'trn-1');
+
+        const [clockCall, stampCall] = tx.tournament.updateMany.mock.calls.map(
+          ([arg]) => arg as { where: unknown; data: Record<string, unknown> },
+        );
+
+        // Disciplina de colunas nomeadas (MT-BE-07): o `data` do relógio
+        // descreve o ESTADO DO RELÓGIO e nada mais.
+        expect(clockCall.data).not.toHaveProperty('startedAt');
+        // O carimbo vai numa escrita própria, com o guard no `where`.
+        expect(stampCall).toEqual({
+          where: { id: 'trn-1', startedAt: null },
+          data: { startedAt: NOW },
+        });
+      });
+
+      const RUNNING_ROW: Partial<ClockRow> = {
+        clockStatus: 'RUNNING',
+        currentLevelNumber: 2,
+        levelEndsAt: new Date(NOW.getTime() + 10 * MINUTE),
+      };
+      const PAUSED_ROW: Partial<ClockRow> = {
+        clockStatus: 'PAUSED',
+        currentLevelNumber: 2,
+        clockRemainingMs: 10 * MINUTE,
+      };
+
+      it.each([
+        ['pause', RUNNING_ROW],
+        ['resume', PAUSED_ROW],
+        ['next', RUNNING_ROW],
+        ['previous', RUNNING_ROW],
+      ] as const)(
+        '%s NÃO carimba startedAt (só o start marca início)',
+        async (operation, row) => {
+          const { service, tx } = buildService(tournamentRow(row));
+
+          await service[operation](CLUBE_ID, 'trn-1');
+
+          expect(tx.tournament.updateMany).toHaveBeenCalledTimes(1);
+          expect(
+            (tx.tournament.updateMany.mock.calls[0][0] as { data: object })
+              .data,
+          ).not.toHaveProperty('startedAt');
+        },
+      );
+
+      it('não sobrescreve um carimbo já existente — a decisão é do banco, via `where`', async () => {
+        // Fake com a semântica de `where: { startedAt: null }`: só a PRIMEIRA
+        // escrita afeta linha. É assim que o horário mais antigo (o do relógio
+        // ou o da primeira eliminação, o que vier primeiro) prevalece sem
+        // read-then-write e sem corrida.
+        let stored: Date | null = null;
+        const tx = {
+          tournament: {
+            updateMany: jest.fn(
+              (call: {
+                where: { startedAt?: null };
+                data: { startedAt?: Date };
+              }) => {
+                if (call.data.startedAt === undefined) {
+                  return Promise.resolve({ count: 1 });
+                }
+                if (call.where.startedAt === null && stored !== null) {
+                  return Promise.resolve({ count: 0 });
+                }
+                stored = call.data.startedAt;
+                return Promise.resolve({ count: 1 });
+              },
+            ),
+          },
+          tournamentBlindLevel: { update: jest.fn() },
+        };
+        const prisma = {
+          tournament: {
+            findUnique: jest.fn().mockResolvedValue(tournamentRow({})),
+          },
+          withClube: jest.fn(
+            (_clubeId: string, cb: (t: typeof tx) => unknown) => cb(tx),
+          ),
+        };
+        const service = new TournamentClockService(
+          prisma as unknown as PrismaService,
+        );
+
+        await service.start(CLUBE_ID, 'trn-1');
+        expect(stored).toEqual(NOW);
+
+        // Meia hora depois, o relógio é iniciado de novo (o `findUnique`
+        // mockado devolve sempre `NOT_STARTED`). O carimbo original — o
+        // instante em que o torneio de fato começou — não se move.
+        jest.advanceTimersByTime(30 * MINUTE);
+        await service.start(CLUBE_ID, 'trn-1');
+        expect(stored).toEqual(NOW);
+      });
+    });
   });
 
   describe('pause', () => {

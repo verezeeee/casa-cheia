@@ -7,6 +7,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { AbacatePayClient } from './../src/integrations/abacatepay';
+import { randomJoinCode } from './join-code';
 
 /**
  * Fixtures compartilhadas das suítes de torneio (`tournament.e2e-spec.ts` e
@@ -46,6 +47,7 @@ export async function createTestClube(
     data: {
       name,
       document: randomUUID().replace(/-/g, '').slice(0, 14),
+      joinCode: randomJoinCode(),
       status: 'ACTIVE',
     },
   });

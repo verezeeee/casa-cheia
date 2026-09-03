@@ -108,7 +108,11 @@ function buildPrisma() {
       count: shared.entryCount,
     },
     tournament: {
-      updateMany: jest.fn(),
+      // Default `{ count: 1 }` porque desde RT-BE-01 o retorno é LIDO
+      // (`eliminateEntry` decide o carimbo de `startedAt` pelo `count` da
+      // transição REGISTERING→RUNNING). Os testes de corrida sobrescrevem com
+      // `{ count: 0 }`.
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       update: jest.fn(),
       findUniqueOrThrow: shared.tournamentRead,
     },
@@ -1305,6 +1309,73 @@ describe('TournamentService', () => {
       expect(result.finalPosition).toBe(4);
       // Sem assento ativo depois da eliminação.
       expect(result.tableNumber).toBeNull();
+    });
+
+    // RT-BE-01 — hora REAL de início do torneio.
+    describe('carimbo de startedAt', () => {
+      const anchor = new Date('2026-02-01T21:37:00.000Z');
+
+      /** Só as escritas em `tournaments` (a de status e a do carimbo). */
+      const tournamentWrites = (prisma: ReturnType<typeof buildPrisma>) =>
+        prisma.tx.tournament.updateMany.mock.calls.map(
+          ([arg]) => arg as { where: unknown; data: unknown },
+        );
+
+      const eliminate = async (transitionCount: number) => {
+        const { service, prisma } = buildService();
+        prisma.tx.tournamentEntry.findUnique.mockResolvedValue(playing);
+        prisma.tx.tournamentEntry.update.mockResolvedValue({
+          ...ENTRY_ROW,
+          status: 'ELIMINATED',
+          chipStack: 0,
+        });
+        prisma.tx.tournament.updateMany.mockResolvedValue({
+          count: transitionCount,
+        });
+
+        jest.useFakeTimers();
+        try {
+          jest.setSystemTime(anchor);
+          await service.eliminateEntry(CLUBE_ID, 'trn-1', 'entry-1', {});
+        } finally {
+          jest.useRealTimers();
+        }
+        return prisma;
+      };
+
+      it('carimba startedAt na transição REGISTERING→RUNNING', async () => {
+        const prisma = await eliminate(1);
+
+        // A transição de status continua sozinha no seu próprio `updateMany`:
+        // ela não pode depender do carimbo (torneio cujo relógio já começou
+        // tem `started_at` preenchido e AINDA precisa virar RUNNING).
+        expect(tournamentWrites(prisma)).toEqual([
+          {
+            where: { id: 'trn-1', status: 'REGISTERING' },
+            data: { status: 'RUNNING' },
+          },
+          // `startedAt: null` no `where`: escrita ÚNICA decidida pelo banco.
+          {
+            where: { id: 'trn-1', startedAt: null },
+            data: { startedAt: anchor },
+          },
+        ]);
+      });
+
+      it('não carimba nada quando o torneio já estava RUNNING (eliminação seguinte)', async () => {
+        // `count: 0` = o `where: { status: 'REGISTERING' }` não achou ninguém.
+        // Um torneio já em andamento (inclusive um legado, anterior à
+        // migration) NÃO ganha `startedAt` do instante da eliminação — isso
+        // inventaria uma duração curta e falsa no relatório.
+        const prisma = await eliminate(0);
+
+        expect(tournamentWrites(prisma)).toEqual([
+          {
+            where: { id: 'trn-1', status: 'REGISTERING' },
+            data: { status: 'RUNNING' },
+          },
+        ]);
+      });
     });
 
     it('quebra a mesa e move os jogadores com reason BREAK', async () => {

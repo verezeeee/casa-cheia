@@ -7,6 +7,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { AbacatePayClient } from './../src/integrations/abacatepay';
+import { randomJoinCode } from './join-code';
 
 /**
  * Cliente AbacatePay em modo fake: o teste nunca sai para a rede. Só os
@@ -84,6 +85,7 @@ describe.skip('Wallet + webhook AbacatePay (e2e)', () => {
         data: {
           name: 'Clube Wallet E2E',
           document: randomUUID().replace(/-/g, ''),
+          joinCode: randomJoinCode(),
         },
       })
       .then((clube) => clube.id);
@@ -359,6 +361,7 @@ describe.skip('Wallet + webhook AbacatePay (e2e)', () => {
         data: {
           name: 'Segundo Clube do Mesmo Jogador',
           document: randomUUID().replace(/-/g, ''),
+          joinCode: randomJoinCode(),
         },
       })
       .then((clube) => clube.id);

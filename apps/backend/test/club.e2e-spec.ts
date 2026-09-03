@@ -7,6 +7,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { AbacatePayClient } from './../src/integrations/abacatepay';
+import { randomJoinCode } from './join-code';
 
 /** Cliente direto ao Postgres: monta clubes e vínculos sem passar pela API — não há `POST /clubes` (ADR-0003). */
 const prismaDirect = new PrismaClient();
@@ -80,7 +81,12 @@ describe('Clubes (e2e)', () => {
     status: ClubeStatus = 'ACTIVE',
   ): Promise<string> {
     const clube = await prismaDirect.clube.create({
-      data: { name, document: randomUUID().replace(/-/g, ''), status },
+      data: {
+        name,
+        document: randomUUID().replace(/-/g, ''),
+        joinCode: randomJoinCode(),
+        status,
+      },
     });
     createdClubeIds.push(clube.id);
     return clube.id;

@@ -115,7 +115,34 @@ model Tournament {
   /// tardia — inscrições encerram exatamente em `startsAt`.
   lateRegUntil DateTime? @map("late_reg_until")
 
+  /// HORA REAL do início do jogo (RT-DB-01) — não confundir com `startsAt`.
+  ///
+  ///   `startsAt`  = horário AGENDADO, escolhido na criação do torneio. É o que
+  ///                 está no cartaz e nunca muda sozinho, mesmo que o torneio
+  ///                 atrase duas horas.
+  ///   `startedAt` = horário em que o torneio EFETIVAMENTE começou, carimbado
+  ///                 pela aplicação na primeira das duas portas de "começou"
+  ///                 (RT-BE-01): o start do relógio de blinds ou a transição
+  ///                 `REGISTERING → RUNNING` da primeira eliminação.
+  ///
+  /// Sem esta coluna a duração do torneio é incalculável — `finishedAt −
+  /// startsAt` mediria o atraso do clube, não o tempo de jogo.
+  ///
+  /// CARIMBO IMUTÁVEL: uma vez gravado, nenhuma das duas portas o sobrescreve
+  /// (o `where` de ambas exige `started_at IS NULL`). Quem chegou primeiro
+  /// definiu o início.
+  ///
+  /// SEM BACKFILL: os torneios encerrados antes desta migration continuam com
+  /// `null`, e o relatório os marca como duração ESTIMADA. Preencher
+  /// `started_at = starts_at` retroativamente produziria uma duração falsa com
+  /// cara de verdadeira — pior que a ausência declarada do dado.
+  startedAt DateTime? @map("started_at")
+
   /// Carimbo da conclusão. Nulo até o torneio atingir `FINISHED`.
+  ///
+  /// CHECK `tournaments_finished_after_started` (SQL manual, RT-DB-01): quando
+  /// os dois carimbos existem, `finished_at >= started_at`. Qualquer um deles
+  /// nulo passa — é o caso do torneio legado e o do torneio em andamento.
   finishedAt DateTime? @map("finished_at")
 
   /// Soma dos buy-ins arrecadados (sem `fee`). Coluna materializada, atualizada

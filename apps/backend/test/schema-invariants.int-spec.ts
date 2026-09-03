@@ -1,5 +1,6 @@
 import { PrismaClient } from '../src/generated/prisma';
 import { randomUUID } from 'node:crypto';
+import { randomJoinCode } from './join-code';
 
 /**
  * Testes de integração das invariantes de banco da migration
@@ -38,6 +39,7 @@ describe('Invariantes de schema (Postgres real)', () => {
       data: {
         name: 'Clube de teste',
         document: randomUUID().replaceAll('-', '').slice(0, 14),
+        joinCode: randomJoinCode(),
       },
     });
     clubeId = clube.id;
@@ -263,6 +265,7 @@ describe('Invariantes de schema (Postgres real)', () => {
         data: {
           name: 'Outro clube',
           document: randomUUID().replaceAll('-', '').slice(0, 14),
+          joinCode: randomJoinCode(),
         },
       });
 
@@ -546,6 +549,120 @@ describe('Invariantes de schema (Postgres real)', () => {
                SET clock_status = 'RUNNING', current_level_number = 1, level_ends_at = NOW() + INTERVAL '10 minutes'
              WHERE id = ${tournament.id}`,
         ).resolves.toBe(1);
+      });
+    });
+
+    /**
+     * RT-QA-03 — CHECK de coerência dos dois carimbos de tempo REAL do torneio
+     * (`started_at`, gravado por RT-BE-01; `finished_at`, gravado por
+     * `finishTournament`). Todos os UPDATEs são `$executeRaw` de propósito: o
+     * alvo é o banco recusando dado incoerente ainda que alguém contorne a
+     * aplicação (script de correção, psql, migration futura).
+     */
+    describe('CHECK tournaments_finished_after_started (RT-DB-01)', () => {
+      it('rejeita finished_at ANTERIOR a started_at', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        await expect(
+          prisma.$executeRaw`
+            UPDATE tournaments
+               SET started_at  = NOW(),
+                   finished_at = NOW() - INTERVAL '1 hour',
+                   status      = 'FINISHED'
+             WHERE id = ${tournament.id}`,
+        ).rejects.toThrow(/constraint|check/i);
+      });
+
+      it('rejeita finished_at anterior mesmo por 1 milissegundo', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        // O CHECK é `>=`, não `>`: o limite exato é o empate (aceito, abaixo),
+        // e qualquer coisa antes dele é recusada.
+        await expect(
+          prisma.$executeRaw`
+            UPDATE tournaments
+               SET started_at  = NOW(),
+                   finished_at = NOW() - INTERVAL '1 millisecond'
+             WHERE id = ${tournament.id}`,
+        ).rejects.toThrow(/constraint|check/i);
+      });
+
+      it('aceita finished_at igual a started_at (torneio de um jogador só)', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        await expect(
+          prisma.$executeRaw`
+            UPDATE tournaments
+               SET started_at = NOW(), finished_at = NOW()
+             WHERE id = ${tournament.id}`,
+        ).resolves.toBe(1);
+      });
+
+      it('aceita finished_at POSTERIOR a started_at (o caso normal)', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        await expect(
+          prisma.$executeRaw`
+            UPDATE tournaments
+               SET started_at  = NOW() - INTERVAL '5 hours',
+                   finished_at = NOW(),
+                   status      = 'FINISHED'
+             WHERE id = ${tournament.id}`,
+        ).resolves.toBe(1);
+      });
+
+      it('aceita started_at NULO com finished_at preenchido (torneio LEGADO)', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        // Todo torneio encerrado antes de RT-DB-01 é exatamente este caso: não
+        // houve backfill (ver a migration), e o relatório os apresenta com
+        // duração ESTIMADA. Se o CHECK não tolerasse o nulo, a própria
+        // migration teria falhado em produção.
+        await expect(
+          prisma.$executeRaw`
+            UPDATE tournaments
+               SET started_at = NULL, finished_at = NOW(), status = 'FINISHED'
+             WHERE id = ${tournament.id}`,
+        ).resolves.toBe(1);
+      });
+
+      it('aceita finished_at NULO com started_at preenchido (torneio em andamento)', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        await expect(
+          prisma.$executeRaw`
+            UPDATE tournaments
+               SET started_at = NOW(), finished_at = NULL, status = 'RUNNING'
+             WHERE id = ${tournament.id}`,
+        ).resolves.toBe(1);
+      });
+
+      it('aceita os DOIS nulos (torneio que nunca começou)', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        await expect(
+          prisma.$executeRaw`
+            UPDATE tournaments
+               SET started_at = NULL, finished_at = NULL
+             WHERE id = ${tournament.id}`,
+        ).resolves.toBe(1);
+      });
+
+      it('nasce com started_at nulo — o carimbo é da aplicação, não do banco', async () => {
+        const admin = await createUser();
+        const tournament = await createTournament(admin.id);
+
+        // Sem `@default(now())`: `started_at` é a hora REAL de início do jogo,
+        // e criar o torneio não é começar a jogar (`starts_at`, o agendado, é
+        // outra coluna).
+        expect(tournament.startedAt).toBeNull();
       });
     });
 
