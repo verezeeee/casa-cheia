@@ -240,6 +240,20 @@ export class PrismaService
         await tx.$executeRaw`SELECT set_config('app.current_clube_id', ${clubeId}, true)`;
         return fn(tx as unknown as Prisma.TransactionClient);
       },
+      // `timeout` PADRÃO do Prisma é 5000ms — suficiente pro fluxo mais comum
+      // (poucos INSERT/UPDATE), mas apertado demais pro mais pesado que passa
+      // por aqui hoje: `TournamentService.registerGuestEntry`, que soma ao
+      // fluxo normal de inscrição a criação de `User`+`ClubeMembership`+
+      // `Wallet` do convidado e um SEGUNDO `applyLedgerEntry` (o crédito em
+      // espécie) — quase o DOBRO de idas ao banco na mesma transação. Sob
+      // latência real de pooler serverless (PgBouncer/Neon, ver `api/index.ts`),
+      // isso é o candidato mais provável para o sintoma relatado em produção
+      // (POST .../register-guest falhando com um erro genérico de rede no
+      // frontend, não um 4xx de negócio): a transação estourando os 5000ms
+      // derruba com um erro cru (P2028) que o frontend não distingue de falha
+      // de rede. `maxWait` (tempo pra conseguir uma conexão do pool antes de
+      // sequer começar) também sobe um pouco por segurança, mesma causa raiz.
+      { maxWait: 5_000, timeout: 15_000 },
     );
   }
 }
