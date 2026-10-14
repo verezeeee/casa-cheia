@@ -1,0 +1,50 @@
+# Build context para os Dockerfiles de apps/backend e apps/frontend (build
+# sempre a partir da RAIZ do monorepo). Espelha .gitignore + exclusões
+# próprias do build em container: tudo que é gerado DENTRO da imagem (pelo
+# `pnpm install`/`turbo build`/`prisma generate` de cada Dockerfile) não deve
+# vir do host — evita copiar um node_modules/dist/.next construído pra outro
+# SO/arquitetura e mascarar silenciosamente uma falha real do build da imagem.
+
+# dependencies
+**/node_modules/
+.pnpm-store/
+
+# build outputs
+**/dist/
+**/build/
+**/.next/
+**/out/
+**/*.tsbuildinfo
+
+# prisma client gerado (reconstruído em todo `prisma generate`)
+apps/backend/src/generated/
+
+# turbo
+.turbo/
+
+# env (nunca deve ir pra dentro da imagem; as envs reais vêm do EasyPanel/host)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# coverage
+**/coverage/
+
+# git / editor / os
+.git/
+.github/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# docs e scripts que não entram na imagem
+docs/
+docker/
+docker-compose.yml

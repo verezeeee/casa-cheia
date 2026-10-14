@@ -37,3 +37,67 @@ automaticamente.
 ```
 curl https://<backend>.vercel.app/api/health
 ```
+
+# Deploy (VPS / EasyPanel, via Docker)
+
+Alternativa self-hosted aos dois Dockerfiles multi-stage em
+`apps/backend/Dockerfile` e `apps/frontend/Dockerfile`, pensados para um
+PostgreSQL JÁ EXISTENTE na mesma VPS (outro serviço do EasyPanel, não
+gerenciado por estes Dockerfiles) — sem Neon/PgBouncer, sem Vercel.
+
+Build sempre a partir da RAIZ do monorepo (os dois Dockerfiles copiam
+`packages/shared`, do qual backend e frontend dependem):
+
+```
+docker build -f apps/backend/Dockerfile -t poker-backend .
+docker build -f apps/frontend/Dockerfile \
+  --build-arg NEXT_PUBLIC_API_URL=https://api.seu-dominio.com/api \
+  -t poker-frontend .
+```
+
+No EasyPanel: criar um serviço "App" por imagem, apontando pro Dockerfile
+correspondente (Build Context = raiz do repo, Dockerfile Path = o caminho
+acima), e configurar o build arg `NEXT_PUBLIC_API_URL` do frontend no próprio
+serviço.
+
+## Variáveis de ambiente
+
+**Backend** (ver lista completa em `apps/backend/src/config/env.validation.ts`
+e `.env.example` na raiz):
+
+- `DATABASE_URL` e `DIRECT_URL` — **a MESMA string** apontando pro Postgres da
+  VPS (ex.: `postgresql://poker:SENHA@postgres:5432/poker_system?schema=public`,
+  usando o nome do serviço do Postgres no EasyPanel como host). Sem pooler
+  (PgBouncer) numa instalação assim, as duas variáveis não precisam divergir
+  como divergem em produção na Vercel (Neon).
+- `JWT_SECRET` / `JWT_REFRESH_SECRET` — strings aleatórias longas (`openssl
+  rand -base64 48`), nunca reaproveitadas de outro ambiente.
+- `NODE_ENV=production` — já setado pelo Dockerfile; não precisa (nem deve)
+  ser sobrescrito.
+- `COOKIE_SECURE=true` — obrigatório com `NODE_ENV=production` (o processo
+  recusa subir com `false`); exige que o domínio sirva o backend sobre HTTPS.
+- `CORS_ORIGINS` — URL pública do frontend (ex.:
+  `https://app.seu-dominio.com`).
+- `RUN_MIGRATIONS` — `true` (padrão) roda `prisma migrate deploy`
+  automaticamente a cada start do container (idempotente, seguro em todo
+  restart); `false` pula esse passo, caso as migrations sejam aplicadas à
+  parte (ver `docker-entrypoint.sh`).
+
+**Frontend**: `NEXT_PUBLIC_API_URL` é embutida no bundle do CLIENTE em tempo
+de BUILD — setá-la só como env do container em runtime NÃO tem efeito.
+Qualquer mudança na URL pública da API exige rebuildar a imagem com um novo
+`--build-arg`.
+
+## Portas e health check
+
+- Backend escuta em `3001` (`PORT`), rota de health em `/api/health`
+  (`API_PREFIX`).
+- Frontend escuta em `3000` (`PORT`).
+- As duas imagens têm `HEALTHCHECK` nativo do Docker — o EasyPanel lê esse
+  status automaticamente, sem configuração extra.
+
+## Verificar
+
+```
+curl https://<backend>/api/health
+```
