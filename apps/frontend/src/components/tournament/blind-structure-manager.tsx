@@ -17,6 +17,11 @@ import {
   Toast,
 } from '@/components/ui';
 import { ApiError } from '@/lib/http-client';
+import {
+  deriveLevelCount,
+  deriveLevelDurationMinutes,
+  generateBlindLevels,
+} from '@/lib/blind-structure-generator';
 
 /**
  * Linha do editor. Tudo string porque vem de `<input>`; a conversão para
@@ -69,6 +74,22 @@ export function BlindStructureManager() {
   const [rows, setRows] = useState<LevelRow[]>([FIRST_ROW]);
   const [error, setError] = useState<string | null>(null);
 
+  // Geração automática (ver `lib/blind-structure-generator.ts`): só preenche
+  // `rows` acima, o resto do fluxo (revisar, editar, salvar) é o mesmo editor
+  // manual de sempre.
+  const [genDurationMode, setGenDurationMode] = useState<'byLevelDuration' | 'byNumLevels'>(
+    'byLevelDuration',
+  );
+  const [genStartingStack, setGenStartingStack] = useState('10000');
+  const [genEstimatedPlayers, setGenEstimatedPlayers] = useState('9');
+  const [genTotalDurationMinutes, setGenTotalDurationMinutes] = useState('240');
+  const [genLevelDurationMinutes, setGenLevelDurationMinutes] = useState('20');
+  const [genNumLevels, setGenNumLevels] = useState('12');
+  const [genBreakEveryLevels, setGenBreakEveryLevels] = useState('6');
+  const [genBreakDurationMinutes, setGenBreakDurationMinutes] = useState('15');
+  const [genIncludeAntes, setGenIncludeAntes] = useState(false);
+  const [genAnteFromLevel, setGenAnteFromLevel] = useState('5');
+
   const isAdmin = clubeRole === ClubeRole.ADMIN;
 
   const {
@@ -112,9 +133,164 @@ export function BlindStructureManager() {
     mutation.mutate();
   }
 
+  /**
+   * Preenche `rows` com uma grade calculada a partir dos parâmetros da seção
+   * "Gerar automaticamente" — não salva nada, só poupa o trabalho de montar a
+   * grade nível a nível no editor manual abaixo, que continua editável.
+   */
+  function handleGenerate() {
+    const startingStack = Number(genStartingStack) || 0;
+    const estimatedPlayers = Math.max(2, Number(genEstimatedPlayers) || 2);
+    const totalDurationMinutes = Number(genTotalDurationMinutes) || 0;
+    const breakEveryLevels = Number(genBreakEveryLevels) || 0;
+    const breakDurationMinutes = Number(genBreakDurationMinutes) || 0;
+
+    const numLevels =
+      genDurationMode === 'byLevelDuration'
+        ? deriveLevelCount({
+            totalDurationMinutes,
+            levelDurationMinutes: Number(genLevelDurationMinutes) || 1,
+            breakEveryLevels: breakEveryLevels || null,
+            breakDurationMinutes,
+          })
+        : Math.max(1, Number(genNumLevels) || 1);
+
+    const levelDurationMinutes =
+      genDurationMode === 'byLevelDuration'
+        ? Number(genLevelDurationMinutes) || 1
+        : deriveLevelDurationMinutes({
+            totalDurationMinutes,
+            numLevels,
+            breakEveryLevels: breakEveryLevels || null,
+            breakDurationMinutes,
+          });
+
+    setRows(
+      generateBlindLevels({
+        numLevels,
+        levelDurationMinutes,
+        startingStack,
+        estimatedPlayers,
+        breakEveryLevels: breakEveryLevels || null,
+        breakDurationMinutes,
+        includeAntes: genIncludeAntes,
+        anteFromLevel: Math.max(1, Number(genAnteFromLevel) || 1),
+      }),
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {error && <Toast type="error" message={error} />}
+
+      <Card title="Gerar automaticamente">
+        <p className="text-sm text-muted">
+          Preenche a grade abaixo a partir desses parâmetros — você ainda revisa e ajusta nível a
+          nível antes de salvar.
+        </p>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <Input
+            label="Stack inicial"
+            type="number"
+            min={1}
+            value={genStartingStack}
+            onChange={(e) => setGenStartingStack(e.target.value)}
+          />
+          <Input
+            label="Jogadores estimados"
+            type="number"
+            min={2}
+            value={genEstimatedPlayers}
+            onChange={(e) => setGenEstimatedPlayers(e.target.value)}
+          />
+          <Input
+            label="Duração total (min)"
+            type="number"
+            min={1}
+            value={genTotalDurationMinutes}
+            onChange={(e) => setGenTotalDurationMinutes(e.target.value)}
+          />
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={genDurationMode === 'byLevelDuration' ? 'secondary' : 'ghost'}
+            onClick={() => setGenDurationMode('byLevelDuration')}
+          >
+            Definir duração do nível
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={genDurationMode === 'byNumLevels' ? 'secondary' : 'ghost'}
+            onClick={() => setGenDurationMode('byNumLevels')}
+          >
+            Definir nº de níveis
+          </Button>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {genDurationMode === 'byLevelDuration' ? (
+            <Input
+              label="Duração de cada nível (min)"
+              type="number"
+              min={1}
+              value={genLevelDurationMinutes}
+              onChange={(e) => setGenLevelDurationMinutes(e.target.value)}
+            />
+          ) : (
+            <Input
+              label="Nº de níveis"
+              type="number"
+              min={1}
+              value={genNumLevels}
+              onChange={(e) => setGenNumLevels(e.target.value)}
+            />
+          )}
+          <Input
+            label="Pausa a cada N níveis"
+            type="number"
+            min={0}
+            placeholder="0 = sem pausas"
+            value={genBreakEveryLevels}
+            onChange={(e) => setGenBreakEveryLevels(e.target.value)}
+          />
+          <Input
+            label="Duração da pausa (min)"
+            type="number"
+            min={1}
+            value={genBreakDurationMinutes}
+            onChange={(e) => setGenBreakDurationMinutes(e.target.value)}
+          />
+        </div>
+
+        <label className="mt-3 flex items-center gap-2 text-sm font-medium text-foreground">
+          <input
+            type="checkbox"
+            className="size-4 accent-[var(--accent)]"
+            checked={genIncludeAntes}
+            onChange={(e) => setGenIncludeAntes(e.target.checked)}
+          />
+          Incluir antes
+        </label>
+        {genIncludeAntes && (
+          <Input
+            className="mt-2 max-w-40"
+            label="A partir do nível"
+            type="number"
+            min={1}
+            value={genAnteFromLevel}
+            onChange={(e) => setGenAnteFromLevel(e.target.value)}
+          />
+        )}
+
+        <Button type="button" className="mt-3" size="sm" onClick={handleGenerate}>
+          Gerar
+        </Button>
+      </Card>
 
       <Card title="Nova estrutura">
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">

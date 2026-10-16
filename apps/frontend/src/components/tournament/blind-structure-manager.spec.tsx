@@ -103,6 +103,34 @@ describe('BlindStructureManager', () => {
     );
   });
 
+  it('gera a grade automaticamente e deixa pronta pra revisar/salvar', async () => {
+    mockSession(ClubeRole.ADMIN);
+    (blindStructureApi.listBlindStructures as jest.Mock).mockResolvedValue([]);
+    (blindStructureApi.createBlindStructure as jest.Mock).mockResolvedValue({ id: 'bs-1' });
+
+    renderWithClient(<BlindStructureManager />);
+
+    // Parâmetros default: 240min totais, 20min por nível, pausa de 15min a
+    // cada 6 níveis → deriveLevelCount desconta a pausa e chega em 11 níveis
+    // de jogo + 1 pausa (após o nível 6) = 12 linhas no total.
+    fireEvent.click(screen.getByText('Gerar'));
+    expect(screen.getByText('Nível 12')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Nome'), { target: { value: 'Gerado' } });
+    fireEvent.click(screen.getByText('Criar estrutura'));
+
+    await waitFor(() => expect(blindStructureApi.createBlindStructure).toHaveBeenCalled());
+    const [[{ levels }]] = (blindStructureApi.createBlindStructure as jest.Mock).mock.calls;
+    expect(levels).toHaveLength(12);
+    expect(levels[5].isBreak).toBe(false); // nível 6, ainda jogo
+    expect(levels[6].isBreak).toBe(true); // pausa logo após o nível 6
+    expect(levels[11].isBreak).toBe(false); // nunca termina em pausa
+    // blinds nunca regridem
+    for (let i = 1; i < levels.length; i += 1) {
+      expect(levels[i].bigBlind).toBeGreaterThanOrEqual(levels[i - 1].bigBlind);
+    }
+  });
+
   it('remove um nível do editor', async () => {
     mockSession(ClubeRole.ADMIN);
     (blindStructureApi.listBlindStructures as jest.Mock).mockResolvedValue([]);
