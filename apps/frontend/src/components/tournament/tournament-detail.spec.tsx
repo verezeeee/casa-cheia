@@ -292,7 +292,7 @@ describe('TournamentDetail', () => {
     await waitFor(() => expect(screen.getByText('Outro')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('Eliminar'));
-    fireEvent.change(screen.getByPlaceholderText('Colocação final (opcional)'), {
+    fireEvent.change(screen.getByPlaceholderText('Colocação (automática se vazio)'), {
       target: { value: '1' },
     });
     fireEvent.click(screen.getByText('Confirmar'));

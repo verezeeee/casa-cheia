@@ -698,7 +698,7 @@ function EntryRow({
                 <Input
                   type="number"
                   min={1}
-                  placeholder="Colocação final (opcional)"
+                  placeholder="Colocação (automática se vazio)"
                   value={finalPosition}
                   onChange={(e) => onFinalPositionChange(e.target.value)}
                 />

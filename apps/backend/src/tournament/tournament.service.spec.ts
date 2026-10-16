@@ -1477,6 +1477,53 @@ describe('TournamentService', () => {
       expect(result.tableNumber).toBeNull();
     });
 
+    it('define a colocação automaticamente como (vivos restantes + 1) quando omitida', async () => {
+      const { service, prisma } = buildService();
+      prisma.tx.tournamentEntry.findUnique.mockResolvedValue(playing);
+      prisma.tx.tournamentEntry.count.mockResolvedValue(5);
+      prisma.tx.tournamentEntry.update.mockResolvedValue({
+        ...ENTRY_ROW,
+        status: 'ELIMINATED',
+        chipStack: 0,
+        finalPosition: 6,
+      });
+
+      await service.eliminateEntry(CLUBE_ID, 'trn-1', 'entry-1', {});
+
+      expect(prisma.tx.tournamentEntry.count).toHaveBeenCalledWith({
+        where: {
+          tournamentId: 'trn-1',
+          id: { not: 'entry-1' },
+          status: { in: ['REGISTERED', 'PLAYING'] },
+        },
+      });
+      expect(prisma.tx.tournamentEntry.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ finalPosition: 6 }),
+        }),
+      );
+    });
+
+    it('respeita a colocação informada manualmente', async () => {
+      const { service, prisma } = buildService();
+      prisma.tx.tournamentEntry.findUnique.mockResolvedValue(playing);
+      prisma.tx.tournamentEntry.update.mockResolvedValue({
+        ...ENTRY_ROW,
+        status: 'ELIMINATED',
+        finalPosition: 3,
+      });
+
+      await service.eliminateEntry(CLUBE_ID, 'trn-1', 'entry-1', {
+        finalPosition: 3,
+      });
+
+      expect(prisma.tx.tournamentEntry.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ finalPosition: 3 }),
+        }),
+      );
+    });
+
     it('quebra a mesa e move os jogadores com reason BREAK', async () => {
       const { service, prisma } = buildService();
       prisma.tx.tournamentEntry.findUnique.mockResolvedValue(playing);

@@ -884,6 +884,20 @@ export class TournamentService {
         throw new BadRequestException('Inscrição já foi eliminada.');
       }
 
+      // Colocação automática: sem `finalPosition` explícito, vale
+      // (jogadores ainda vivos, fora este) + 1 — o 1º eliminado de 10 fica em
+      // 10º, o último a cair antes do campeão em 2º. Dentro do lock do torneio,
+      // então a contagem não corre contra outra eliminação.
+      const finalPosition =
+        dto.finalPosition ??
+        (await tx.tournamentEntry.count({
+          where: {
+            tournamentId,
+            id: { not: entryId },
+            status: { in: [...ALIVE_STATUSES] },
+          },
+        })) + 1;
+
       // Desativação, nunca DELETE: a linha vira histórico (append-only).
       await tx.tournamentSeat.updateMany({
         where: { tournamentEntryId: entryId, active: true },
@@ -902,7 +916,7 @@ export class TournamentService {
         data: {
           status: 'ELIMINATED',
           eliminatedAt: new Date(),
-          finalPosition: dto.finalPosition,
+          finalPosition,
           chipStack: 0,
         },
         include: ENTRY_INCLUDE,
